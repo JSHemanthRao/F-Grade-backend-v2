@@ -32,6 +32,30 @@ function getAmount(record) {
   return numericValue(getFirstExistingField(record, AMOUNT_FIELDS));
 }
 
+function datasetInfo(dataset) {
+  return dataset?.result?.info || dataset?.info || {};
+}
+
+function datasetCount(dataset) {
+  const info = datasetInfo(dataset);
+  return info.count !== undefined && info.count !== null && Number.isFinite(Number(info.count))
+    ? Number(info.count)
+    : (dataset?.result?.data || dataset?.data || []).length;
+}
+
+function datasetAggregateValue(dataset, metric = 'sum') {
+  const info = datasetInfo(dataset);
+  const values = info.aggregateValues || {};
+  const value = values[metric] ?? (metric === 'sum' ? info.aggregateValue : undefined);
+  return value === undefined || value === null ? null : numericValue(value);
+}
+
+function datasetAmount(dataset) {
+  const aggregate = datasetAggregateValue(dataset, 'sum');
+  if (aggregate !== null) return aggregate;
+  return (dataset?.result?.data || dataset?.data || []).reduce((sum, record) => sum + (getAmount(record) ?? 0), 0);
+}
+
 function getStage(record) {
   return normalizeString(getFirstExistingField(record, STAGE_FIELDS));
 }
@@ -193,19 +217,30 @@ function calculateResult(plan, datasets) {
   function countRecords() {
     const countDatasets = datasets.filter((dataset) => dataset.step?.type === 'count' || (plan.steps || []).length === 1);
     if (countDatasets.length <= 1) {
-      const count = countDatasets.length ? (countDatasets[0]?.result?.data || countDatasets[0]?.data || []).length : records.length;
+      const count = countDatasets.length ? datasetCount(countDatasets[0]) : records.length;
       calculations.push({ label: 'Count', type: 'count', value: count });
     } else {
       const counts = {};
       countDatasets.forEach((dataset) => {
         const module = dataset.module || 'crm';
-        counts[module] = ((dataset.result?.data || dataset.data || []).length);
+        counts[module] = datasetCount(dataset);
       });
       calculations.push({ label: 'Counts', type: 'counts', value: counts });
     }
   }
 
   function addAggregations() {
+    const aggregateInfo = datasets.map((dataset) => datasetInfo(dataset).aggregateValues || {}).find((values) => Object.keys(values).length > 0);
+    if (aggregateInfo) {
+      if (aggregateInfo.sum !== undefined) {
+        calculations.push({ label: 'Sum', type: 'sum', value: aggregateInfo.sum });
+        calculations.push({ label: 'Total revenue', type: 'total_revenue', value: aggregateInfo.sum });
+      }
+      if (aggregateInfo.average !== undefined) calculations.push({ label: 'Average', type: 'average', value: aggregateInfo.average });
+      if (aggregateInfo.minimum !== undefined) calculations.push({ label: 'Minimum', type: 'minimum', value: aggregateInfo.minimum });
+      if (aggregateInfo.maximum !== undefined) calculations.push({ label: 'Maximum', type: 'maximum', value: aggregateInfo.maximum });
+      return;
+    }
     if (!amountValues.length) {
       addLimitation('sum', 'Amount fields are missing or invalid.');
       return;
@@ -245,22 +280,27 @@ function calculateResult(plan, datasets) {
       const period = dataset.period || 'all time';
       const module = dataset.module || 'crm';
       acc[period] = acc[period] || {};
-      acc[period][module] = dataset.result?.data || dataset.data || [];
+      acc[period][module] = dataset;
       return acc;
     }, {});
+    const periodKeys = Object.keys(periods);
     if (modules.length > 1) {
       const comparison = {};
       modules.forEach((module) => {
-        const thisValue = (periods['this month']?.[module] || []).reduce((sum, record) => sum + (getAmount(record) ?? 0), 0);
-        const lastValue = (periods['last month']?.[module] || []).reduce((sum, record) => sum + (getAmount(record) ?? 0), 0);
+        const thisDataset = periods['this month']?.[module] || periods[periodKeys[1]]?.[module];
+        const lastDataset = periods['last month']?.[module] || periods[periodKeys[0]]?.[module];
+        const thisValue = thisDataset ? datasetAmount(thisDataset) : 0;
+        const lastValue = lastDataset ? datasetAmount(lastDataset) : 0;
         comparison[module] = { 'this month': thisValue, 'last month': lastValue, difference: thisValue - lastValue };
       });
       calculations.push({ label: 'Multi-module comparison', type: 'multi_module_comparison', value: comparison });
     } else {
       const module = modules[0] || 'crm';
-      const thisValue = (periods['this month']?.[module] || []).reduce((sum, record) => sum + (getAmount(record) ?? 0), 0);
-      const lastValue = (periods['last month']?.[module] || []).reduce((sum, record) => sum + (getAmount(record) ?? 0), 0);
-      calculations.push({ label: 'Comparison', type: 'comparison', value: { 'this month': thisValue, 'last month': lastValue, difference: thisValue - lastValue } });
+      const thisKey = periods['this month'] ? 'this month' : periodKeys[1];
+      const lastKey = periods['last month'] ? 'last month' : periodKeys[0];
+      const thisValue = thisKey && periods[thisKey]?.[module] ? datasetAmount(periods[thisKey][module]) : 0;
+      const lastValue = lastKey && periods[lastKey]?.[module] ? datasetAmount(periods[lastKey][module]) : 0;
+      calculations.push({ label: 'Comparison', type: 'comparison', value: { [thisKey || 'this month']: thisValue, [lastKey || 'last month']: lastValue, difference: thisValue - lastValue } });
     }
   }
 

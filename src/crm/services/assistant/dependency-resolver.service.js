@@ -61,16 +61,20 @@ function resolveDependencies(steps = []) {
   const retrievalWindowsFor = (step) => (Array.isArray(step.periods) && step.periods.length > 0
     ? step.periods
     : [step.timeRange]);
+  const usesCrmAggregate = (step) => step.type === 'aggregate'
+    || (step.type === 'compare' && !step.intents?.includes('LIST')
+      && step.metrics?.some((metric) => ['sum', 'revenue', 'average', 'maximum', 'minimum', 'pipeline'].includes(metric))
+      && !step.metrics?.some((metric) => ['top_n', 'ranking', 'distribution', 'trend', 'growth', 'win_rate'].includes(metric)));
 
   uniqueSteps.forEach((step) => {
     const modules = modulesFor(step);
-    if (!['query', 'count'].includes(step.type)) {
+    if (!['query', 'count'].includes(step.type) && !usesCrmAggregate(step)) {
       modules.forEach((module) => retrievalWindowsFor(step).forEach((timeRange) => ensureRetrieval(module, timeRange)));
     }
     const id = `task-${sequence}`;
     sequence += 1;
     const engine = ENGINE_BY_TYPE[step.type] || 'Planner';
-    const dependencies = ['query', 'count'].includes(step.type)
+    const dependencies = ['query', 'count'].includes(step.type) || usesCrmAggregate(step)
       ? []
       : modules.flatMap((module) => retrievalWindowsFor(step)
         .map((timeRange) => retrievalByModule.get(`${module}:${JSON.stringify(timeRange || null)}`)))

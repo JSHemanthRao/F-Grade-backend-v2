@@ -85,7 +85,7 @@ test('CRM assistant endpoint accepts only a question and routes count requests i
   await controller.handleAssistantRequest(req, res, () => {});
 
   assert.equal(receivedOptions.question, 'How many leads are there?');
-  assert.equal(receivedOptions.retrieval_mode, 'all');
+  assert.equal(receivedOptions.retrieval_mode, 'count');
   assert.equal(receivedOptions.page, undefined);
   assert.equal(receivedOptions.per_page, undefined);
   assert.equal(res.payload.success, true);

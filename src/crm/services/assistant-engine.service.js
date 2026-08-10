@@ -35,9 +35,8 @@ function completeRecordsFrom(datasets) {
 
 function displayLimitFor(plan) {
   const requested = Number(plan?.pagination?.per_page);
-  return Number.isInteger(requested) && requested > 0
-    ? Math.min(requested, DISPLAY_LIMIT)
-    : DISPLAY_LIMIT;
+  if (!Number.isInteger(requested) || requested <= 0) return DISPLAY_LIMIT;
+  return plan?.pagination?.explicit ? requested : Math.min(requested, DISPLAY_LIMIT);
 }
 
 function displayContextFromPayload(context = {}) {

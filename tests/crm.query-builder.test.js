@@ -26,3 +26,15 @@ test('simple searchable requests continue to use the Search API', () => {
   const plan = buildQueryPlan('leads', { question: 'Show leads from Advertisement' });
   assert.equal(plan.mode, 'search');
 });
+
+test('criteria and period text combine into one CRM-side query', () => {
+  const plan = buildQueryPlan('deals', {
+    request_text: 'Compare Closed Won value for June 2026 June 2026',
+    criteria: '(Stage:equals:Closed Won)',
+    retrieval_mode: 'aggregate',
+  });
+
+  assert.match(plan.whereClause, /Stage = 'Closed Won'/i);
+  assert.match(plan.whereClause, /Closing_Date >= '2026-06-01T00:00:00Z'/i);
+  assert.match(plan.whereClause, /Closing_Date < '2026-07-01T00:00:00Z'/i);
+});

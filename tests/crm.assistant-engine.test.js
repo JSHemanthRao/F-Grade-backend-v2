@@ -278,6 +278,92 @@ test('assistant searches all Deals before displaying Closed Won June 2026 matche
   }
 });
 
+test('assistant keeps first-N list requests bounded to the requested CRM page', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  const calls = [];
+  recordsService.getRecords = async (_module, options) => {
+    calls.push(options);
+    return { data: Array.from({ length: 10 }, (_, index) => ({ id: `lead-${index + 1}` })), info: { count: 883, more_records: true } };
+  };
+
+  try {
+    const response = await assistantEngine.handleAssistantRequest({ question: 'Give me first 10 leads' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].retrieval_mode, 'page');
+    assert.equal(calls[0].page, 1);
+    assert.equal(calls[0].per_page, 10);
+    assert.equal(response.data.length, 10);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('assistant uses CRM-side aggregation for total Closed Won value', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  const calls = [];
+  recordsService.getRecords = async (_module, options) => {
+    calls.push(options);
+    return {
+      data: [],
+      info: {
+        count: 4,
+        aggregateValues: { sum: 125000 },
+        aggregateValue: 125000,
+        retrievalStrategy: 'aggregate',
+        retrievalComplete: true,
+        more_records: false,
+      },
+    };
+  };
+
+  try {
+    const response = await assistantEngine.handleAssistantRequest({ question: 'What was the total Closed Won value in June 2026?' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].retrieval_mode, 'aggregate');
+    assert.match(calls[0].criteria, /Stage:equals:Closed Won/);
+    assert.match(calls[0].criteria, /Closing_Date:greater_equal:2026-06-01/);
+    assert.match(response.summary, /₹1,25,000/);
+    assert.equal(response.calculations.some((item) => item.type === 'sum' && item.value === 125000), true);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('assistant compares named periods with one CRM-side aggregate per period', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  const calls = [];
+  recordsService.getRecords = async (_module, options) => {
+    calls.push(options);
+    const sum = calls.length === 2 ? 225000 : 125000;
+    return {
+      data: [],
+      info: {
+        count: 2,
+        aggregateValues: { sum },
+        aggregateValue: sum,
+        retrievalStrategy: 'aggregate',
+        retrievalComplete: true,
+        more_records: false,
+      },
+    };
+  };
+
+  try {
+    const response = await assistantEngine.handleAssistantRequest({ question: 'Compare Closed Won value for June 2026 and July 2026' });
+    assert.equal(calls.length, 2);
+    assert.equal(calls.every((options) => options.retrieval_mode === 'aggregate'), true);
+    assert.equal(calls.some((options) => /june\s+2026/i.test(options.request_text || '')), true);
+    assert.equal(calls.some((options) => /july\s+2026/i.test(options.request_text || '')), true);
+    const comparison = response.calculations.find((item) => item.type === 'comparison');
+    assert.equal(comparison.value['june 2026'], 125000);
+    assert.equal(comparison.value['july 2026'], 225000);
+    assert.match(response.summary, /june 2026 ₹1,25,000/);
+    assert.match(response.summary, /july 2026 ₹2,25,000/);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
 test('assistant only reports zero Closed Won June matches after complete retrieval', async () => {
   const originalGetRecords = recordsService.getRecords;
   recordsService.getRecords = async () => ({

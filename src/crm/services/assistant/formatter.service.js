@@ -44,7 +44,7 @@ function formatMetricValue(type, value) {
     return { ...value, [totalsKey]: Object.fromEntries(Object.entries(value[totalsKey] || {}).map(([key, item]) => [key, formatCurrency(item)])) };
   }
   if (type === 'comparison' && value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === 'difference' || key.includes('month') ? formatCurrency(item) : item]));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, formatCurrency(item)]));
   }
   if (type === 'multi_module_comparison' && value && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([module, metrics]) => {
@@ -222,7 +222,10 @@ function metricSummary(calculations, dataLength) {
       return `${module}: this month ${formatCurrency(values['this month'])}, last month ${formatCurrency(values['last month'])}, difference ${formatCurrency(values.difference)}`;
     }).join('; ')}.`;
   }
-  if (comparison) return `comparison: this month ${formatCurrency(comparison.value['this month'])}; last month ${formatCurrency(comparison.value['last month'])}; difference ${formatCurrency(comparison.value.difference)}.`;
+  if (comparison) {
+    const periods = Object.entries(comparison.value).filter(([key]) => key !== 'difference');
+    return `comparison: ${periods.map(([period, value]) => `${period} ${formatCurrency(value)}`).join('; ')}; difference ${formatCurrency(comparison.value.difference)}.`;
+  }
   if (average) return `Average deal value: ${formatCurrency(average.value)}.`;
   if (sum) return `Total value: ${formatCurrency(sum.value)}.`;
   if (totalRevenue) return `Total revenue: ${formatCurrency(totalRevenue.value)}.`;
@@ -326,10 +329,12 @@ function formatResponse(plan, datasets, calculations, options = {}) {
     ? 'Lead conversion cannot be calculated from the CRM records.'
     : incompleteRetrieval
       ? 'The CRM search could not be completed, so I cannot confirm whether matching records exist.'
-    : records.length === 0
+    : records.length === 0 && calculations.length === 0
       ? emptySummary
       : plan.intents?.includes('LIST') && calculations.length === 0
-        ? `${currentMonthLabel}Showing ${displayRecords.length} of ${displayTotal} matching records.${displayTotal > displayRecords.length ? ` There are ${displayTotal - (displayStart + displayRecords.length)} more matching records available.` : ''}`
+        ? plan.pagination?.explicit && displayStart === 0 && displayTotal === displayRecords.length
+          ? `${currentMonthLabel}${displayRecords.length} records.`
+          : `${currentMonthLabel}Showing ${displayRecords.length} of ${displayTotal} matching records.${displayTotal > displayRecords.length ? ` There are ${displayTotal - (displayStart + displayRecords.length)} more matching records available.` : ''}`
       : `${currentMonthLabel}${metricSummary(calculations, records.length)}`;
   const summaryWithAvailability = crmReturnedDate(datasets)
     ? `${summary} Data available through ${crmReturnedDate(datasets)}.`

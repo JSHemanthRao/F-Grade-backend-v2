@@ -127,30 +127,60 @@ function calculateCounts(records) {
   }, { stages: {}, closedWonCount: 0, closedLostCount: 0, closedWonValue: 0, openPipelineValue: 0 });
 }
 
+function aggregateValueFromDatasets(datasets, metric) {
+  for (const dataset of datasets || []) {
+    const info = dataset?.result?.info || dataset?.info || {};
+    const values = info.aggregateValues || {};
+    const value = values[metric] ?? (metric === 'sum' ? info.aggregateValue : undefined);
+    if (value !== undefined && value !== null) return numericValue(value);
+  }
+  return null;
+}
+
+function countFromDatasets(datasets) {
+  const counted = (datasets || []).filter((dataset) => dataset?.step?.type === 'count' || dataset?.result?.info?.retrievalStrategy === 'count');
+  if (!counted.length) return null;
+  return counted.reduce((total, dataset) => {
+    const info = dataset?.result?.info || dataset?.info || {};
+    const count = info.count === undefined || info.count === null
+      ? (dataset?.result?.data || dataset?.data || []).length
+      : Number(info.count);
+    return total + (Number.isFinite(count) ? count : 0);
+  }, 0);
+}
+
 function validateMetric(calculation, records, datasets, plan) {
   const actualRecords = records || [];
   const type = calculation.type;
   const value = calculation.value;
 
   if (type === 'count') {
-    return { valid: value === actualRecords.length };
+    const aggregateCount = countFromDatasets(datasets);
+    return { valid: value === (aggregateCount === null ? actualRecords.length : aggregateCount) };
   }
   if (type === 'counts') {
     return { valid: Object.values(value || {}).reduce((sum, item) => sum + Number(item || 0), 0) === actualRecords.length };
   }
   if (type === 'sum' || type === 'total_revenue') {
-    return { valid: value === sumAmounts(actualRecords) };
+    const aggregate = aggregateValueFromDatasets(datasets, 'sum');
+    return { valid: value === (aggregate === null ? sumAmounts(actualRecords) : aggregate) };
   }
   if (type === 'average') {
+    const aggregate = aggregateValueFromDatasets(datasets, 'average');
+    if (aggregate !== null) return { valid: Math.abs(value - aggregate) < 1e-6 };
     const amounts = actualRecords.map((record) => numericValue(record?.Amount ?? record?.amount ?? record?.value ?? record?.Grand_Total ?? record?.Revenue ?? record?.Total_Revenue)).filter((num) => num !== null);
     const expected = amounts.length ? amounts.reduce((sum, num) => sum + num, 0) / amounts.length : 0;
     return { valid: Math.abs(value - expected) < 1e-6 };
   }
   if (type === 'minimum') {
+    const aggregate = aggregateValueFromDatasets(datasets, 'minimum');
+    if (aggregate !== null) return { valid: Math.abs(value - aggregate) < 1e-6 };
     const amounts = actualRecords.map((record) => numericValue(record?.Amount ?? record?.amount ?? record?.value ?? record?.Grand_Total ?? record?.Revenue ?? record?.Total_Revenue)).filter((num) => num !== null);
     return { valid: amounts.length === 0 ? value === 0 : value === Math.min(...amounts) };
   }
   if (type === 'maximum') {
+    const aggregate = aggregateValueFromDatasets(datasets, 'maximum');
+    if (aggregate !== null) return { valid: Math.abs(value - aggregate) < 1e-6 };
     const amounts = actualRecords.map((record) => numericValue(record?.Amount ?? record?.amount ?? record?.value ?? record?.Grand_Total ?? record?.Revenue ?? record?.Total_Revenue)).filter((num) => num !== null);
     return { valid: amounts.length === 0 ? value === 0 : value === Math.max(...amounts) };
   }
@@ -177,12 +207,21 @@ function validateMetric(calculation, records, datasets, plan) {
   }
   if (type === 'comparison') {
     if (!value || typeof value !== 'object') return { valid: false };
-    const expectedDifference = numericValue(value['this month']) - numericValue(value['last month']);
-    return { valid: value.difference === expectedDifference };
+    const periods = Object.entries(value).filter(([key]) => key !== 'difference');
+    if (periods.length < 2) return { valid: false };
+    const hasRelativePeriods = Object.prototype.hasOwnProperty.call(value, 'this month')
+      && Object.prototype.hasOwnProperty.call(value, 'last month');
+    const orderedPeriods = hasRelativePeriods
+      ? periods
+      : periods.slice().sort(([left], [right]) => new Date(`${left} 1`).valueOf() - new Date(`${right} 1`).valueOf());
+    const previous = numericValue(hasRelativePeriods ? value['last month'] : orderedPeriods[0][1]);
+    const current = numericValue(hasRelativePeriods ? value['this month'] : orderedPeriods[orderedPeriods.length - 1][1]);
+    return { valid: previous !== null && current !== null && value.difference === current - previous };
   }
   if (type === 'multi_module_comparison') {
     if (!value || typeof value !== 'object') return { valid: false };
     return { valid: Object.values(value).every((moduleValue) => {
+      if (moduleValue && moduleValue.value !== undefined) return numericValue(moduleValue.value) !== null;
       const expected = numericValue(moduleValue['this month']) - numericValue(moduleValue['last month']);
       return moduleValue.difference === expected;
     }) };
@@ -269,7 +308,7 @@ function validateExecution({ plan, question, datasets, calculations, limitations
 
   const filterModules = Object.keys(plan.filterPlans || {});
   const filteredModules = datasets.filter((dataset) => dataset.module && filterModules.includes(dataset.module)).map((dataset) => dataset.module);
-  if (filterModules.length > 0 && filteredModules.length !== filterModules.length) issues.push('required_filters_not_applied');
+  if (filterModules.length > 0 && new Set(filteredModules).size !== filterModules.length) issues.push('required_filters_not_applied');
 
   const supportedMetrics = getMetricTypesAllowedByPlan(plan);
   const sanitizedCalculations = [];

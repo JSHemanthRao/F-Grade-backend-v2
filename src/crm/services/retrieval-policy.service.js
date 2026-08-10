@@ -5,6 +5,7 @@ const SINGLE_RECORD_PER_PAGE = 1;
 
 const RETRIEVAL_STRATEGIES = {
   COUNT: 'count',
+  AGGREGATE: 'aggregate',
   SINGLE_RECORD: 'single_record',
   PAGINATED_LIST: 'paginated_list',
   FULL_DATASET: 'full_dataset',
@@ -16,6 +17,7 @@ const RETRIEVAL_MODES = {
   PAGE: 'page',
   ALL: 'all',
   COUNT: 'count',
+  AGGREGATE: 'aggregate',
 };
 
 const FULL_RETRIEVAL_PATTERNS = [
@@ -272,6 +274,7 @@ function normalizeRetrievalMode(value) {
     || normalizedValue === RETRIEVAL_MODES.PAGE
     || normalizedValue === RETRIEVAL_MODES.ALL
     || normalizedValue === RETRIEVAL_MODES.COUNT
+    || normalizedValue === RETRIEVAL_MODES.AGGREGATE
   ) {
     return normalizedValue;
   }
@@ -286,6 +289,10 @@ function getEffectiveRetrievalMode(retrievalPlan, explicitMode) {
 
   if (retrievalPlan.strategy === RETRIEVAL_STRATEGIES.COUNT) {
     return RETRIEVAL_MODES.COUNT;
+  }
+
+  if (retrievalPlan.strategy === RETRIEVAL_STRATEGIES.AGGREGATE) {
+    return RETRIEVAL_MODES.AGGREGATE;
   }
 
   if (retrievalPlan.strategy === RETRIEVAL_STRATEGIES.FULL_DATASET) {
@@ -329,6 +336,16 @@ function getRetrievalPlan(moduleDefinition, options = {}) {
       fetchAll: false,
       params: {},
       reason: 'retrieval_mode_count',
+      retrievalMode,
+    };
+  }
+
+  if (retrievalMode === RETRIEVAL_MODES.AGGREGATE) {
+    return {
+      strategy: RETRIEVAL_STRATEGIES.AGGREGATE,
+      fetchAll: false,
+      params: {},
+      reason: 'retrieval_mode_aggregate',
       retrievalMode,
     };
   }

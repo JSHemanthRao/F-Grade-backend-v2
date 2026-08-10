@@ -333,3 +333,33 @@ test('RetrievalEngine supports empty datasets without fabricating records', asyn
     restoreZoho(originalGet, zohoClient.post);
   }
 });
+
+test('RetrievalEngine uses one CRM-side aggregate query for sum requests', async () => {
+  const originalPost = zohoClient.post;
+  const queries = [];
+  zohoClient.post = async (_url, body) => {
+    queries.push(body.select_query);
+    return { data: { data: [{ record_count: '4', sum_value: '125000' }], info: {} } };
+  };
+
+  try {
+    const result = await RetrievalEngine.getRecords('deals', {
+      question: 'What was the total Closed Won value in June 2026?',
+      criteria: '(Stage:equals:Closed Won)and(Closing_Date:greater_equal:2026-06-01T00:00:00Z)and(Closing_Date:less_than:2026-07-01T00:00:00Z)',
+      retrieval_mode: 'aggregate',
+      aggregate_metrics: ['sum'],
+      aggregate_field: 'Amount',
+      force_coql: true,
+    });
+
+    assert.equal(queries.length, 1);
+    assert.match(queries[0], /sum\(Amount\) as sum_value/i);
+    assert.match(queries[0], /Stage = 'Closed Won'/i);
+    assert.match(queries[0], /Closing_Date >= '2026-06-01T00:00:00Z'/i);
+    assert.deepEqual(result.data, []);
+    assert.equal(result.info.count, 4);
+    assert.equal(result.info.aggregateValues.sum, 125000);
+  } finally {
+    restoreZoho(zohoClient.get, originalPost);
+  }
+});

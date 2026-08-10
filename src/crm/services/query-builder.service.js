@@ -15,11 +15,12 @@ function shouldUseCoql(options = {}) {
   const requestText = getRequestText(options);
   const criteria = normalizeText(options.criteria || options.filter || options.filters);
   const completeRetrieval = String(options.retrieval_mode || options.retrievalMode || '').toLowerCase() === 'all';
+  const aggregateRetrieval = String(options.retrieval_mode || options.retrievalMode || '').toLowerCase() === 'aggregate';
   // Criteria-bearing list requests must stay on the Search API so the
   // retrieval engine can walk every Zoho page. Complete filtered requests
   // use COQL instead: Zoho permits a 2,000-row batch there, which preserves
   // complete-search semantics while avoiding dozens of 200-row calls.
-  return Boolean(options.force_coql || ANALYTICS_WORDS.test(requestText)
+  return Boolean(options.force_coql || aggregateRetrieval || ANALYTICS_WORDS.test(requestText)
     || (completeRetrieval && Boolean(criteria))
     || (DATE_WORDS.test(requestText) && !criteria));
 }
@@ -137,7 +138,20 @@ function buildWhereClause(moduleKey, requestText, criteria, options = {}) {
         return `${field} ${operators[operator.toLowerCase()]} '${value}'`;
       },
     );
-    return translated || null;
+    if (!translated) return null;
+
+    // Period-specific comparison requests reuse the non-date criteria and
+    // carry the date window in request text. Preserve both parts instead of
+    // dropping the date whenever a reusable CRM criterion is present.
+    const criteriaFields = new Set(
+      [...translated.matchAll(/(?:^|and)([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|>=|<=|>|<)\s*/gi)]
+        .map((match) => match[1].toLowerCase()),
+    );
+    const missingTextClauses = clauses.filter((clause) => {
+      const field = clause.match(/^\(?\s*([A-Za-z_][A-Za-z0-9_]*)\s/);
+      return field && !criteriaFields.has(field[1].toLowerCase());
+    });
+    return [translated, ...missingTextClauses].join(' and ');
   }
   return clauses.length ? clauses.map((clause) => `(${clause})`).join(' and ') : null;
 }

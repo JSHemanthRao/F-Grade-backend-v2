@@ -423,6 +423,64 @@ async function executeCoqlCount(moduleKey, moduleDefinition, queryPlan) {
   };
 }
 
+function getAggregateField(moduleDefinition, requestedField) {
+  const availableFields = Array.isArray(moduleDefinition.defaultFields) ? moduleDefinition.defaultFields : [];
+  if (requestedField && availableFields.some((field) => field.toLowerCase() === String(requestedField).toLowerCase())) {
+    return availableFields.find((field) => field.toLowerCase() === String(requestedField).toLowerCase());
+  }
+  return ['Amount', 'Grand_Total', 'Annual_Revenue', 'Unit_Price', 'Revenue', 'Total_Revenue']
+    .find((candidate) => availableFields.some((field) => field.toLowerCase() === candidate.toLowerCase())) || null;
+}
+
+function normalizeAggregateMetrics(options = {}) {
+  const requested = Array.isArray(options.aggregate_metrics)
+    ? options.aggregate_metrics
+    : options.aggregate_metric
+      ? [options.aggregate_metric]
+      : ['sum'];
+  return [...new Set(requested.map((metric) => String(metric).toLowerCase()))]
+    .filter((metric) => ['sum', 'average', 'minimum', 'maximum'].includes(metric));
+}
+
+async function executeCoqlAggregate(moduleKey, moduleDefinition, queryPlan, options = {}) {
+  const field = getAggregateField(moduleDefinition, options.aggregate_field);
+  if (!field) throw new Error(`No aggregate field is available for CRM module ${moduleKey}`);
+
+  const metricFunctions = {
+    sum: 'sum',
+    average: 'avg',
+    minimum: 'min',
+    maximum: 'max',
+  };
+  const metrics = normalizeAggregateMetrics(options);
+  const expressions = metrics.map((metric) => `${metricFunctions[metric]}(${field}) as ${metric}_value`);
+  const query = `select count(id) as record_count${expressions.length ? `, ${expressions.join(', ')}` : ''} from ${moduleDefinition.endpoint}${queryPlan.whereClause ? ` where ${queryPlan.whereClause}` : ''}`;
+  logGeneratedQuery({ ...queryPlan, query, mode: 'coql_aggregate' });
+  const response = await zohoClient.post('/crm/v8/coql', { select_query: query });
+  const row = response.data?.data?.[0] || {};
+  const recordCount = Number(row.record_count ?? row.count ?? 0);
+  const aggregateValues = Object.fromEntries(metrics.map((metric) => {
+    const rawValue = row[`${metric}_value`];
+    const value = rawValue === null || rawValue === undefined || rawValue === '' ? 0 : Number(rawValue);
+    return [metric, Number.isFinite(value) ? value : 0];
+  }));
+
+  return {
+    data: [],
+    info: {
+      count: Number.isFinite(recordCount) ? recordCount : 0,
+      more_records: false,
+      retrievalComplete: true,
+      page: 1,
+      per_page: 1,
+      retrievalStrategy: RETRIEVAL_STRATEGIES.AGGREGATE,
+      aggregateField: field,
+      aggregateValues,
+      aggregateValue: aggregateValues.sum ?? aggregateValues.average ?? 0,
+    },
+  };
+}
+
 async function executeCoqlRecords(moduleKey, queryPlan, options = {}) {
   const requestedPage = Number(options.page || 1);
   const requestedPerPage = Number(options.per_page || 0);
@@ -621,6 +679,25 @@ async function getRecords(moduleKey, options = {}) {
         error?.config?.params || {},
         []
       );
+      throw error;
+    }
+  }
+
+  if (retrievalPlan.strategy === RETRIEVAL_STRATEGIES.AGGREGATE) {
+    try {
+      const result = await executeCoqlAggregate(normalizedKey, moduleDefinition, queryPlan, effectiveOptions);
+      logRetrievalTelemetry({
+        moduleKey: normalizedKey,
+        criteria: effectiveOptions.criteria,
+        fields: queryPlan.fields,
+        calls: 1,
+        recordsPerCall: [0],
+        totalMatchingRecords: result.info.count,
+        startedAt: retrievalStartedAt,
+      });
+      return cacheResult(result);
+    } catch (error) {
+      logRequestError(error, normalizedKey, moduleDefinition, { select_query: error?.config?.data || queryPlan.query }, queryPlan.fields);
       throw error;
     }
   }
