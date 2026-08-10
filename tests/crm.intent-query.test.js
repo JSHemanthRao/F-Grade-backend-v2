@@ -4,6 +4,9 @@ const { buildExecutionPlan } = require('../src/crm/services/assistant/planner.se
 const { optimizeExecutionPlan } = require('../src/crm/services/assistant/query-optimizer.service');
 const { validateIntentQueryPlan } = require('../src/crm/services/assistant/query-plan-validator.service');
 const { buildQueryPlan } = require('../src/crm/services/query-builder.service');
+const recordsService = require('../src/crm/services/records.service');
+const assistantEngine = require('../src/crm/services/assistant-engine.service');
+const { formatResponse } = require('../src/crm/services/assistant/formatter.service');
 
 test('planner creates an authoritative structured query plan for historical Closed Won deals', () => {
   const plan = optimizeExecutionPlan(buildExecutionPlan('Give me Closed Won deals in June 2026'));
@@ -29,6 +32,7 @@ test('created-in-period requests select Created_Time instead of a deal closing d
   assert.equal(queryPlan.dateField, 'Created_Time');
   assert.equal(queryPlan.startDate, '2026-06-01T00:00:00Z');
   assert.equal(queryPlan.endDate, '2026-07-01T00:00:00Z');
+  assert.equal(queryPlan.fields.includes('Created_Time'), true);
   assert.equal(queryPlan.filters.find((filter) => filter.logicalField === 'date').field, 'Created_Time');
 });
 
@@ -63,4 +67,48 @@ test('structured query plans build CRM criteria without reparsing the user quest
   assert.match(built.query, /Closing_Date >= '2026-06-01T00:00:00Z'/i);
   assert.match(built.query, /Closing_Date < '2026-07-01T00:00:00Z'/i);
   assert.doesNotMatch(built.query, /This text must not be used/i);
+});
+
+test('cross-module relationship requests retrieve filtered deals first and only related contacts', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  const calls = [];
+  recordsService.getRecords = async (moduleKey, options) => {
+    calls.push({ moduleKey, options });
+    if (moduleKey === 'deals') {
+      return {
+        data: [{ id: 'deal-1', Stage: 'Closed Won', Closing_Date: '2026-06-15', Contact_Name: { id: 'contact-1' } }],
+        info: { count: 1, more_records: false, retrievalComplete: true },
+      };
+    }
+    assert.deepEqual(options.ids, ['contact-1']);
+    return { data: [{ id: 'contact-1', First_Name: 'Asha', Email: 'asha@example.com' }], info: { count: 1, more_records: false } };
+  };
+
+  try {
+    const response = await assistantEngine.handleAssistantRequest({ question: 'Give me contacts that converted to Closed Won deals in June 2026' });
+    assert.equal(response.success, true);
+    assert.deepEqual(response.data.map((record) => record.id), ['contact-1']);
+    assert.deepEqual(calls.map((call) => call.moduleKey), ['deals', 'contacts']);
+    assert.match(calls[0].options.criteria, /Stage:equals:Closed Won/);
+    assert.match(calls[0].options.criteria, /Closing_Date:greater_equal:2026-06-01/);
+    assert.equal(calls[1].options.criteria, undefined);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('response data never asks for technical retrieval parameters', () => {
+  const response = formatResponse({
+    question: 'Give me deals',
+    modules: ['deals'],
+    intents: ['LIST'],
+    timeRange: { label: 'all time', range: 'all_time' },
+    queryPlan: { module: 'Deals', moduleKey: 'deals', operation: 'LIST', filters: [] },
+  }, [{ module: 'deals', result: { data: [{ id: 'deal-1', Deal_Name: 'Acme' }], info: { count: 1, more_records: false, retrievalComplete: true } } }], []);
+  const output = JSON.stringify(response);
+  assert.doesNotMatch(output, /page number|pagination parameters|per_page|API parameters|retrieval parameters|sort parameters/i);
+  assert.equal(response.module, 'Deals');
+  assert.equal(response.operation, 'LIST');
+  assert.equal(response.displayed, 1);
+  assert.equal(response.hasMore, false);
 });

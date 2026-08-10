@@ -124,7 +124,7 @@ async function handleAssistantRequest(payload = {}) {
   if (DEBUG_ASSISTANT) logger.info('Assistant Pipeline', { tasks: plan.steps.length, modules: plan.modules });
 
   let conversionDiscovery = null;
-  if (plan.intents.includes('CONVERSION')) {
+  if (plan.intents.includes('CONVERSION') && !plan.relationships.includes('contact_to_deal')) {
     conversionDiscovery = await discoverLeadConversionFields();
     const needsDate = plan.timeRange.range !== 'all_time';
     const hasDate = conversionDiscovery.fields.some((field) => /converted.*(?:date|time)|conversion.*(?:date|time)/i.test(field));
@@ -147,6 +147,7 @@ async function handleAssistantRequest(payload = {}) {
       signal: payload.signal,
     });
     datasets = datasets.map((dataset) => {
+      if (dataset.skipQuestionFilter) return dataset;
       const filterPlan = filterPlans.byModule[dataset.module];
       // Period-specific retrieval already applies its date window on the
       // CRM side. The testable/local pass should enforce the remaining
@@ -198,7 +199,7 @@ async function handleAssistantRequest(payload = {}) {
     });
   }
 
-  if (plan.steps.some((step) => step.type === 'conversion_count') && calculations.some((item) => item.type === 'conversion_unavailable')) {
+    if (plan.steps.some((step) => step.type === 'conversion_count') && calculations.some((item) => item.type === 'conversion_unavailable')) {
     return formatResponse(plan, merged.datasets, [], { conversionFallback: true });
   }
 

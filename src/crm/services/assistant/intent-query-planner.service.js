@@ -27,6 +27,7 @@ const LABEL_FIELDS_BY_MODULE = {
   'purchase-orders': ['Subject', 'Purchase_Order_Number'],
   campaigns: ['Campaign_Name'],
 };
+const UNIVERSAL_CRM_FIELDS = new Set(['id', 'Created_Time', 'Modified_Time', 'Converted_Date_Time', 'Converted__s', 'Converted_Deal']);
 
 function dateFieldFor(moduleKey, question) {
   const text = String(question || '').toLowerCase();
@@ -59,6 +60,23 @@ function aggregationFor(operation, moduleDefinition, metrics = []) {
   return { function: metric, field: amountFieldFor(moduleDefinition), metrics: [metric, ...metrics.filter((item) => ['sum', 'average', 'minimum', 'maximum'].includes(item))] };
 }
 
+function sortFor(question, moduleKey) {
+  const text = String(question || '').toLowerCase();
+  const explicit = text.match(/\bsort(?:ed)?\s+by\s+([a-z_ ]+?)(?:\s+(ascending|descending|asc|desc))?(?:\s|$)/i);
+  const direction = /\b(descending|desc|highest|largest|top|newest|latest)\b/i.test(text) ? 'desc' : 'asc';
+  const rawField = explicit?.[1]?.trim();
+  const field = rawField
+    ? (/amount|value|revenue|price/i.test(rawField) ? 'Amount'
+      : /date|created|closing/i.test(rawField) ? dateFieldFor(moduleKey, text)
+        : /name|deal/i.test(rawField) ? (moduleKey === 'deals' ? 'Deal_Name' : 'Name')
+          : rawField)
+    : /\b(top|bottom|highest|largest|newest|latest)\b/i.test(text)
+      ? (/amount|value|revenue|deal/i.test(text) ? 'Amount' : dateFieldFor(moduleKey, text))
+      : null;
+  if (!field) return null;
+  return { field, direction: explicit?.[2] ? (/desc/i.test(explicit[2]) ? 'desc' : 'asc') : direction };
+}
+
 function fieldsFor({ moduleKey, moduleDefinition, operation, question, timeRange, entities, metrics }) {
   if (operation === 'COUNT') return ['id'];
   const fields = new Set(['id']);
@@ -81,7 +99,7 @@ function fieldsFor({ moduleKey, moduleDefinition, operation, question, timeRange
   if (/email/i.test(text)) fields.add('Email');
   if (/phone|mobile|telephone/i.test(text)) fields.add('Phone');
   if (metrics.includes('ranking') || metrics.includes('top_n')) fields.add('Owner');
-  return [...fields].filter((field) => (moduleDefinition.defaultFields || []).includes(field) || field === 'id');
+  return [...fields].filter((field) => (moduleDefinition.defaultFields || []).includes(field) || UNIVERSAL_CRM_FIELDS.has(field));
 }
 
 function normalizePeriod(period) {
@@ -123,11 +141,14 @@ function buildIntentQueryPlan({ question, moduleKey, intents = [], metrics = [],
     leadSource: entities.leadSources?.length === 1 ? entities.leadSources[0] : null,
     amountConditions: parsedFilters.filter((filter) => filter.logicalField === 'amount'),
     requestedRecordCount: pagination.per_page || null,
-    sort: pagination.sort || null,
+    sort: pagination.sort || sortFor(question, moduleKey),
     aggregation: aggregationFor(operation, moduleDefinition, metrics),
     grouping: relationships.includes('grouped_analysis') ? { requested: true } : null,
     comparisonPeriods: periods,
     relationshipRequirements: relationships,
+    relationship: relationships.includes('contact_to_deal')
+      ? { type: 'contact_to_deal', sourceModule: 'contacts', targetModule: 'deals', sourceKey: 'id', targetReferenceFields: ['Contact_Name', 'Contact', 'Contact_ID'] }
+      : null,
     displayLimit,
     searchScope: pagination.explicit ? 'bounded_requested_page' : 'all_matching_records',
     criteria: null,

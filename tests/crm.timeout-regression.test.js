@@ -89,6 +89,7 @@ test('local CRM assistant endpoint stays bounded for the five timeout scenarios'
     assert.match(filteredQuery.query, /Stage\s*=\s*'Closed Won'/i);
     assert.match(filteredQuery.query, /Closing_Date\s*>=\s*'2026-06-01/i);
     assert.match(filteredQuery.query, /Closing_Date\s*<\s*'2026-07-01/i);
+    assert.match(filteredQuery.query, /select .*Deal_Name.*Account_Name.*Amount.*Closing_Date.*Stage.*Owner/i);
     assert.match(aggregateQuery.query, /sum\(Amount\)/i);
     assert.match(aggregateQuery.query, /Stage\s*=\s*'Closed Won'/i);
 

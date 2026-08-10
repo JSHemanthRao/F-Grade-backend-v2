@@ -277,6 +277,25 @@ function buildTables(records) {
   }];
 }
 
+function filtersAppliedFor(plan) {
+  const queryPlan = plan?.queryPlan;
+  const filterPlan = queryPlan && plan?.filterPlans?.[queryPlan.moduleKey];
+  const filters = filterPlan?.filters || queryPlan?.filters || [];
+  return filters.reduce((result, filter) => {
+    if (!filter?.logicalField) return result;
+    if (filter.operator === 'between' && Array.isArray(filter.value)) {
+      result[filter.logicalField] = { field: filter.field, from: filter.value[0], to: filter.value[1] };
+    } else {
+      result[filter.logicalField] = { field: filter.field, operator: filter.operator, value: filter.value };
+    }
+    return result;
+  }, {});
+}
+
+function matchingRecordTotal(datasets, displayTotal) {
+  return Math.max(displayTotal, ...infoFrom(datasets).map((info) => Number(info.count)).filter(Number.isFinite), 0);
+}
+
 const FACTUAL_OBSERVATION_TYPES = new Set([
   'highest_value',
   'lowest_value',
@@ -340,6 +359,10 @@ function formatResponse(plan, datasets, calculations, options = {}) {
     ? `${summary} Data available through ${crmReturnedDate(datasets)}.`
     : summary;
   const remainingRecords = Math.max(0, displayTotal - (displayStart + displayRecords.length));
+  const formattedRecords = displayRecords.map(formatDisplayedRecord);
+  const matchingTotal = matchingRecordTotal(datasets, displayTotal);
+  const structuredModule = plan.queryPlan?.module || (plan.modules?.length === 1 ? plan.modules[0] : plan.modules);
+  const structuredOperation = plan.queryPlan?.operation || (plan.intents?.includes('LIST') ? 'LIST' : null);
   const observations = factualObservations(options.insights);
   const followUps = dataBackedFollowUps(records, coverage);
   const response = {
@@ -354,13 +377,20 @@ function formatResponse(plan, datasets, calculations, options = {}) {
       unavailablePeriods: coverage.monthsWithoutRetrievedRecords,
     },
     requestedInformation: plan.question,
+    module: structuredModule,
+    operation: structuredOperation,
+    filtersApplied: filtersAppliedFor(plan),
     calculatedMetrics: calculations,
     businessObservations: observations,
     limitations,
     keyMetrics: presentMetrics(calculations),
     suggestedNextAnalysis: followUps,
-    data: displayRecords.map(formatDisplayedRecord),
-    tables: buildTables(displayRecords.map(formatDisplayedRecord)),
+    data: formattedRecords,
+    records: formattedRecords,
+    displayed: formattedRecords.length,
+    totalMatching: matchingTotal,
+    hasMore: remainingRecords > 0,
+    tables: buildTables(formattedRecords),
     continuation: {
       available: remainingRecords > 0,
       remainingRecords,

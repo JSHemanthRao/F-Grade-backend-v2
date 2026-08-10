@@ -15,7 +15,17 @@ function generateTasks({ question, intents, modules, timeRange, metrics, paginat
     return tasks;
   }
 
-  if (intents.includes('CONVERSION')) {
+  if (relationships.includes('contact_to_deal')) {
+    tasks.push({
+      type: 'relationship',
+      module: 'contacts',
+      modules: ['deals', 'contacts'],
+      relationship: 'contact_to_deal',
+      timeRange,
+      entities,
+      relationships,
+    });
+  } else if (intents.includes('CONVERSION')) {
     tasks.push({
       type: 'conversion_count',
       sourceModule: modules.includes('leads') ? 'leads' : primaryModule,

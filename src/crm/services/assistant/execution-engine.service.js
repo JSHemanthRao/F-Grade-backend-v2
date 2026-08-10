@@ -10,6 +10,65 @@ function isTimeoutOrCancellation(error) {
     || error?.name === 'CanceledError';
 }
 
+function relatedIdsFromDeal(record) {
+  const candidates = [record?.Contact_Name, record?.Contact, record?.Contact_ID, record?.Contact_Id, record?.contact_id];
+  return candidates.flatMap((value) => {
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === 'object') return [value.id ?? value.ID ?? value.value];
+    return [value];
+  }).filter((value) => value !== undefined && value !== null && value !== '').map(String);
+}
+
+async function executeContactToDealRelationship({ plan, question, filterPlans, signal, requestCache }) {
+  const dealPlan = plan.queryPlansByModule?.deals;
+  const contactPlan = plan.queryPlansByModule?.contacts;
+  const dealFilters = filterPlans.deals;
+  if (!dealPlan || !dealFilters?.valid) throw new Error('FILTER_VALIDATION_ERROR');
+  const dealFields = [...new Set([...(dealPlan.fields || []), 'Contact_Name'])];
+  const deals = await recordsService.getRecords('deals', {
+    question,
+    criteria: dealFilters.serverCriteria,
+    fields: dealFields,
+    queryPlan: { ...dealPlan, criteria: dealFilters.serverCriteria, fields: dealFields },
+    force_coql: true,
+    retrieval_mode: 'all',
+    retrievalCache: requestCache,
+    ...(signal ? { signal } : {}),
+  });
+  const dealRecords = deals?.data || [];
+  const contactIds = [...new Set(dealRecords.flatMap(relatedIdsFromDeal))];
+  if (contactIds.length === 0) {
+    return [{
+      step: { type: 'relationship', module: 'contacts', relationship: 'contact_to_deal' },
+      module: 'contacts',
+      relationshipRole: 'source',
+      skipQuestionFilter: true,
+      result: { data: [], info: { count: 0, more_records: false, retrievalComplete: true, relationship: 'contact_to_deal' } },
+    }];
+  }
+  const contacts = await recordsService.getRecords('contacts', {
+    question,
+    ids: contactIds,
+    fields: contactPlan?.fields || ['id', 'First_Name', 'Last_Name', 'Email'],
+    queryPlan: contactPlan ? { ...contactPlan, fields: contactPlan.fields || ['id'] } : undefined,
+    page: 1,
+    per_page: Math.min(contactIds.length, 200),
+    retrieval_mode: 'page',
+    retrievalCache: requestCache,
+    ...(signal ? { signal } : {}),
+  });
+  return [{
+    step: { type: 'relationship', module: 'contacts', relationship: 'contact_to_deal' },
+    module: 'contacts',
+    relationshipRole: 'source',
+    skipQuestionFilter: true,
+    result: {
+      ...(contacts || {}),
+      info: { ...(contacts?.info || {}), relationship: 'contact_to_deal', relatedDealCount: dealRecords.length },
+    },
+  }];
+}
+
 function getPeriods(step, question, contextDatasets) {
   if (step.type === 'compare' && Array.isArray(step.periods) && step.periods.length > 1) {
     return step.periods.map((period) => typeof period === 'string' ? period : period.label).filter(Boolean);
@@ -28,6 +87,17 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
   const contextDatasets = Array.isArray(context.datasets) ? context.datasets : [];
 
   for (const step of plan.steps) {
+    if (step.type === 'relationship' && step.relationship === 'contact_to_deal') {
+      const relationshipDatasets = await executeContactToDealRelationship({
+        plan,
+        question,
+        filterPlans,
+        signal,
+        requestCache,
+      });
+      datasets.push(...relationshipDatasets);
+      continue;
+    }
     const stepModules = Array.isArray(step.modules) && step.modules.length > 0
       ? step.modules
       : [step.module || moduleCandidates[0]];
@@ -93,6 +163,10 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
           ...(step.requiredFieldsByModule?.[moduleKey]?.length ? { fields: step.requiredFieldsByModule[moduleKey] } : {}),
           ...(signal ? { signal } : {}),
           ...(retrievalMode === 'page' ? { page: requestedPage, per_page: requestedLimit, offset: Number(plan.pagination?.offset || 0) } : {}),
+          ...(structuredQueryPlan?.sort?.field ? {
+            sort_by: structuredQueryPlan.sort.field,
+            sort_order: structuredQueryPlan.sort.direction,
+          } : {}),
           ...(aggregateMetrics ? {
             aggregate_metrics: aggregateMetrics,
             aggregate_field: step.requiredFieldsByModule?.[moduleKey]?.find((field) => /amount|revenue|total|price|value/i.test(field)),

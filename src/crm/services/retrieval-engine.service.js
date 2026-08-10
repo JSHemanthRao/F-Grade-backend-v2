@@ -371,7 +371,9 @@ function buildCountCriteria(moduleKey, moduleDefinition, options = {}, requestTe
 
 async function executeCountRequest(moduleKey, moduleDefinition, options = {}) {
   const requestText = getRequestText(options);
-  const criteria = buildCountCriteria(moduleKey, moduleDefinition, options, requestText);
+  const criteria = options.criteria
+    ?? options.queryPlan?.criteria
+    ?? buildCountCriteria(moduleKey, moduleDefinition, options, requestText);
   const params = {};
 
   if (criteria) {

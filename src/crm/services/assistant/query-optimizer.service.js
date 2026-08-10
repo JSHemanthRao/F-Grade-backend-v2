@@ -1,4 +1,5 @@
 const { getModuleDefinition } = require('../module-definition.service');
+const UNIVERSAL_CRM_FIELDS = new Set(['id', 'Created_Time', 'Modified_Time', 'Converted_Date_Time', 'Converted__s', 'Converted_Deal']);
 
 function addIfPresent(fields, definition, candidates) {
   candidates.forEach((candidate) => {
@@ -16,7 +17,7 @@ function getRequiredFields(moduleKey, plan, step, question) {
     || plan.queryPlansByModule?.[moduleKey]
     || (plan.queryPlan?.moduleKey === moduleKey ? plan.queryPlan : null);
   if (step.type === 'query' && Array.isArray(structuredPlan?.fields) && structuredPlan.fields.length > 0) {
-    return structuredPlan.fields.filter((field) => definition.defaultFields.includes(field) || field === 'id');
+    return structuredPlan.fields.filter((field) => definition.defaultFields.includes(field) || UNIVERSAL_CRM_FIELDS.has(field));
   }
 
   const fields = new Set(['id']);
