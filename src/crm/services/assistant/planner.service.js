@@ -15,23 +15,26 @@ function detectPagination(question, module, conversation = {}) {
   const pageMatch = text.match(/\bpage\s+(\d{1,6})(?:\s+(?:with|at)\s+(\d{1,3})\s+records?)?/i);
   const directionMatch = text.match(/\b(first|next|previous|last)\s+(\d{1,3})\b/i);
   const showMatch = text.match(/\bshow\s+(\d{1,3})\b/i);
+  const giveMeMatch = text.match(/\bgive\s+me\s+(\d{1,3})\b/i);
   const requestedCount = pageMatch?.[2]
     ? Number(pageMatch[2])
     : directionMatch?.[2]
       ? Number(directionMatch[2])
       : showMatch?.[1]
         ? Number(showMatch[1])
+        : giveMeMatch?.[1]
+          ? Number(giveMeMatch[1])
         : null;
   const direction = pageMatch
     ? 'page'
-    : directionMatch?.[1]?.toLowerCase() || (showMatch ? 'first' : /\b(?:remaining|continue|again)\b/i.test(text) ? 'next' : 'first');
+    : directionMatch?.[1]?.toLowerCase() || (showMatch || giveMeMatch ? 'first' : /\b(?:remaining|continue|again)\b/i.test(text) ? 'next' : 'first');
   const page = pageMatch
     ? Number(pageMatch[1])
     : direction === 'next'
       ? 2
       : 1;
   const priorPagination = conversation.previousPagination || conversation.pagination;
-  const isContinuation = !pageMatch && !directionMatch && !showMatch && /\b(?:remaining|continue|again)\b/i.test(text);
+  const isContinuation = !pageMatch && !directionMatch && !showMatch && !giveMeMatch && /\b(?:remaining|continue|again)\b/i.test(text);
   const continuationPage = Number.isInteger(priorPagination?.page) && (direction === 'next' || direction === 'previous' || isContinuation)
     ? Math.max(1, priorPagination.page + (direction === 'previous' ? -1 : 1))
     : page;
@@ -46,7 +49,7 @@ function detectPagination(question, module, conversation = {}) {
     per_page: continuationSize || null,
     offset: continuationSize ? (continuationPage - 1) * continuationSize : 0,
     direction,
-    explicit: Boolean(pageMatch || directionMatch || showMatch || isContinuation),
+    explicit: Boolean(pageMatch || directionMatch || showMatch || giveMeMatch || isContinuation),
   };
 }
 

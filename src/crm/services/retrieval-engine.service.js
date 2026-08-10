@@ -45,6 +45,29 @@ function normalizeFields(fields) {
     .filter(Boolean);
 }
 
+function buildZohoRequestConfig(options = {}, extra = {}) {
+  return {
+    ...extra,
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(Number.isFinite(Number(options.requestTimeoutMs)) && Number(options.requestTimeoutMs) > 0
+      ? { timeout: Number(options.requestTimeoutMs) }
+      : {}),
+  };
+}
+
+function isTimeoutOrCancellation(error) {
+  return error?.code === 'ECONNABORTED'
+    || error?.code === 'ETIMEDOUT'
+    || error?.code === 'ERR_CANCELED'
+    || error?.name === 'AbortError'
+    || error?.name === 'CanceledError';
+}
+
+function isCoqlScopeError(error) {
+  return error?.response?.status === 401
+    && /invalid oauth scope|scope/i.test(error?.response?.data?.message || error?.message || '');
+}
+
 function getRetrievalCache(options = {}) {
   return options.retrievalCache instanceof Map ? options.retrievalCache : null;
 }
@@ -375,7 +398,7 @@ async function executeCountRequest(moduleKey, moduleDefinition, options = {}) {
 
   const response = await zohoClient.get(
     `/crm/v8/${moduleDefinition.endpoint}/actions/count`,
-    { params }
+    buildZohoRequestConfig(options, { params }),
   );
 
   const count = Number(response.data?.count ?? 0);
@@ -411,10 +434,10 @@ function logGeneratedQuery(queryPlan) {
   });
 }
 
-async function executeCoqlCount(moduleKey, moduleDefinition, queryPlan) {
+async function executeCoqlCount(moduleKey, moduleDefinition, queryPlan, options = {}) {
   const query = `select count(id) as result_value from ${moduleDefinition.endpoint}${queryPlan.whereClause ? ` where ${queryPlan.whereClause}` : ''}`;
   logger.info('Retrieval Engine', { mode: 'coql', module: moduleKey, query });
-  const response = await zohoClient.post('/crm/v8/coql', { select_query: query });
+  const response = await zohoClient.post('/crm/v8/coql', { select_query: query }, buildZohoRequestConfig(options));
   const row = response.data?.data?.[0] || {};
   const count = Number(row.result_value ?? row.count ?? 0);
   return {
@@ -456,7 +479,7 @@ async function executeCoqlAggregate(moduleKey, moduleDefinition, queryPlan, opti
   const expressions = metrics.map((metric) => `${metricFunctions[metric]}(${field}) as ${metric}_value`);
   const query = `select count(id) as record_count${expressions.length ? `, ${expressions.join(', ')}` : ''} from ${moduleDefinition.endpoint}${queryPlan.whereClause ? ` where ${queryPlan.whereClause}` : ''}`;
   logGeneratedQuery({ ...queryPlan, query, mode: 'coql_aggregate' });
-  const response = await zohoClient.post('/crm/v8/coql', { select_query: query });
+  const response = await zohoClient.post('/crm/v8/coql', { select_query: query }, buildZohoRequestConfig(options));
   const row = response.data?.data?.[0] || {};
   const recordCount = Number(row.record_count ?? row.count ?? 0);
   const aggregateValues = Object.fromEntries(metrics.map((metric) => {
@@ -498,7 +521,7 @@ async function executeCoqlRecords(moduleKey, queryPlan, options = {}) {
     let query = queryPlan.query;
     if (batchSize > 0) query += ` limit ${batchSize}${offset > 0 ? ` offset ${offset}` : ''}`;
     logGeneratedQuery({ ...queryPlan, query });
-    const response = await zohoClient.post('/crm/v8/coql', { select_query: query });
+    const response = await zohoClient.post('/crm/v8/coql', { select_query: query }, buildZohoRequestConfig(options));
     const pageData = Array.isArray(response.data?.data) ? response.data.data : [];
     lastInfo = response.data?.info || {};
     pagesFetched += 1;
@@ -537,13 +560,133 @@ async function executeCoqlRecords(moduleKey, queryPlan, options = {}) {
   };
 }
 
+async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, retrievalPlan = {}) {
+  const { params, fields } = buildQueryParams(moduleKey, options);
+  const shouldFetchAll = retrievalPlan.fetchAll || normalizeRetrievalMode(options.retrieval_mode ?? options.retrievalMode) === 'all';
+
+  if (shouldFetchAll) {
+    let result;
+    let pagesFetched = 0;
+    let lastError;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        result = await fetchAllPages({
+          moduleKey,
+          baseParams: params,
+          fetchPage: async (pageParams) => {
+            const response = await zohoClient.get(
+              `/crm/v8/${moduleDefinition.endpoint}`,
+              buildZohoRequestConfig(options, { params: pageParams }),
+            );
+            return response.data;
+          },
+          onPageFetched: () => { pagesFetched += 1; },
+        });
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (isTimeoutOrCancellation(error)) throw error;
+        if (attempt < 2) logger.warn('Retrieval Engine', {
+          module: moduleKey,
+          reason: error.code || 'request_error',
+          message: 'Retrying complete Search retrieval',
+        });
+      }
+    }
+    if (lastError) throw lastError;
+    return addRetrievalMetadata(
+      result,
+      options,
+      result?.info?.pagesFetched || pagesFetched,
+      result?.info?.retrievalComplete !== false,
+      result?.info?.duplicateRecordsRemoved || 0,
+    );
+  }
+
+  const response = await zohoClient.get(
+    `/crm/v8/${moduleDefinition.endpoint}`,
+    buildZohoRequestConfig(options, { params }),
+  );
+  return addRetrievalMetadata(
+    response.data,
+    options,
+    1,
+    response.data?.info?.more_records !== true,
+  );
+}
+
+function numericAggregateValues(records, field, metrics) {
+  const values = records
+    .map((record) => Number(record?.[field]))
+    .filter((value) => Number.isFinite(value));
+  const aggregateValues = {};
+  metrics.forEach((metric) => {
+    if (metric === 'sum') aggregateValues.sum = values.reduce((total, value) => total + value, 0);
+    if (metric === 'average') aggregateValues.average = values.length ? values.reduce((total, value) => total + value, 0) / values.length : 0;
+    if (metric === 'minimum') aggregateValues.minimum = values.length ? Math.min(...values) : 0;
+    if (metric === 'maximum') aggregateValues.maximum = values.length ? Math.max(...values) : 0;
+  });
+  return aggregateValues;
+}
+
+async function executeSearchAggregate(moduleKey, moduleDefinition, options = {}) {
+  const field = getAggregateField(moduleDefinition, options.aggregate_field);
+  if (!field) throw new Error(`No aggregate field is available for CRM module ${moduleKey}`);
+  const metrics = normalizeAggregateMetrics(options);
+  const searchOptions = {
+    ...options,
+    fields: [field, 'id'],
+    force_coql: false,
+    force_search: true,
+    retrieval_mode: 'all',
+  };
+  const searchPlan = getRetrievalPlan(moduleDefinition, searchOptions);
+  const result = await executeSearchRecords(moduleKey, moduleDefinition, searchOptions, {
+    ...searchPlan,
+    fetchAll: true,
+  });
+  const aggregateValues = numericAggregateValues(result.data || [], field, metrics);
+  return {
+    data: [],
+    info: {
+      count: result.data?.length || 0,
+      more_records: false,
+      retrievalComplete: true,
+      page: 1,
+      per_page: 1,
+      retrievalStrategy: RETRIEVAL_STRATEGIES.AGGREGATE,
+      aggregateField: field,
+      aggregateValues,
+      aggregateValue: aggregateValues.sum ?? aggregateValues.average ?? 0,
+      fallback: 'crm_search_aggregate',
+    },
+  };
+}
+
 async function getCount(moduleKey, options = {}) {
   const normalizedKey = normalizeModuleKey(moduleKey);
   const moduleDefinition = getModuleDefinition(normalizedKey);
 
   const queryPlan = buildQueryPlan(normalizedKey, options);
   if (queryPlan.mode === 'coql') {
-    return executeCoqlCount(normalizedKey, moduleDefinition, queryPlan);
+    try {
+      return await executeCoqlCount(normalizedKey, moduleDefinition, queryPlan, options);
+    } catch (error) {
+      if (!isCoqlScopeError(error)) throw error;
+
+      logger.warn('Retrieval Engine', {
+        module: normalizedKey,
+        reason: 'coql_scope_unavailable',
+        message: 'Falling back to exact CRM Search count',
+      });
+      return executeCountRequest(normalizedKey, moduleDefinition, {
+        ...options,
+        force_coql: false,
+        force_search: true,
+        retrieval_mode: 'count',
+      });
+    }
   }
 
   return executeCountRequest(normalizedKey, moduleDefinition, {
@@ -648,7 +791,24 @@ async function getRecords(moduleKey, options = {}) {
   if (retrievalPlan.strategy === RETRIEVAL_STRATEGIES.COUNT) {
     try {
       if (queryPlan.mode === 'coql') {
-        const result = await executeCoqlCount(normalizedKey, moduleDefinition, queryPlan);
+        let result;
+        try {
+          result = await executeCoqlCount(normalizedKey, moduleDefinition, queryPlan, effectiveOptions);
+        } catch (error) {
+          if (!isCoqlScopeError(error)) throw error;
+
+          logger.warn('Retrieval Engine', {
+            module: normalizedKey,
+            reason: 'coql_scope_unavailable',
+            message: 'Falling back to exact CRM Search count',
+          });
+          result = await executeCountRequest(normalizedKey, moduleDefinition, {
+            ...effectiveOptions,
+            force_coql: false,
+            force_search: true,
+            retrieval_mode: 'count',
+          });
+        }
         logRetrievalTelemetry({
           moduleKey: normalizedKey,
           criteria: effectiveOptions.criteria,
@@ -660,7 +820,7 @@ async function getRecords(moduleKey, options = {}) {
         });
         return cacheResult(result);
       }
-      const result = await executeCountRequest(normalizedKey, moduleDefinition, options);
+      const result = await executeCountRequest(normalizedKey, moduleDefinition, effectiveOptions);
       logRetrievalTelemetry({
         moduleKey: normalizedKey,
         criteria: effectiveOptions.criteria,
@@ -697,6 +857,24 @@ async function getRecords(moduleKey, options = {}) {
       });
       return cacheResult(result);
     } catch (error) {
+      if (isCoqlScopeError(error)) {
+        logger.warn('Retrieval Engine', {
+          module: normalizedKey,
+          reason: 'coql_scope_unavailable',
+          message: 'Falling back to exact CRM Search aggregation',
+        });
+        const result = await executeSearchAggregate(normalizedKey, moduleDefinition, effectiveOptions);
+        logRetrievalTelemetry({
+          moduleKey: normalizedKey,
+          criteria: effectiveOptions.criteria,
+          fields: queryPlan.fields,
+          calls: result.info.pagesFetched || 1,
+          recordsPerCall: result.info.recordsPerCall,
+          totalMatchingRecords: result.info.count,
+          startedAt: retrievalStartedAt,
+        });
+        return cacheResult(result);
+      }
       logRequestError(error, normalizedKey, moduleDefinition, { select_query: error?.config?.data || queryPlan.query }, queryPlan.fields);
       throw error;
     }
@@ -721,6 +899,29 @@ async function getRecords(moduleKey, options = {}) {
         coqlResult.info?.retrievalComplete !== false,
       ));
     } catch (error) {
+      if (isCoqlScopeError(error)) {
+        logger.warn('Retrieval Engine', {
+          module: normalizedKey,
+          reason: 'coql_scope_unavailable',
+          message: 'Falling back to CRM Search with the same server criteria',
+        });
+        const fallbackOptions = {
+          ...effectiveOptions,
+          force_coql: false,
+          force_search: true,
+        };
+        const searchResult = await executeSearchRecords(normalizedKey, moduleDefinition, fallbackOptions, retrievalPlan);
+        logRetrievalTelemetry({
+          moduleKey: normalizedKey,
+          criteria: effectiveOptions.criteria,
+          fields: queryPlan.fields,
+          calls: searchResult.info.pagesFetched || 1,
+          recordsPerCall: searchResult.info.recordsPerCall,
+          totalMatchingRecords: searchResult.data.length,
+          startedAt: retrievalStartedAt,
+        });
+        return cacheResult(searchResult);
+      }
       logRequestError(error, normalizedKey, moduleDefinition, { select_query: queryPlan.query }, queryPlan.fields);
       throw error;
     }
@@ -742,7 +943,7 @@ async function getRecords(moduleKey, options = {}) {
           dataKey: 'users',
           baseParams: params,
           fetchPage: async (pageParams) => {
-            const response = await zohoClient.get('/crm/v8/users', { params: pageParams });
+            const response = await zohoClient.get('/crm/v8/users', buildZohoRequestConfig(effectiveOptions, { params: pageParams }));
             return response.data;
           },
           onPageFetched: () => { pagesFetched += 1; },
@@ -759,13 +960,13 @@ async function getRecords(moduleKey, options = {}) {
         }, effectiveOptions, responseData.info?.pagesFetched || 1, responseData.info?.retrievalComplete !== false));
       }
 
-      const response = await zohoClient.get('/crm/v8/users', {
+      const response = await zohoClient.get('/crm/v8/users', buildZohoRequestConfig(effectiveOptions, {
         params: {
           ...params,
           page: Number(page || 1),
           per_page: Number(per_page || DEFAULT_PER_PAGE),
         },
-      });
+      }));
 
       logRetrievalComplete(normalizedKey, 1, response.data.users?.length || 0, {
         source: 'users_api',
@@ -804,7 +1005,7 @@ async function getRecords(moduleKey, options = {}) {
             fetchPage: async (pageParams) => {
               const response = await zohoClient.get(
                 `/crm/v8/${moduleDefinition.endpoint}`,
-                { params: pageParams }
+                buildZohoRequestConfig(effectiveOptions, { params: pageParams }),
               );
               return response.data;
             },
@@ -817,11 +1018,12 @@ async function getRecords(moduleKey, options = {}) {
           break;
         } catch (error) {
           lastError = error;
-          if (attempt < 2) logger.warn('Retrieval Engine', {
+          if (attempt < 2 && !isTimeoutOrCancellation(error)) logger.warn('Retrieval Engine', {
             module: normalizedKey,
             reason: error.code || 'request_error',
             message: 'Retrying complete dataset retrieval',
           });
+          if (isTimeoutOrCancellation(error)) throw error;
         }
       }
       if (lastError) throw lastError;
@@ -861,7 +1063,10 @@ async function getRecords(moduleKey, options = {}) {
     let response;
     try {
       logGeneratedQuery({ ...queryPlan, query: `/crm/v8/${moduleDefinition.endpoint}` });
-      response = await zohoClient.get(`/crm/v8/${moduleDefinition.endpoint}`, { params });
+      response = await zohoClient.get(
+        `/crm/v8/${moduleDefinition.endpoint}`,
+        buildZohoRequestConfig(effectiveOptions, { params }),
+      );
     } catch (error) {
       if (!isInvalidQueryError(error) || queryPlan.mode !== 'search') throw error;
       const fallbackPlan = buildQueryPlan(normalizedKey, { ...effectiveOptions, force_coql: true });

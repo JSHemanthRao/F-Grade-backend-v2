@@ -117,7 +117,15 @@ async function handleAssistantRequest(payload = {}) {
 
   let datasets;
   try {
-    datasets = await executePlan({ plan, question, moduleCandidates, context, conversionDiscovery, filterPlans: filterPlans.byModule });
+    datasets = await executePlan({
+      plan,
+      question,
+      moduleCandidates,
+      context,
+      conversionDiscovery,
+      filterPlans: filterPlans.byModule,
+      signal: payload.signal,
+    });
     datasets = datasets.map((dataset) => {
       const filterPlan = filterPlans.byModule[dataset.module];
       // Period-specific retrieval already applies its date window on the

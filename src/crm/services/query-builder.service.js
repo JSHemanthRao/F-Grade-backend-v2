@@ -12,6 +12,7 @@ function getRequestText(options = {}) {
 }
 
 function shouldUseCoql(options = {}) {
+  if (options.force_search) return false;
   const requestText = getRequestText(options);
   const criteria = normalizeText(options.criteria || options.filter || options.filters);
   const completeRetrieval = String(options.retrieval_mode || options.retrievalMode || '').toLowerCase() === 'all';

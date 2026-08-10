@@ -44,7 +44,9 @@ module.exports = {
   PORT: toNumber(process.env.PORT, 3000),
   ZOHO_ACCOUNTS_URL: process.env.ZOHO_ACCOUNTS_URL || 'https://accounts.zoho.in',
   ZOHO_API_DOMAIN,
-  ZOHO_API_TIMEOUT_MS: toNumber(process.env.ZOHO_API_TIMEOUT_MS, 30000),
+  // Keep individual CRM calls comfortably below the Copilot connector
+  // deadline. Deployments can still override this explicitly.
+  ZOHO_API_TIMEOUT_MS: toNumber(process.env.ZOHO_API_TIMEOUT_MS, 15000),
   ZOHO_CLIENT_ID,
   ZOHO_CLIENT_SECRET,
   ZOHO_REFRESH_TOKEN,

@@ -339,6 +339,7 @@ function formatResponse(plan, datasets, calculations, options = {}) {
   const summaryWithAvailability = crmReturnedDate(datasets)
     ? `${summary} Data available through ${crmReturnedDate(datasets)}.`
     : summary;
+  const remainingRecords = Math.max(0, displayTotal - (displayStart + displayRecords.length));
   const observations = factualObservations(options.insights);
   const followUps = dataBackedFollowUps(records, coverage);
   const response = {
@@ -360,6 +361,11 @@ function formatResponse(plan, datasets, calculations, options = {}) {
     suggestedNextAnalysis: followUps,
     data: displayRecords.map(formatDisplayedRecord),
     tables: buildTables(displayRecords.map(formatDisplayedRecord)),
+    continuation: {
+      available: remainingRecords > 0,
+      remainingRecords,
+      action: remainingRecords > 0 ? 'show more' : null,
+    },
     calculations,
     insights: observations,
     followUpQuestions: followUps,

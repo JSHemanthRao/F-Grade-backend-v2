@@ -14,7 +14,7 @@ function getPeriods(step, question, contextDatasets) {
     : [null];
 }
 
-async function executePlan({ plan, question, moduleCandidates, context = {}, conversionDiscovery = null, filterPlans = {} }) {
+async function executePlan({ plan, question, moduleCandidates, context = {}, conversionDiscovery = null, filterPlans = {}, signal }) {
   const datasets = [];
   const requestCache = new Map();
   const contextDatasets = Array.isArray(context.datasets) ? context.datasets : [];
@@ -67,6 +67,7 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
           canonicalFilters: filterPlan.canonicalFilters,
           requestedFilters: filterPlan.requestedFilters,
           ...(step.requiredFieldsByModule?.[moduleKey]?.length ? { fields: step.requiredFieldsByModule[moduleKey] } : {}),
+          ...(signal ? { signal } : {}),
           ...(retrievalMode === 'page' ? { page: requestedPage, per_page: requestedLimit, offset: Number(plan.pagination?.offset || 0) } : {}),
           ...(aggregateMetrics ? {
             aggregate_metrics: aggregateMetrics,

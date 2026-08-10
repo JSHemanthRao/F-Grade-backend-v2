@@ -10,6 +10,28 @@ function formatExecutionTime(startTime) {
   return `${Number(elapsedNanoSeconds / 1000000n).toFixed(2)}ms`;
 }
 
+function createRequestAbortSignal(req, res) {
+  const controller = new AbortController();
+  const supportsAbortEvents = typeof req.on === 'function' || typeof res.on === 'function';
+  const abort = () => controller.abort();
+  const onResponseClose = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+
+  if (supportsAbortEvents) {
+    req.on?.('aborted', abort);
+    res.on?.('close', onResponseClose);
+  }
+
+  return {
+    signal: supportsAbortEvents ? controller.signal : undefined,
+    cleanup: () => {
+      req.off?.('aborted', abort);
+      res.off?.('close', onResponseClose);
+    },
+  };
+}
+
 function sendQueryResponse(req, res, moduleDefinition, result, executionTime) {
   const data = Array.isArray(result?.data)
     ? result.data
@@ -90,13 +112,22 @@ async function getModuleQuery(req, res, next) {
     const moduleDefinition = getModuleDefinition(moduleKey);
     const startTime = process.hrtime.bigint();
     const options = buildCommonOptions(req);
+    const requestContext = createRequestAbortSignal(req, res);
 
     logger.info('Retrieval Engine', {
       module: moduleDefinition.label,
       operation: 'query',
     });
 
-    const result = await recordsService.getRecords(moduleKey, options);
+    let result;
+    try {
+      result = await recordsService.getRecords(moduleKey, {
+        ...options,
+        ...(requestContext.signal ? { signal: requestContext.signal } : {}),
+      });
+    } finally {
+      requestContext.cleanup();
+    }
 
     sendQueryResponse(req, res, moduleDefinition, result, formatExecutionTime(startTime));
   } catch (error) {
@@ -110,6 +141,7 @@ async function getModuleCount(req, res, next) {
     const moduleDefinition = getModuleDefinition(moduleKey);
     const startTime = process.hrtime.bigint();
     const requestSource = req.method === 'POST' ? req.body : req.query;
+    const requestContext = createRequestAbortSignal(req, res);
     const options = {
       filter: requestSource?.filter ?? requestSource?.filters,
       filters: requestSource?.filter ?? requestSource?.filters,
@@ -128,7 +160,15 @@ async function getModuleCount(req, res, next) {
       operation: 'count',
     });
 
-    const result = await recordsService.getCount(moduleKey, options);
+    let result;
+    try {
+      result = await recordsService.getCount(moduleKey, {
+        ...options,
+        ...(requestContext.signal ? { signal: requestContext.signal } : {}),
+      });
+    } finally {
+      requestContext.cleanup();
+    }
 
     sendCountResponse(req, res, moduleDefinition, result, formatExecutionTime(startTime));
   } catch (error) {
@@ -145,6 +185,8 @@ async function handleAssistantRequest(req, res, next) {
     if (!question) {
       return res.status(400).json({ success: false, message: 'A question is required.' });
     }
+
+    const requestContext = createRequestAbortSignal(req, res);
 
     if (DEBUG_ASSISTANT) {
       logger.info('Assistant Controller', {
@@ -163,7 +205,15 @@ async function handleAssistantRequest(req, res, next) {
       });
     }
 
-    const engineResponse = await assistantEngine.handleAssistantRequest({ question });
+    let engineResponse;
+    try {
+      engineResponse = await assistantEngine.handleAssistantRequest({
+        question,
+        ...(requestContext.signal ? { signal: requestContext.signal } : {}),
+      });
+    } finally {
+      requestContext.cleanup();
+    }
 
     return res.json({
       ...engineResponse,

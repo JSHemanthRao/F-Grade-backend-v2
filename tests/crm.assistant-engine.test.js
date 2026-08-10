@@ -397,8 +397,11 @@ test('assistant displays at most 25 complete matches and reuses them for show mo
     assert.equal(calls, 1);
     assert.equal(first.data.length, 25);
     assert.match(first.summary, /Showing 25 of 47 matching records/);
+    assert.equal(first.continuation.available, true);
+    assert.equal(first.continuation.remainingRecords, 22);
     assert.equal(second.data.length, 22);
     assert.equal(second.data[0].id, 'deal-26');
+    assert.equal(second.continuation.available, false);
   } finally {
     recordsService.getRecords = originalGetRecords;
   }

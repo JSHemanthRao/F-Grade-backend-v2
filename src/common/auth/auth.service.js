@@ -7,6 +7,8 @@ const {
 } = require('../config/env');
 const tokenService = require('./token.service');
 
+let refreshPromise = null;
+
 function assertOAuthConfig() {
   const missing = [];
 
@@ -19,7 +21,7 @@ function assertOAuthConfig() {
   }
 }
 
-async function refreshAccessToken() {
+async function refreshAccessToken(options = {}) {
   assertOAuthConfig();
 
   const tokenUrl = new URL('/oauth/v2/token', ZOHO_ACCOUNTS_URL).toString();
@@ -34,6 +36,8 @@ async function refreshAccessToken() {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
+    timeout: 10000,
+    signal: options.signal,
   });
 
   if (!response.data?.access_token) {
@@ -54,7 +58,13 @@ async function getAccessToken(options = {}) {
     }
   }
 
-  return refreshAccessToken();
+  if (!refreshPromise) {
+    refreshPromise = refreshAccessToken(options).finally(() => {
+      refreshPromise = null;
+    });
+  }
+
+  return refreshPromise;
 }
 
 async function getAuthorizationHeader(options = {}) {
