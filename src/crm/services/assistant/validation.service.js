@@ -1,4 +1,5 @@
 const BANNED_LANGUAGE = /\b(approx\.?|approximately|around|roughly|healthy pipeline|strong performance|excellent growth|good momentum|robust pipeline)\b/i;
+const { numericValue } = require('./currency.service');
 const SUPPORTED_METRICS_BY_STEP = {
   count: ['count', 'counts'],
   aggregate: ['sum', 'average', 'minimum', 'maximum', 'total_revenue'],
@@ -20,11 +21,6 @@ function getRecords(dataset) {
 
 function flattenRecords(datasets) {
   return datasets.flatMap(getRecords);
-}
-
-function numericValue(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
 }
 
 function groupCount(records, keyFn) {

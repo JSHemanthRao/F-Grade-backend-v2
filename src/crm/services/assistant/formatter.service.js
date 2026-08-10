@@ -5,29 +5,22 @@ const {
   logFallbackReason,
 } = require('./fallback-engine.service');
 const logger = require('../../../common/logging/logger');
+const {
+  numericValue,
+  formatNumber,
+  formatCurrency,
+  isMonetaryField,
+} = require('./currency.service');
 
 const DATE_FIELDS = ['Closing_Date', 'Created_Time', 'CreatedDate', 'created_time', 'Created_Date', 'Modified_Time'];
 const AVAILABILITY_FIELDS = [
   'data_available_through', 'dataAvailableThrough', 'available_through', 'availableThrough',
   'through_date', 'throughDate', 'cutoff_date', 'cutoffDate', 'as_of_date', 'asOfDate',
 ];
-const CURRENCY_FIELDS = /amount|value|revenue|total|price|pipeline/i;
-
-function numericValue(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function formatNumber(value) {
-  const number = numericValue(value);
-  if (number === null) return String(value ?? '');
-  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 6 }).format(number);
-}
-
-function formatCurrency(value) {
-  const number = numericValue(value);
-  return number === null ? String(value ?? '') : `₹${formatNumber(number)}`;
-}
+const CURRENCY_METRIC_TYPES = new Set([
+  'sum', 'total_revenue', 'pipeline', 'pipeline_value', 'closed_won_value', 'closed_lost_value',
+  'average', 'maximum', 'minimum',
+]);
 
 function formatPercentage(value) {
   const number = numericValue(value);
@@ -36,12 +29,19 @@ function formatPercentage(value) {
 
 function formatMetricValue(type, value) {
   if (type === 'conversion_rate') return formatPercentage(value);
-  if (['sum', 'pipeline', 'average', 'maximum', 'minimum'].includes(type)) return formatCurrency(value);
+  if (CURRENCY_METRIC_TYPES.has(type)) return formatCurrency(value);
   if (type === 'counts' && value && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, formatNumber(item)]));
   }
-  if (type === 'monthly_performance' && value?.monthlyTotals) {
-    return { ...value, monthlyTotals: Object.fromEntries(Object.entries(value.monthlyTotals).map(([key, item]) => [key, formatCurrency(item)])) };
+  if (['monthly_performance', 'month_wise_metrics'].includes(type) && value) {
+    const totalsKey = value.monthlyTotals ? 'monthlyTotals' : null;
+    return totalsKey
+      ? { ...value, [totalsKey]: Object.fromEntries(Object.entries(value[totalsKey]).map(([key, item]) => [key, formatCurrency(item)])) }
+      : value;
+  }
+  if (['quarter_wise_metrics', 'year_wise_metrics'].includes(type) && value) {
+    const totalsKey = type === 'quarter_wise_metrics' ? 'quarterlyTotals' : 'yearlyTotals';
+    return { ...value, [totalsKey]: Object.fromEntries(Object.entries(value[totalsKey] || {}).map(([key, item]) => [key, formatCurrency(item)])) };
   }
   if (type === 'comparison' && value && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === 'difference' || key.includes('month') ? formatCurrency(item) : item]));
@@ -54,6 +54,18 @@ function formatMetricValue(type, value) {
       return [module, Object.fromEntries(Object.entries(metrics).map(([key, item]) => [key, formatCurrency(item)]))];
     }));
   }
+  if (['month_over_month_growth', 'quarter_over_quarter_growth', 'year_over_year_growth'].includes(type)
+    && value && typeof value === 'object') {
+    return {
+      ...value,
+      currentValue: formatCurrency(value.currentValue),
+      previousValue: formatCurrency(value.previousValue),
+      growth: formatPercentage(value.growth),
+    };
+  }
+  if (['customer_ranking', 'product_ranking'].includes(type) && Array.isArray(value)) {
+    return value.map((item) => ({ ...item, totalAmount: formatCurrency(item.totalAmount) }));
+  }
   if (['stage_distribution', 'conversion_by_owner'].includes(type) && value && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, formatNumber(item)]));
   }
@@ -62,6 +74,14 @@ function formatMetricValue(type, value) {
   }
   if (typeof value === 'number') return formatNumber(value);
   return value;
+}
+
+function formatDisplayedRecord(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
+  return Object.fromEntries(Object.entries(record).map(([field, value]) => {
+    if (isMonetaryField(field) && numericValue(value) !== null) return [field, formatCurrency(value)];
+    return [field, value];
+  }));
 }
 
 function presentMetrics(calculations) {
@@ -171,18 +191,20 @@ function buildCoverage(plan, datasets, records) {
 
 function hasAmount(record) {
   const value = record?.Amount ?? record?.amount ?? record?.value ?? record?.Grand_Total;
-  return value !== undefined && value !== null && value !== '' && Number.isFinite(Number(value));
+  return numericValue(value) !== null;
 }
 
 function metricSummary(calculations, dataLength) {
   const conversionRate = calculations.find((item) => item.type === 'conversion_rate');
   const conversionCount = calculations.find((item) => item.type === 'conversion_count');
-  const pipeline = calculations.find((item) => item.type === 'pipeline');
+  const pipeline = calculations.find((item) => ['pipeline', 'pipeline_value'].includes(item.type));
   const stageDistribution = calculations.find((item) => item.type === 'stage_distribution');
-  const monthly = calculations.find((item) => item.type === 'monthly_performance');
+  const monthly = calculations.find((item) => ['monthly_performance', 'month_wise_metrics'].includes(item.type));
   const comparison = calculations.find((item) => item.type === 'comparison');
   const multi = calculations.find((item) => item.type === 'multi_module_comparison');
   const sum = calculations.find((item) => item.type === 'sum');
+  const totalRevenue = calculations.find((item) => item.type === 'total_revenue');
+  const closedWon = calculations.find((item) => item.type === 'closed_won_value');
   const average = calculations.find((item) => item.type === 'average');
   const count = calculations.find((item) => item.type === 'count');
   const counts = calculations.find((item) => item.type === 'counts');
@@ -203,6 +225,8 @@ function metricSummary(calculations, dataLength) {
   if (comparison) return `comparison: this month ${formatCurrency(comparison.value['this month'])}; last month ${formatCurrency(comparison.value['last month'])}; difference ${formatCurrency(comparison.value.difference)}.`;
   if (average) return `Average deal value: ${formatCurrency(average.value)}.`;
   if (sum) return `Total value: ${formatCurrency(sum.value)}.`;
+  if (totalRevenue) return `Total revenue: ${formatCurrency(totalRevenue.value)}.`;
+  if (closedWon) return `Closed Won value: ${formatCurrency(closedWon.value)}.`;
   if (counts) return `Record counts: ${Object.entries(counts.value).map(([module, value]) => `${module} ${formatNumber(value)}`).join(', ')}.`;
   if (count) return `${formatNumber(count.value)} matching ${Number(count.value) === 1 ? 'record' : 'records'}.`;
   return `${formatNumber(dataLength)} ${dataLength === 1 ? 'record' : 'records'}.`;
@@ -231,7 +255,7 @@ function buildTables(records) {
     .slice(0, 12);
   const displayValue = (column, value) => {
     if (value === undefined || value === null || value === '') return '';
-    if (CURRENCY_FIELDS.test(column) && numericValue(value) !== null) return formatCurrency(value);
+    if (isMonetaryField(column) && numericValue(value) !== null) return formatCurrency(value);
     if (typeof value === 'number') return formatNumber(value);
     if (typeof value === 'object') return value.name || value.Name || value.full_name || JSON.stringify(value);
     return String(value).replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
@@ -329,8 +353,8 @@ function formatResponse(plan, datasets, calculations, options = {}) {
     limitations,
     keyMetrics: presentMetrics(calculations),
     suggestedNextAnalysis: followUps,
-    data: displayRecords,
-    tables: buildTables(displayRecords),
+    data: displayRecords.map(formatDisplayedRecord),
+    tables: buildTables(displayRecords.map(formatDisplayedRecord)),
     calculations,
     insights: observations,
     followUpQuestions: followUps,

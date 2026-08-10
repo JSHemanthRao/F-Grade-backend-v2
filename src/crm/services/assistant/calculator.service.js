@@ -1,5 +1,6 @@
 const { DEBUG_ASSISTANT } = require('../../../common/config/env');
 const logger = require('../../../common/logging/logger');
+const { numericValue } = require('./currency.service');
 
 const AMOUNT_FIELDS = ['Amount', 'amount', 'value', 'Grand_Total', 'Revenue', 'Total_Revenue', 'Deal_Value', 'Deal_Amount'];
 const STAGE_FIELDS = ['Stage', 'Status', 'Deal_Stage', 'Stage_Name'];
@@ -10,11 +11,6 @@ const LEAD_SOURCE_FIELDS = ['Lead_Source', 'LeadSource', 'lead_source'];
 const DATE_FIELDS = ['Closing_Date', 'Created_Time', 'CreatedDate', 'created_time', 'Created_Date', 'Modified_Time', 'CloseDate', 'Close_Date', 'Close_DateTime', 'Date', 'CreatedAt', 'UpdatedAt'];
 const CONVERSION_FIELDS = ['Converted', 'Converted__s', 'Converted_Deal', 'Converted_Date', 'Converted_Time', 'Converted_Date_Time', 'Conversion_Date'];
 const GROWTH_UNAVAILABLE_MESSAGE = 'Growth cannot be calculated because one or more comparison periods are unavailable.';
-
-function numericValue(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
 
 function getFirstExistingField(record, fields) {
   if (!record || typeof record !== 'object') return null;
