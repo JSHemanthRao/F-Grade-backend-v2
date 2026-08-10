@@ -13,6 +13,16 @@ function getRequestText(options = {}) {
 
 function shouldUseCoql(options = {}) {
   if (options.force_search) return false;
+  if (options.queryPlan || options.intentPlan) {
+    const structured = options.queryPlan || options.intentPlan;
+    const mode = String(options.retrieval_mode || options.retrievalMode || '').toLowerCase();
+    return Boolean(
+      options.force_coql
+      || ['SUM', 'AVG', 'MIN', 'MAX', 'COUNT'].includes(String(structured.operation || '').toUpperCase()) && mode !== 'page'
+      || structured.startDate && structured.endDate && mode !== 'page'
+      || structured.criteria && mode === 'all',
+    );
+  }
   const requestText = getRequestText(options);
   const criteria = normalizeText(options.criteria || options.filter || options.filters);
   const completeRetrieval = String(options.retrieval_mode || options.retrievalMode || '').toLowerCase() === 'all';
@@ -157,6 +167,40 @@ function buildWhereClause(moduleKey, requestText, criteria, options = {}) {
   return clauses.length ? clauses.map((clause) => `(${clause})`).join(' and ') : null;
 }
 
+function criteriaFromStructuredFilters(filters = []) {
+  const clauses = [];
+  filters.forEach((filter) => {
+    if (!filter || filter.field === '*') return;
+    const field = filter.field || filter.logicalField;
+    if (!field) return;
+    if (filter.operator === 'between' && Array.isArray(filter.value)) {
+      clauses.push(`(${field}:greater_equal:${filter.value[0]})`, `(${field}:less_than:${filter.value[1]})`);
+      return;
+    }
+    if (filter.operator === 'in' && Array.isArray(filter.value)) {
+      clauses.push(`(${filter.value.map((value) => `${field}:equals:${value}`).join('or')})`);
+      return;
+    }
+    if (filter.value !== undefined && filter.value !== null && filter.value !== '') {
+      clauses.push(`(${field}:${filter.operator || 'equals'}:${filter.value})`);
+    }
+  });
+  return clauses.join('and') || null;
+}
+
+function buildStructuredWhereClause(structuredPlan = {}, criteria) {
+  const structuredCriteria = criteria || structuredPlan.criteria || criteriaFromStructuredFilters(structuredPlan.filters);
+  let whereClause = structuredCriteria ? buildWhereClause('', '', structuredCriteria, {}) : null;
+  const dateField = structuredPlan.dateField;
+  const startDate = structuredPlan.startDate;
+  const endDate = structuredPlan.endDate;
+  if (dateField && startDate && endDate && !new RegExp(`\\b${dateField}\\b`, 'i').test(whereClause || '')) {
+    const dateClauses = `${dateField} >= '${startDate}' and ${dateField} < '${endDate}'`;
+    whereClause = whereClause ? `${whereClause} and ${dateClauses}` : dateClauses;
+  }
+  return whereClause;
+}
+
 function buildQueryPlan(moduleKey, options = {}) {
   const moduleDefinition = getModuleDefinition(moduleKey);
   if (!moduleDefinition) throw new Error(`Unsupported CRM module: ${moduleKey}`);
@@ -165,15 +209,28 @@ function buildQueryPlan(moduleKey, options = {}) {
   const conversionFields = options.conversion_fields || (/conver|qualified|became\s+a\s+deal/i.test(requestText)
     ? ['Converted_Date_Time', 'Converted__s', 'Converted_Deal']
     : []);
+  const structuredPlan = options.queryPlan || options.intentPlan || null;
   const requestedFields = Array.isArray(options.fields)
     ? options.fields
-    : String(options.fields || '').split(',').map((field) => field.trim()).filter(Boolean);
+    : Array.isArray(structuredPlan?.fields)
+      ? structuredPlan.fields
+      : String(options.fields || '').split(',').map((field) => field.trim()).filter(Boolean);
   const baseFields = requestedFields.length > 0 ? requestedFields : (moduleDefinition.defaultFields || []);
   const fields = Array.from(new Set([...baseFields, ...conversionFields, 'id']));
-  const whereClause = buildWhereClause(moduleKey, requestText, options.criteria || options.filter || options.filters, options);
+  const whereClause = structuredPlan
+    ? buildStructuredWhereClause(structuredPlan, options.criteria || options.filter || options.filters)
+    : buildWhereClause(moduleKey, requestText, options.criteria || options.filter || options.filters, options);
   const selectExpression = fields.join(', ');
   const query = `select ${selectExpression} from ${moduleDefinition.endpoint}${whereClause ? ` where ${whereClause}` : ''}`;
-  return { mode: useCoql ? 'coql' : 'search', moduleKey, endpoint: moduleDefinition.endpoint, fields, whereClause, query };
+  return {
+    mode: useCoql ? 'coql' : 'search',
+    moduleKey,
+    endpoint: moduleDefinition.endpoint,
+    fields,
+    whereClause,
+    query,
+    structured: Boolean(structuredPlan),
+  };
 }
 
 function isInvalidQueryError(error) {

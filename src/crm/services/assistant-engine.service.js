@@ -11,6 +11,7 @@ const { formatResponse } = require('./assistant/formatter.service');
 const { discoverLeadConversionFields } = require('../services/conversion-discovery.service');
 const { FALLBACK_REASONS, logFallbackReason } = require('./assistant/fallback-engine.service');
 const { applyFilterToDataset, buildFilterPlans } = require('./filtering-engine.service');
+const { validateIntentQueryPlans } = require('./assistant/query-plan-validator.service');
 const {
   DISPLAY_LIMIT,
   createDisplayState,
@@ -90,6 +91,15 @@ async function handleAssistantRequest(payload = {}) {
   const plan = optimizeExecutionPlan(buildExecutionPlan(question, context));
   const moduleCandidates = plan.modules;
   if (!moduleCandidates.length) return { success: false, message: 'I could not identify the CRM information needed to answer that question.' };
+  const queryPlanValidation = validateIntentQueryPlans(plan.queryPlansByModule);
+  if (!queryPlanValidation.valid) {
+    return {
+      success: false,
+      message: 'The CRM request could not be converted into a valid query plan.',
+      error: { code: 'QUERY_PLAN_VALIDATION_ERROR', details: queryPlanValidation.issues },
+      requestedInformation: question,
+    };
+  }
   const filterPlans = buildFilterPlans({ question, modules: moduleCandidates, plan, context });
   if (!filterPlans.valid) {
     return {
@@ -100,6 +110,16 @@ async function handleAssistantRequest(payload = {}) {
     };
   }
   plan.filterPlans = filterPlans.byModule;
+  Object.entries(filterPlans.byModule).forEach(([moduleKey, filterPlan]) => {
+    const structuredPlan = plan.queryPlansByModule?.[moduleKey];
+    if (!structuredPlan) return;
+    Object.assign(structuredPlan, {
+      filters: filterPlan.filters,
+      criteria: filterPlan.serverCriteria,
+      serverCriteria: filterPlan.serverCriteria,
+      queryValidated: true,
+    });
+  });
 
   if (DEBUG_ASSISTANT) logger.info('Assistant Pipeline', { tasks: plan.steps.length, modules: plan.modules });
 

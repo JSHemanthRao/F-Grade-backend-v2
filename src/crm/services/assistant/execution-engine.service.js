@@ -2,6 +2,14 @@ const { DEBUG_ASSISTANT } = require('../../../common/config/env');
 const recordsService = require('../retrieval-engine.service');
 const logger = require('../../../common/logging/logger');
 
+function isTimeoutOrCancellation(error) {
+  return error?.code === 'ECONNABORTED'
+    || error?.code === 'ETIMEDOUT'
+    || error?.code === 'ERR_CANCELED'
+    || error?.name === 'AbortError'
+    || error?.name === 'CanceledError';
+}
+
 function getPeriods(step, question, contextDatasets) {
   if (step.type === 'compare' && Array.isArray(step.periods) && step.periods.length > 1) {
     return step.periods.map((period) => typeof period === 'string' ? period : period.label).filter(Boolean);
@@ -59,6 +67,22 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
               ? 'page'
               : 'all';
 
+        const baseQueryPlan = step.queryPlan || plan.queryPlansByModule?.[moduleKey] || null;
+        const periodPlan = baseQueryPlan?.comparisonPeriods?.find((candidate) => (
+          String(candidate.label || '').toLowerCase() === String(period || '').toLowerCase()
+        ));
+        const structuredQueryPlan = baseQueryPlan
+          ? {
+            ...baseQueryPlan,
+            ...(periodPlan ? {
+              startDate: periodPlan.startDate,
+              endDate: periodPlan.endDate,
+            } : {}),
+            criteria: period ? filterPlan.serverCriteriaWithoutDate : filterPlan.serverCriteria,
+            fields: step.requiredFieldsByModule?.[moduleKey] || baseQueryPlan.fields,
+          }
+          : null;
+
         const requestOptions = {
           question,
           ...(period ? { request_text: stepQuestion } : {}),
@@ -73,6 +97,7 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
             aggregate_metrics: aggregateMetrics,
             aggregate_field: step.requiredFieldsByModule?.[moduleKey]?.find((field) => /amount|revenue|total|price|value/i.test(field)),
           } : {}),
+          ...(structuredQueryPlan ? { queryPlan: structuredQueryPlan } : {}),
           retrievalCache: requestCache,
           ...(filterPlan.serverCriteria ? { force_coql: true } : {}),
           retrieval_mode: retrievalMode,
@@ -103,6 +128,7 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
         try {
           result = await execute(requestOptions);
         } catch (error) {
+          if (isTimeoutOrCancellation(error)) throw error;
           logger.warn('Execution Engine', { module: moduleKey, task: step.type, message: 'Retrying CRM task' });
           result = await execute({
             ...requestOptions,

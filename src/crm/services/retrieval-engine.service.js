@@ -762,7 +762,7 @@ async function getRecords(moduleKey, options = {}) {
     ...retrievalPlan.params,
     retrieval_mode: effectiveRetrievalMode,
   };
-  if (!effectiveOptions.criteria && !effectiveOptions.filter && !effectiveOptions.filters) {
+  if (!effectiveOptions.queryPlan && !effectiveOptions.criteria && !effectiveOptions.filter && !effectiveOptions.filters) {
     const inferredCriteria = buildCountCriteria(normalizedKey, moduleDefinition, effectiveOptions, getRequestText(effectiveOptions));
     if (inferredCriteria) effectiveOptions.criteria = inferredCriteria;
   }

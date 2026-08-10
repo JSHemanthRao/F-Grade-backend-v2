@@ -8,6 +8,7 @@ const { detectMetrics } = require('./metric-detector.service');
 const { detectRelationships } = require('./relationship-detector.service');
 const { generateTasks } = require('./task-generator.service');
 const { resolveDependencies } = require('./dependency-resolver.service');
+const { buildIntentQueryPlan } = require('./intent-query-planner.service');
 const logger = require('../../../common/logging/logger');
 
 function detectPagination(question, module, conversation = {}) {
@@ -72,6 +73,17 @@ function buildExecutionPlan(question, context = {}) {
   const entities = detectEntities(originalQuestion);
   const metrics = detectMetrics(originalQuestion);
   const relationships = detectRelationships(originalQuestion, modules);
+  const queryPlansByModule = Object.fromEntries(modules.map((moduleKey) => [moduleKey, buildIntentQueryPlan({
+    question: originalQuestion,
+    moduleKey,
+    intents,
+    metrics,
+    timeRange,
+    entities,
+    pagination,
+    relationships,
+  })]));
+  const queryPlan = queryPlansByModule[modules[0]] || null;
   const generatedTasks = generateTasks({
     question: originalQuestion,
     intents,
@@ -84,7 +96,6 @@ function buildExecutionPlan(question, context = {}) {
     relationships,
   });
   const resolved = resolveDependencies(generatedTasks);
-
   const plan = {
     question: originalQuestion,
     normalizedQuestion,
@@ -103,7 +114,9 @@ function buildExecutionPlan(question, context = {}) {
     dependencies: resolved.dependencies,
     engines: [...new Set(resolved.tasks.map((task) => task.engine))],
     report: isPerformanceReport,
-    plannerVersion: '2.0.0',
+    queryPlan,
+    queryPlansByModule,
+    plannerVersion: '3.0.0',
   };
 
   if (DEBUG_ASSISTANT) logger.info('Planner Engine', {

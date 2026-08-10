@@ -12,6 +12,13 @@ function getRequiredFields(moduleKey, plan, step, question) {
   if (!definition) return [];
   if (step.type === 'count') return [];
 
+  const structuredPlan = step.queryPlan
+    || plan.queryPlansByModule?.[moduleKey]
+    || (plan.queryPlan?.moduleKey === moduleKey ? plan.queryPlan : null);
+  if (step.type === 'query' && Array.isArray(structuredPlan?.fields) && structuredPlan.fields.length > 0) {
+    return structuredPlan.fields.filter((field) => definition.defaultFields.includes(field) || field === 'id');
+  }
+
   const fields = new Set(['id']);
   const text = String(question || '').toLowerCase();
   const needsAmount = step.type === 'aggregate'

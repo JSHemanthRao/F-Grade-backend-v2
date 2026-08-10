@@ -127,8 +127,16 @@ function parseDateFilter(question, timeRange, moduleKey) {
   const hasRelativeMonthOrYear = /\b(?:this|last|current|previous)\s+(?:month|year)\b/i.test(question);
   if (isCompare && hasRelativeMonthOrYear && range?.periods?.length > 1) return null;
   if (!range?.startDate || !range?.endDate || range.range === 'all_time') return null;
+  const text = String(question || '').toLowerCase();
+  const dateField = /conver|converted/i.test(text)
+    ? 'Converted_Date_Time'
+    : /created|creation|added/i.test(text)
+      ? 'Created_Time'
+      : /modified|updated/i.test(text)
+        ? 'Modified_Time'
+        : (DATE_FIELDS_BY_MODULE[moduleKey] || 'Created_Time');
   return {
-    field: /conver|converted/i.test(question) ? 'Converted_Date_Time' : (DATE_FIELDS_BY_MODULE[moduleKey] || 'Created_Time'),
+    field: dateField,
     logicalField: 'date',
     operator: 'between',
     value: [range.startDate, range.endDate],
@@ -348,7 +356,11 @@ function buildFilterPlan({ question = '', module, modules = [], plan = {}, conte
   const structuredInput = Array.isArray(filters) ? filters : (filters && typeof filters === 'object' ? [filters] : []);
   const structured = structuredInput.map(normalizeStructuredFilter).filter(Boolean);
   const inherited = contextFilters(context, moduleKey);
-  const parsed = parseQuestionFilters(question, moduleKey, plan.timeRange);
+  const structuredFilters = plan.queryPlansByModule?.[moduleKey]?.filters
+    || (plan.queryPlan?.moduleKey === moduleKey ? plan.queryPlan.filters : null);
+  const parsed = Array.isArray(structuredFilters)
+    ? structuredFilters
+    : parseQuestionFilters(question, moduleKey, plan.timeRange);
   const allFilters = uniqueFilters([...inherited, ...structured, ...parsed]);
   allFilters.forEach((filter) => {
     if (FIELD_ALIASES[filter.logicalField]) filter.field = resolveField(moduleKey, filter.logicalField, records) || filter.field;
@@ -467,4 +479,5 @@ module.exports = {
   buildFilterPlans,
   matchesFilter,
   normalizeAmount,
+  parseQuestionFilters,
 };
