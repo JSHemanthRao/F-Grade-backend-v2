@@ -54,6 +54,16 @@ function sendQueryResponse(req, res, moduleDefinition, result, executionTime) {
     ? Number(perPageValue)
     : data.length;
 
+  logger.info('CRM Controller', {
+    event: 'response_constructed',
+    module: moduleDefinition.label,
+    responseRecords: data.length,
+    totalMatchingRecords: count,
+    page,
+    per_page,
+    executionTime,
+  });
+
   res.json({
     success: true,
     module: moduleDefinition.label,
@@ -69,6 +79,13 @@ function sendQueryResponse(req, res, moduleDefinition, result, executionTime) {
 function sendCountResponse(req, res, moduleDefinition, result, executionTime) {
   const info = result?.info || {};
   const count = Number.isFinite(info.count) ? info.count : 0;
+
+  logger.info('CRM Controller', {
+    event: 'count_response_constructed',
+    module: moduleDefinition.label,
+    totalMatchingRecords: count,
+    executionTime,
+  });
 
   res.json({
     success: true,

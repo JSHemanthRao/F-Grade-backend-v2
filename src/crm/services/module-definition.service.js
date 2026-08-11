@@ -1,5 +1,5 @@
 const MODULE_DEFINITIONS = [
-  { key: 'leads', label: 'Leads', endpoint: 'Leads', defaultFields: ['First_Name', 'Last_Name', 'Company', 'Email', 'Phone', 'Lead_Source'] },
+  { key: 'leads', label: 'Leads', endpoint: 'Leads', defaultFields: ['First_Name', 'Last_Name', 'Company', 'Email', 'Phone', 'Lead_Source', 'Created_Time'] },
   { key: 'contacts', label: 'Contacts', endpoint: 'Contacts', defaultFields: ['First_Name', 'Last_Name', 'Email', 'Phone', 'Mailing_City', 'Mailing_Country'] },
   { key: 'accounts', label: 'Accounts', endpoint: 'Accounts', defaultFields: ['Account_Name', 'Website', 'Phone', 'Industry', 'Annual_Revenue', 'Billing_Country'] },
   { key: 'deals', label: 'Deals', endpoint: 'Deals', defaultFields: ['Deal_Name', 'Amount', 'Stage', 'Closing_Date', 'Account_Name', 'Deal_Source', 'Owner'] },

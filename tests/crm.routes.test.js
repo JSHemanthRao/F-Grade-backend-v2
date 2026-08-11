@@ -374,6 +374,45 @@ test('CRM service uses Zoho count endpoint for count and total questions', async
   }
 });
 
+test('CRM query endpoint applies Zoho server-side Created_Time date filtering for July 2026 leads', async () => {
+  const originalGet = zohoClient.get;
+  const requests = [];
+
+  zohoClient.get = async (url, config) => {
+    requests.push({ url, config });
+    return {
+      data: {
+        data: [
+          { id: '1001', Created_Time: '2026-07-10T12:34:56Z', First_Name: 'Alice', Last_Name: 'Example' },
+        ],
+        info: { count: 1, more_records: false },
+      },
+    };
+  };
+
+  try {
+    const result = await recordsService.getRecords('leads', {
+      module: 'Leads',
+      date_field: 'Created_Time',
+      from: '2026-07-01',
+      to: '2026-08-01',
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, '/crm/v8/Leads');
+    assert.equal(requests[0].config.params.per_page, 200);
+    assert.equal(requests[0].config.params.criteria,
+      '(Created_Time:greater_equal:2026-07-01T00:00:00Z)and(Created_Time:less_than:2026-08-01T00:00:00Z)');
+    assert.ok(requests[0].config.params.fields.includes('Created_Time'));
+    assert.deepEqual(result.data, [
+      { id: '1001', Created_Time: '2026-07-10T12:34:56Z', First_Name: 'Alice', Last_Name: 'Example' },
+    ]);
+    assert.equal(result.info.count, 1);
+  } finally {
+    zohoClient.get = originalGet;
+  }
+});
+
 test('CRM service counts filtered closed won deals without paginating records', async () => {
   const originalGet = zohoClient.get;
   const requests = [];

@@ -80,12 +80,25 @@ async function getModuleFieldNames(moduleKey) {
   const cacheKey = moduleDefinition.endpoint;
 
   if (FIELD_METADATA_CACHE.has(cacheKey)) {
+    logger.debug('Retrieval Engine', {
+      module: normalizedKey,
+      endpoint: moduleDefinition.endpoint,
+      event: 'metadata_cache_hit',
+      cachedFields: FIELD_METADATA_CACHE.get(cacheKey).length,
+    });
     return FIELD_METADATA_CACHE.get(cacheKey);
   }
 
   const moduleFields = Array.isArray(moduleDefinition.defaultFields)
     ? moduleDefinition.defaultFields.map(normalizeFieldName)
     : [];
+
+  const metadataLookupStart = process.hrtime.bigint();
+  logger.info('Retrieval Engine', {
+    module: normalizedKey,
+    endpoint: moduleDefinition.endpoint,
+    event: 'metadata_lookup_start',
+  });
 
   try {
     const metadataFields = await getModuleFields(normalizedKey);
@@ -94,8 +107,24 @@ async function getModuleFieldNames(moduleKey) {
       : [];
     const allFields = Array.from(new Set([...moduleFields, ...normalizedMetadataFields]));
     FIELD_METADATA_CACHE.set(cacheKey, allFields);
+    const metadataLookupDurationMs = Number(process.hrtime.bigint() - metadataLookupStart) / 1e6;
+    logger.info('Retrieval Engine', {
+      module: normalizedKey,
+      endpoint: moduleDefinition.endpoint,
+      event: 'metadata_lookup_complete',
+      durationMs: Number(metadataLookupDurationMs.toFixed(2)),
+      fieldCount: normalizedMetadataFields.length,
+    });
     return allFields;
   } catch (error) {
+    const metadataLookupDurationMs = Number(process.hrtime.bigint() - metadataLookupStart) / 1e6;
+    logger.warn('Retrieval Engine', {
+      module: normalizedKey,
+      endpoint: moduleDefinition.endpoint,
+      event: 'metadata_lookup_failed',
+      durationMs: Number(metadataLookupDurationMs.toFixed(2)),
+      error: error.message,
+    });
     const fallbackFields = Array.from(new Set(moduleFields));
     FIELD_METADATA_CACHE.set(cacheKey, fallbackFields);
     return fallbackFields;
@@ -246,13 +275,19 @@ function buildQueryParams(moduleKey, options = {}) {
     sort_order,
   } = options;
 
+  const requestedDateField = normalizeFieldName(options.date_field ?? options.dateField);
   const normalizedFields = normalizeFields(requestedFields);
   const fields = normalizedFields.length > 0
     ? normalizedFields.slice(0, 50)
     : moduleDefinition.defaultFields || [];
 
+  if (requestedDateField && !fieldExists(fields, requestedDateField)) {
+    fields.push(requestedDateField);
+  }
+
   const pageValue = Number(page);
   const perPageValue = Number(per_page);
+  const hasExplicitPerPage = options.per_page !== undefined && options.per_page !== null && options.per_page !== '';
 
   if (Number.isFinite(pageValue) && pageValue > 0) {
     params.page = pageValue;
@@ -260,6 +295,8 @@ function buildQueryParams(moduleKey, options = {}) {
 
   if (Number.isFinite(perPageValue) && perPageValue > 0) {
     params.per_page = perPageValue;
+  } else if (requestedDateField && !hasExplicitPerPage) {
+    params.per_page = DEFAULT_PER_PAGE;
   }
 
   if (ids) {
@@ -684,11 +721,21 @@ async function executeCoqlRecords(moduleKey, queryPlan, options = {}) {
 async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, retrievalPlan = {}) {
   const { params, fields } = buildQueryParams(moduleKey, options);
   const shouldFetchAll = retrievalPlan.fetchAll || normalizeRetrievalMode(options.retrieval_mode ?? options.retrievalMode) === 'all';
+  const queryStartTime = process.hrtime.bigint();
+
+  logger.info('Retrieval Engine', {
+    module: moduleKey,
+    endpoint: moduleDefinition.endpoint,
+    event: 'zoho_query_start',
+    params,
+    fetchAll: shouldFetchAll,
+  });
 
   if (shouldFetchAll) {
     let result;
     let pagesFetched = 0;
     let lastError;
+    const fetchAllStart = process.hrtime.bigint();
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
         result = await fetchAllPages({
@@ -716,6 +763,14 @@ async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, r
       }
     }
     if (lastError) throw lastError;
+    const fetchAllDurationMs = Number(process.hrtime.bigint() - fetchAllStart) / 1e6;
+    logger.info('Retrieval Engine', {
+      module: moduleKey,
+      endpoint: moduleDefinition.endpoint,
+      event: 'pagination_complete',
+      pagesFetched,
+      durationMs: Number(fetchAllDurationMs.toFixed(2)),
+    });
     return addRetrievalMetadata(
       result,
       options,
@@ -729,6 +784,14 @@ async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, r
     `/crm/v8/${moduleDefinition.endpoint}`,
     buildZohoRequestConfig(options, { params }),
   );
+  const queryDurationMs = Number(process.hrtime.bigint() - queryStartTime) / 1e6;
+  logger.info('Retrieval Engine', {
+    module: moduleKey,
+    endpoint: moduleDefinition.endpoint,
+    event: 'zoho_query_complete',
+    durationMs: Number(queryDurationMs.toFixed(2)),
+    recordsReturned: Array.isArray(response.data?.data) ? response.data.data.length : 0,
+  });
   return addRetrievalMetadata(
     response.data,
     options,
@@ -788,7 +851,15 @@ async function executeSearchAggregate(moduleKey, moduleDefinition, options = {})
 async function getCount(moduleKey, options = {}) {
   const normalizedKey = normalizeModuleKey(moduleKey);
   const moduleDefinition = getModuleDefinition(normalizedKey);
-  const availableFields = await getModuleFieldNames(normalizedKey);
+
+  let availableFields = Array.isArray(moduleDefinition.defaultFields)
+    ? moduleDefinition.defaultFields.map(normalizeFieldName)
+    : [];
+  const requestedDateField = normalizeFieldName(options.date_field ?? options.dateField);
+  if (requestedDateField && !fieldExists(availableFields, requestedDateField)) {
+    availableFields = await getModuleFieldNames(normalizedKey);
+  }
+
   const dateCriteria = getDateCriteria(moduleDefinition, availableFields, options);
   if (dateCriteria) {
     const previousCriteria = normalizeCriteriaValue(options.criteria ?? options.filter ?? options.filters);
@@ -892,7 +963,14 @@ async function getRecords(moduleKey, options = {}) {
     retrieval_mode: effectiveRetrievalMode,
   };
 
-  const availableFields = await getModuleFieldNames(normalizedKey);
+  let availableFields = Array.isArray(moduleDefinition.defaultFields)
+    ? moduleDefinition.defaultFields.map(normalizeFieldName)
+    : [];
+  const requestedDateField = normalizeFieldName(effectiveOptions.date_field ?? effectiveOptions.dateField);
+  if (requestedDateField && !fieldExists(availableFields, requestedDateField)) {
+    availableFields = await getModuleFieldNames(normalizedKey);
+  }
+
   if (!effectiveOptions.fields) {
     effectiveOptions.fields = addSystemFields(moduleDefinition.defaultFields || [], availableFields);
   }
@@ -909,6 +987,12 @@ async function getRecords(moduleKey, options = {}) {
     const inferredCriteria = buildCountCriteria(normalizedKey, moduleDefinition, effectiveOptions, getRequestText(effectiveOptions));
     if (inferredCriteria) effectiveOptions.criteria = inferredCriteria;
   }
+
+  const hasExplicitPerPage = options.per_page !== undefined && options.per_page !== null && options.per_page !== '';
+  if (requestedDateField && !hasExplicitPerPage) {
+    effectiveOptions.per_page = DEFAULT_PER_PAGE;
+  }
+
   const queryPlan = buildQueryPlan(normalizedKey, {
     ...effectiveOptions,
     // Preserve the caller's mode for query selection. The retrieval policy
