@@ -83,6 +83,32 @@ function validateFilters(value) {
   throw new CRMValidationError('filters must be a string or object.');
 }
 
+function validateOperation(value) {
+  if (value === undefined || value === null || value === '') {
+    return;
+  }
+
+  const operation = String(value).trim().toLowerCase();
+  if (!['query', 'count'].includes(operation)) {
+    throw new CRMValidationError('operation must be query or count.');
+  }
+}
+
+function validateRetrievalMode(value, { countEndpoint = false } = {}) {
+  if (value === undefined || value === null || value === '') {
+    return;
+  }
+
+  const mode = String(value).trim().toLowerCase();
+  const allowedModes = countEndpoint
+    ? ['count']
+    : ['auto', 'page', 'limited', 'filtered', 'all', 'count', 'aggregate'];
+
+  if (!allowedModes.includes(mode)) {
+    throw new CRMValidationError(`retrieval_mode must be one of: ${allowedModes.join(', ')}.`);
+  }
+}
+
 function hasValue(value) {
   return value !== undefined && value !== null && value !== '';
 }
@@ -103,9 +129,12 @@ function validateCRMQueryRequest(req, res, next) {
 
     validatePositiveInteger(req.query?.page ?? req.body?.page, 'page');
     validatePositiveInteger(req.query?.per_page ?? req.body?.per_page, 'per_page');
+    validatePositiveInteger(req.query?.limit ?? req.body?.limit, 'limit');
     normalizeArrayParameter(req.query?.ids ?? req.body?.ids, 'ids');
     normalizeArrayParameter(req.query?.fields ?? req.body?.fields, 'fields');
     validateFilters(req.query?.filter ?? req.query?.filters ?? req.body?.filter ?? req.body?.filters);
+    validateOperation(req.query?.operation ?? req.body?.operation);
+    validateRetrievalMode(req.query?.retrieval_mode ?? req.query?.retrievalMode ?? req.body?.retrieval_mode ?? req.body?.retrievalMode);
 
     return next();
   } catch (error) {
@@ -131,10 +160,11 @@ function validateCRMCountRequest(req, res, next) {
       throw new CRMValidationError('count endpoint does not accept page or per_page.');
     }
 
-    if (hasValue(req.query?.retrieval_mode ?? req.query?.retrievalMode ?? req.body?.retrieval_mode ?? req.body?.retrievalMode)) {
-      throw new CRMValidationError('count endpoint does not accept retrieval_mode.');
-    }
-
+    validateOperation(req.query?.operation ?? req.body?.operation);
+    validateRetrievalMode(
+      req.query?.retrieval_mode ?? req.query?.retrievalMode ?? req.body?.retrieval_mode ?? req.body?.retrievalMode,
+      { countEndpoint: true }
+    );
     validateFilters(req.query?.filter ?? req.query?.filters ?? req.body?.filter ?? req.body?.filters);
 
     return next();

@@ -6,7 +6,7 @@ const spec = {
   info: {
     title: 'F-Grade Zoho CRM API',
     version: '1.0.0',
-    description: 'Read-only Zoho CRM API for Microsoft Copilot Studio.',
+    description: 'Read-only Zoho CRM API for Microsoft Copilot Studio. Determine the user\'s requested record count, filters, date range, operation, and fields and pass them as structured inputs. Never default to retrieving the complete module.',
     license: {
       name: 'ISC',
       url: 'https://spdx.org/licenses/ISC.html',
@@ -23,7 +23,7 @@ const spec = {
         operationId: 'countCRMRecords',
         tags: ['CRM'],
         summary: 'Count Zoho CRM records',
-        description: "Use this operation whenever the user asks how many, count, total, number of records, or a filtered record count. Returns the complete matching CRM record count. Never use pagination for this operation.",
+        description: "Use this operation whenever the user asks how many, count, total, number of records, or a filtered record count. Determine the user's filters and date range and pass them as structured inputs. Returns the complete matching CRM record count without retrieving records.",
         parameters: [
           {
             name: 'module',
@@ -33,11 +33,26 @@ const spec = {
             description: 'Canonical or natural-language module name. Examples: Leads, Contacts, Accounts, Deals.',
           },
           {
+            name: 'operation',
+            in: 'query',
+            required: false,
+            type: 'string',
+            enum: ['count'],
+            description: 'Use count for count questions such as "how many leads were created in July".',
+          },
+          {
+            name: 'criteria',
+            in: 'query',
+            required: false,
+            type: 'string',
+            description: 'Optional Zoho CRM criteria string for filtered counts, such as (Company:equals:ABC).',
+          },
+          {
             name: 'filter',
             in: 'query',
             required: false,
             type: 'string',
-            description: 'Optional Zoho CRM criteria string for filtered counts.',
+            description: 'Optional Zoho CRM criteria string for filtered counts. Use criteria when possible.',
           },
           {
             name: 'date_field',
@@ -59,6 +74,21 @@ const spec = {
             required: false,
             type: 'string',
             description: 'Date or ISO datetime representing the exclusive end of the date range.',
+          },
+          {
+            name: 'search',
+            in: 'query',
+            required: false,
+            type: 'string',
+            description: 'Optional original user wording for diagnostics only. Do not rely on this instead of structured filters and dates.',
+          },
+          {
+            name: 'retrieval_mode',
+            in: 'query',
+            required: false,
+            type: 'string',
+            enum: ['count'],
+            description: 'Use count for count requests.',
           },
         ],
         responses: {
@@ -113,7 +143,7 @@ const spec = {
         operationId: 'queryCRMRecords',
         tags: ['CRM'],
         summary: 'Query Zoho CRM records',
-        description: 'Use this operation when the user asks to view, list, show, retrieve, or inspect CRM records. The backend searches the complete matching CRM dataset internally and returns a display batch. Do not treat one returned batch as the complete dataset.',
+        description: 'Use this operation when the user asks to view, list, show, retrieve, or inspect CRM records. Determine the user\'s requested record count, filters, date range, operation, and fields and pass them as structured inputs. Never default to retrieving the complete module. For "first 10 leads", pass operation=query, limit=10, retrieval_mode=limited. For date or company filters, pass server-side criteria/date inputs and retrieval_mode=filtered with a bounded limit.',
         parameters: [
           {
             name: 'module',
@@ -121,6 +151,24 @@ const spec = {
             required: true,
             type: 'string',
             description: 'Canonical or natural-language module name. Examples: Leads, Contacts, Accounts, Deals.',
+          },
+          {
+            name: 'operation',
+            in: 'query',
+            required: false,
+            type: 'string',
+            enum: ['query', 'count'],
+            description: 'Use query for record lists. Use count only when the user asks how many or total records; count returns no records.',
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            type: 'integer',
+            format: 'int32',
+            minimum: 1,
+            maximum: 200,
+            description: 'Requested number of records to return. For "first 10" or "10 leads", pass 10. If omitted for a normal list, the backend uses a safe bounded default.',
           },
           {
             name: 'page',
@@ -173,7 +221,29 @@ const spec = {
             in: 'query',
             required: false,
             type: 'string',
-            description: 'Optional Zoho CRM criteria string for server-side filtering.',
+            description: 'Optional Zoho CRM criteria string for server-side filtering. Use criteria when possible.',
+          },
+          {
+            name: 'criteria',
+            in: 'query',
+            required: false,
+            type: 'string',
+            description: 'Optional Zoho CRM criteria string for server-side filtering, such as (Company:equals:ABC).',
+          },
+          {
+            name: 'search',
+            in: 'query',
+            required: false,
+            type: 'string',
+            description: 'Optional original user wording for diagnostics only. Always pass structured limit, criteria, date range, operation, and retrieval_mode when known.',
+          },
+          {
+            name: 'retrieval_mode',
+            in: 'query',
+            required: false,
+            type: 'string',
+            enum: ['limited', 'filtered', 'page', 'count'],
+            description: 'Use limited for explicit record counts, filtered for date/filter queries, page for explicit pagination, and count for count requests. Do not use all for normal Copilot conversations.',
           },
           {
             name: 'ids',

@@ -98,13 +98,14 @@ function sendCountResponse(req, res, moduleDefinition, result, executionTime) {
 
 function buildCommonOptions(req) {
   const requestSource = req.method === 'POST' ? req.body : req.query;
-  const hasExplicitApiPage = requestSource?.page !== undefined && requestSource?.page !== null && requestSource?.page !== ''
-    && !(Number(requestSource?.page) === 1 && Number(requestSource?.per_page) === 25);
-  const retrievalMode = hasExplicitApiPage ? undefined : 'all';
+  const retrievalMode = requestSource?.retrieval_mode ?? requestSource?.retrievalMode;
+  const operation = String(requestSource?.operation || 'query').trim().toLowerCase();
 
   return {
     page: requestSource?.page,
-    per_page: requestSource?.per_page,
+    per_page: requestSource?.per_page ?? requestSource?.limit,
+    limit: requestSource?.limit,
+    operation,
     ids: requestSource?.ids,
     fields: requestSource?.fields,
     criteria: requestSource?.criteria,
@@ -121,7 +122,8 @@ function buildCommonOptions(req) {
     to: requestSource?.to,
     sort_by: requestSource?.sort_by,
     sort_order: requestSource?.sort_order,
-    force_coql: !hasExplicitApiPage && Boolean(requestSource?.criteria || requestSource?.filter || requestSource?.filters),
+    force_coql: String(retrievalMode || '').trim().toLowerCase() === 'all'
+      && Boolean(requestSource?.criteria || requestSource?.filter || requestSource?.filters),
     retrieval_mode: retrievalMode,
   };
 }
@@ -133,20 +135,26 @@ async function getModuleQuery(req, res, next) {
     const startTime = process.hrtime.bigint();
     const options = buildCommonOptions(req);
     const requestContext = createRequestAbortSignal(req, res);
+    const isCountOperation = String(options.operation || '').toLowerCase() === 'count';
 
     logger.info('Retrieval Engine', {
       module: moduleDefinition.label,
-      operation: 'query',
+      operation: isCountOperation ? 'count' : 'query',
     });
 
     let result;
     try {
-      result = await recordsService.getRecords(moduleKey, {
+      result = await (isCountOperation ? recordsService.getCount : recordsService.getRecords)(moduleKey, {
         ...options,
+        ...(isCountOperation ? { retrieval_mode: 'count' } : {}),
         ...(requestContext.signal ? { signal: requestContext.signal } : {}),
       });
     } finally {
       requestContext.cleanup();
+    }
+
+    if (isCountOperation) {
+      return sendCountResponse(req, res, moduleDefinition, result, formatExecutionTime(startTime));
     }
 
     sendQueryResponse(req, res, moduleDefinition, result, formatExecutionTime(startTime));

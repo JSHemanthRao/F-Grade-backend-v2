@@ -79,7 +79,10 @@ test('RetrievalEngine fetches all pages for search and filter queries', async ()
   };
 
   try {
-    const result = await RetrievalEngine.getRecords('deals', { question: 'Deals above ₹5,00,000' });
+    const result = await RetrievalEngine.getRecords('deals', {
+      question: 'Deals above ₹5,00,000',
+      retrieval_mode: 'all',
+    });
     assert.equal(requests.length, 2);
     assert.deepEqual(requests.map((params) => params.page), [1, 2]);
     assert.deepEqual(requests.map((params) => params.per_page), [200, 200]);
@@ -105,7 +108,10 @@ test('RetrievalEngine finds a match only on page 5 for deep pagination queries',
   };
 
   try {
-    const result = await RetrievalEngine.getRecords('deals', { question: 'Find SG Compu Tech' });
+    const result = await RetrievalEngine.getRecords('deals', {
+      question: 'Find SG Compu Tech',
+      retrieval_mode: 'all',
+    });
     assert.equal(requests.length, 5);
     assert.equal(result.data.length, 5);
     assert.equal(result.data[4].id, 'deal-5');
@@ -128,7 +134,10 @@ test('RetrievalEngine only returns no matches after all pages are fetched', asyn
   };
 
   try {
-    const result = await RetrievalEngine.getRecords('deals', { question: 'Search for non-existent deals' });
+    const result = await RetrievalEngine.getRecords('deals', {
+      question: 'Search for non-existent deals',
+      retrieval_mode: 'all',
+    });
     assert.equal(requests.length, 2);
     assert.deepEqual(result.data, []);
     assert.equal(result.info.recordCount, 0);
@@ -137,7 +146,7 @@ test('RetrievalEngine only returns no matches after all pages are fetched', asyn
   }
 });
 
-test('RetrievalEngine fetches all pages for date-based queries', async () => {
+test('RetrievalEngine keeps date-based list queries bounded', async () => {
   const originalGet = zohoClient.get;
   const requests = [];
   const pages = [
@@ -152,10 +161,10 @@ test('RetrievalEngine fetches all pages for date-based queries', async () => {
 
   try {
     const result = await RetrievalEngine.getRecords('deals', { search: 'Show deals created in June' });
-    assert.equal(requests.length, 2);
-    assert.deepEqual(requests.map((params) => params.page), [1, 2]);
-    assert.deepEqual(requests.map((params) => params.per_page), [200, 200]);
-    assert.deepEqual(result.data, [{ id: 'deal-1' }, { id: 'deal-2' }]);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].page, 1);
+    assert.equal(requests[0].per_page, 25);
+    assert.deepEqual(result.data, [{ id: 'deal-1' }]);
   } finally {
     restoreZoho(originalGet, zohoClient.post);
   }

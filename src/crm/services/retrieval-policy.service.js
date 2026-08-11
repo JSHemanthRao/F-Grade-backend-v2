@@ -15,19 +15,16 @@ const RETRIEVAL_STRATEGIES = {
 const RETRIEVAL_MODES = {
   AUTO: 'auto',
   PAGE: 'page',
+  LIMITED: 'limited',
+  FILTERED: 'filtered',
   ALL: 'all',
   COUNT: 'count',
   AGGREGATE: 'aggregate',
 };
 
 const FULL_RETRIEVAL_PATTERNS = [
-  /\ball\b/,
-  /\bevery\b/,
-  /\bcomplete\b/,
-  /\bentire\b/,
   /\bsum\b/,
   /\bsummary\b/,
-  /\bfiltered\b/,
   /\bgrouped\b/,
   /\breport\b/,
   /\banalytics?\b/,
@@ -44,27 +41,11 @@ const FULL_RETRIEVAL_PATTERNS = [
   /\btop\b/,
   /\bmonthly\b/,
   /\boverall\b/,
-  /\bcomplete\s+list\b/,
-  /\bfrom\b/,
   /\bbusiness\s+summary\b/,
-  /\boverdue\b/,
-  /\bclosed\b/,
-  /\bactive\b/,
-  /\bcreated\b/,
-  /\bowned\s+by\b/,
-  /\bowner\b/,
-  /\bstage\b/,
-  /\bassigned\s+to\b/,
-  /\bwhere\b/,
-  /\bwith\b/,
-  /\bmatching\b/,
-  /\b(this|last)\s+month\b/,
-  /\blast\s+\d+\s+months?\b/,
-  /\blast\s+year\b/,
-  /\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b/,
-  /\b(?:between|from)\b.*\b(?:and|to)\b/,
-  /\b(?:search|find|lookup|look\s+for)\b/,
-  /\b(?:above|below|greater\s+than|less\s+than|over|under)\b/,
+  // removed 'created' token from full-retrieval signals to avoid false positives
+  // Deliberately exclude common date phrases (months, "this month", "created")
+  // from the full-retrieval detection so simple date-filtered conversational
+  // queries do not automatically trigger a full dataset export.
 ];
 
 const COUNT_INTENT_PATTERNS = [
@@ -79,6 +60,7 @@ const NEXT_COUNT_PATTERN = /\bnext\s+(\d{1,3})\b/i;
 const PAGE_PATTERN = /\bpage\s+(\d{1,6})\b/i;
 const PER_PAGE_PATTERN = /\bper_page\s*=\s*(\d{1,6})\b/i;
 const FIELD_EQUALS_PATTERN = /\b(?:where|with)\s+([a-z][a-z0-9_\s]*?)\s*(?:=|equals|is)\s*["']?([^"',?]+)["']?/i;
+const DATE_SEARCH_TERM_PATTERN = /\b(created|modified|converted|closing|date|time|january|february|march|april|may|june|july|august|september|october|november|december|this\s+month|last\s+month|this\s+week|last\s+week|this\s+quarter|last\s+quarter)\b/i;
 
 function isValue(value, expected) {
   return value !== undefined && value !== null && value !== '' && Number(value) === expected;
@@ -159,6 +141,27 @@ function clampPerPage(value) {
   return Math.min(parsed, DEFAULT_PER_PAGE);
 }
 
+function getRequestedLimit(options = {}, requestText = getRequestText(options)) {
+  const structuredLimit = clampPerPage(options.limit ?? options.record_limit ?? options.recordLimit);
+  if (structuredLimit) {
+    return structuredLimit;
+  }
+
+  const limitMatch = requestText.match(LIMITED_COUNT_PATTERN);
+  const requestedLimit = limitMatch ? clampPerPage(limitMatch[1]) : null;
+  if (requestedLimit) {
+    return requestedLimit;
+  }
+
+  const perPageMatch = requestText.match(PER_PAGE_PATTERN);
+  const requestedPerPage = perPageMatch ? clampPerPage(perPageMatch[1]) : null;
+  if (requestedPerPage) {
+    return requestedPerPage;
+  }
+
+  return null;
+}
+
 function getSingularModuleTerms(moduleDefinition = {}) {
   const label = normalizeText(moduleDefinition.label).toLowerCase();
   const endpoint = normalizeText(moduleDefinition.endpoint).replace(/_/g, ' ').toLowerCase();
@@ -193,6 +196,9 @@ function getSpecificRecordSearchTerm(requestText, moduleDefinition) {
         .trim();
 
       if (searchTerm) {
+        if (DATE_SEARCH_TERM_PATTERN.test(searchTerm)) {
+          return null;
+        }
         return searchTerm;
       }
     }
@@ -272,6 +278,8 @@ function normalizeRetrievalMode(value) {
   if (
     normalizedValue === RETRIEVAL_MODES.AUTO
     || normalizedValue === RETRIEVAL_MODES.PAGE
+    || normalizedValue === RETRIEVAL_MODES.LIMITED
+    || normalizedValue === RETRIEVAL_MODES.FILTERED
     || normalizedValue === RETRIEVAL_MODES.ALL
     || normalizedValue === RETRIEVAL_MODES.COUNT
     || normalizedValue === RETRIEVAL_MODES.AGGREGATE
@@ -329,8 +337,10 @@ function logPaginationStopDebug({ moduleKey, page, pageToken, reason, info }) {
 function getRetrievalPlan(moduleDefinition, options = {}) {
   const requestText = getRequestText(options);
   const retrievalMode = normalizeRetrievalMode(options.retrieval_mode ?? options.retrievalMode);
+  const operation = String(options.operation || '').trim().toLowerCase();
+  const requestedLimit = getRequestedLimit(options, requestText);
 
-  if (retrievalMode === RETRIEVAL_MODES.COUNT) {
+  if (operation === 'count' || retrievalMode === RETRIEVAL_MODES.COUNT) {
     return {
       strategy: RETRIEVAL_STRATEGIES.COUNT,
       fetchAll: false,
@@ -356,6 +366,19 @@ function getRetrievalPlan(moduleDefinition, options = {}) {
       fetchAll: true,
       params: {},
       reason: 'retrieval_mode_all_full_dataset',
+      retrievalMode,
+    };
+  }
+
+  if (retrievalMode === RETRIEVAL_MODES.LIMITED || retrievalMode === RETRIEVAL_MODES.FILTERED) {
+    return {
+      strategy: RETRIEVAL_STRATEGIES.PAGINATED_LIST,
+      fetchAll: false,
+      params: {
+        page: 1,
+        per_page: requestedLimit || clampPerPage(options.per_page) || DEFAULT_LIMITED_PER_PAGE,
+      },
+      reason: `retrieval_mode_${retrievalMode}_paginated_list`,
       retrievalMode,
     };
   }
@@ -409,12 +432,28 @@ function getRetrievalPlan(moduleDefinition, options = {}) {
     };
   }
 
-  if (hasCountIntent(requestText)) {
+  if (operation === 'query' && hasCountIntent(requestText)) {
+    // A structured query operation wins over a loose "total" word in the
+    // prompt. Plain natural-language count questions still use the count API.
+  } else if (hasCountIntent(requestText)) {
     return {
       strategy: RETRIEVAL_STRATEGIES.COUNT,
       fetchAll: false,
       params: {},
       reason: 'count_intent',
+      retrievalMode,
+    };
+  }
+
+  if (requestedLimit) {
+    return {
+      strategy: RETRIEVAL_STRATEGIES.PAGINATED_LIST,
+      fetchAll: false,
+      params: {
+        page: 1,
+        per_page: requestedLimit,
+      },
+      reason: 'structured_or_requested_limited_count',
       retrievalMode,
     };
   }
@@ -443,14 +482,50 @@ function getRetrievalPlan(moduleDefinition, options = {}) {
     ? inferEqualityCriteria(requestText)
     : null;
 
-  if (hasExplicitFilter(options) || inferredCriteria || (requestText && hasFullRetrievalIntent(requestText))) {
+  const hasDateRangeFilter = options.date_field && options.from && options.to;
+  if (hasDateRangeFilter) {
+    return {
+      strategy: RETRIEVAL_STRATEGIES.PAGINATED_LIST,
+      fetchAll: false,
+      params: {
+        page: 1,
+        per_page: DEFAULT_LIMITED_PER_PAGE,
+      },
+      reason: 'date_filtered_paginated_list',
+      retrievalMode,
+    };
+  }
+
+  // If the user explicitly asked for a full retrieval (explicit full-retrieval
+  // intent like "all", "complete list", "export"), then allow full dataset
+  // extraction. However, do NOT treat ordinary date-filtered queries or
+  // inferred equality lookups as a signal to fetch the entire module.
+  // If the user explicitly asked for a full retrieval (explicit full-retrieval
+  // intent like "all", "complete list", "export"), then allow full dataset
+  // extraction.
+  if (requestText && hasFullRetrievalIntent(requestText)) {
     return {
       strategy: RETRIEVAL_STRATEGIES.FULL_DATASET,
       fetchAll: true,
       params: inferredCriteria ? { criteria: inferredCriteria } : {},
-      reason: hasExplicitFilter(options) || inferredCriteria
-        ? 'filtered_complete_dataset'
-        : 'complete_analysis_intent',
+      reason: 'complete_analysis_intent',
+      retrievalMode,
+    };
+  }
+
+  // If callers provided explicit filter criteria or we inferred a specific
+  // equality criteria from the request, keep the lookup server-side but
+  // bounded for conversational use.
+  if (hasExplicitFilter(options) || inferredCriteria) {
+    return {
+      strategy: RETRIEVAL_STRATEGIES.PAGINATED_LIST,
+      fetchAll: false,
+      params: {
+        page: 1,
+        per_page: DEFAULT_LIMITED_PER_PAGE,
+        ...(inferredCriteria ? { criteria: inferredCriteria } : {}),
+      },
+      reason: 'filtered_paginated_list',
       retrievalMode,
     };
   }
@@ -469,22 +544,6 @@ function getRetrievalPlan(moduleDefinition, options = {}) {
         per_page: requestedPerPage || DEFAULT_PER_PAGE,
       },
       reason: requestedPage ? 'requested_page' : 'requested_per_page',
-      retrievalMode,
-    };
-  }
-
-  const limitMatch = requestText.match(LIMITED_COUNT_PATTERN);
-  const requestedLimit = limitMatch ? clampPerPage(limitMatch[1]) : null;
-
-  if (requestedLimit) {
-    return {
-      strategy: RETRIEVAL_STRATEGIES.PAGINATED_LIST,
-      fetchAll: false,
-      params: {
-        page: 1,
-        per_page: requestedLimit,
-      },
-      reason: 'requested_limited_count',
       retrievalMode,
     };
   }

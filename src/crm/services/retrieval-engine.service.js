@@ -1092,8 +1092,10 @@ async function getRecords(moduleKey, options = {}) {
     if (inferredCriteria) effectiveOptions.criteria = inferredCriteria;
   }
 
-  const hasExplicitPerPage = options.per_page !== undefined && options.per_page !== null && options.per_page !== '';
-  if (requestedDateField && !hasExplicitPerPage) {
+  const hasEffectivePerPage = effectiveOptions.per_page !== undefined
+    && effectiveOptions.per_page !== null
+    && effectiveOptions.per_page !== '';
+  if (requestedDateField && !hasEffectivePerPage) {
     effectiveOptions.per_page = DEFAULT_PER_PAGE;
   }
 
