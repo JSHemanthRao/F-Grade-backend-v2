@@ -255,8 +255,8 @@ test('CRM OpenAPI exposes separate count and query operations', () => {
 
   assert.equal(countOperation.operationId, 'countCRMRecords');
   assert.equal(queryOperation.operationId, 'queryCRMRecords');
-  assert.deepEqual(countParameterNames, ['module', 'filter']);
-  assert.deepEqual(queryParameterNames, ['module', 'page', 'per_page', 'fields', 'filter', 'ids']);
+  assert.deepEqual(countParameterNames, ['module', 'filter', 'date_field', 'from', 'to']);
+  assert.deepEqual(queryParameterNames, ['module', 'page', 'per_page', 'fields', 'date_field', 'from', 'to', 'filter', 'ids']);
   assert.equal(countOperation.parameters[0].required, true);
   assert.equal(queryOperation.parameters[0].required, true);
   assert.equal(queryOperation.parameters.some((parameter) => parameter.name === 'retrieval_mode'), false);

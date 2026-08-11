@@ -39,6 +39,27 @@ const spec = {
             type: 'string',
             description: 'Optional Zoho CRM criteria string for filtered counts.',
           },
+          {
+            name: 'date_field',
+            in: 'query',
+            required: false,
+            type: 'string',
+            description: 'Optional CRM date field API name to filter count by, such as Created_Time or Modified_Time.',
+          },
+          {
+            name: 'from',
+            in: 'query',
+            required: false,
+            type: 'string',
+            description: 'Date or ISO datetime representing the start of the inclusive date range.',
+          },
+          {
+            name: 'to',
+            in: 'query',
+            required: false,
+            type: 'string',
+            description: 'Date or ISO datetime representing the exclusive end of the date range.',
+          },
         ],
         responses: {
           200: {
@@ -125,6 +146,27 @@ const spec = {
             required: false,
             type: 'string',
             description: 'Optional comma-separated field API names to include in each record.',
+          },
+          {
+            name: 'date_field',
+            in: 'query',
+            required: false,
+            type: 'string',
+            description: 'Optional CRM date field API name to filter by, such as Created_Time or Modified_Time.',
+          },
+          {
+            name: 'from',
+            in: 'query',
+            required: false,
+            type: 'string',
+            description: 'Date or ISO datetime representing the start of the inclusive date range.',
+          },
+          {
+            name: 'to',
+            in: 'query',
+            required: false,
+            type: 'string',
+            description: 'Date or ISO datetime representing the exclusive end of the date range.',
           },
           {
             name: 'filter',

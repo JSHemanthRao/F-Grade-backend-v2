@@ -57,6 +57,122 @@ function buildZohoRequestConfig(options = {}, extra = {}) {
   };
 }
 
+const SYSTEM_FIELD_CANDIDATES = ['Created_Time', 'Modified_Time', 'Created_By', 'Modified_By'];
+const FIELD_METADATA_CACHE = new Map();
+
+function normalizeFieldName(value) {
+  return String(value || '').trim();
+}
+
+function fieldExists(fields = [], fieldName) {
+  if (!Array.isArray(fields) || !fieldName) {
+    return false;
+  }
+
+  const normalizedField = normalizeFieldName(fieldName).toLowerCase();
+
+  return fields.some((field) => normalizeFieldName(field).toLowerCase() === normalizedField);
+}
+
+async function getModuleFieldNames(moduleKey) {
+  const normalizedKey = normalizeModuleKey(moduleKey);
+  const moduleDefinition = getModuleDefinition(normalizedKey);
+  const cacheKey = moduleDefinition.endpoint;
+
+  if (FIELD_METADATA_CACHE.has(cacheKey)) {
+    return FIELD_METADATA_CACHE.get(cacheKey);
+  }
+
+  const moduleFields = Array.isArray(moduleDefinition.defaultFields)
+    ? moduleDefinition.defaultFields.map(normalizeFieldName)
+    : [];
+
+  try {
+    const metadataFields = await getModuleFields(normalizedKey);
+    const normalizedMetadataFields = Array.isArray(metadataFields)
+      ? metadataFields.map(normalizeFieldName).filter(Boolean)
+      : [];
+    const allFields = Array.from(new Set([...moduleFields, ...normalizedMetadataFields]));
+    FIELD_METADATA_CACHE.set(cacheKey, allFields);
+    return allFields;
+  } catch (error) {
+    const fallbackFields = Array.from(new Set(moduleFields));
+    FIELD_METADATA_CACHE.set(cacheKey, fallbackFields);
+    return fallbackFields;
+  }
+}
+
+function buildDateRangeCriteria(dateField, fromValue, toValue) {
+  if (!dateField) {
+    return null;
+  }
+
+  if (fromValue === undefined || fromValue === null || fromValue === ''
+    || toValue === undefined || toValue === null || toValue === '') {
+    const error = new Error('date_field filtering requires both from and to parameters.');
+    error.status = 400;
+    throw error;
+  }
+
+  const start = normalizeDateInput(fromValue, 'from');
+  const end = normalizeDateInput(toValue, 'to');
+
+  if (new Date(start).valueOf() >= new Date(end).valueOf()) {
+    const error = new Error('The from date must be earlier than the to date.');
+    error.status = 400;
+    throw error;
+  }
+
+  return `(${dateField}:greater_equal:${start})and(${dateField}:less_than:${end})`;
+}
+
+function normalizeDateInput(value, name) {
+  const raw = String(value || '').trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return `${raw}T00:00:00Z`;
+  }
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.valueOf())) {
+    const error = new Error(`${name} must be a valid date or ISO datetime string.`);
+    error.status = 400;
+    throw error;
+  }
+
+  return formatZohoDate(date);
+}
+
+function getDateCriteria(moduleDefinition, availableFields, options = {}) {
+  const requestedDateField = normalizeFieldName(options.date_field ?? options.dateField);
+  if (!requestedDateField) {
+    return null;
+  }
+
+  if (!fieldExists(availableFields, requestedDateField)) {
+    const error = new Error(`Requested date field '${requestedDateField}' is not available for CRM module ${moduleDefinition.label}.`);
+    error.status = 400;
+    throw error;
+  }
+
+  return buildDateRangeCriteria(requestedDateField, options.from, options.to);
+}
+
+function addSystemFields(fields, availableFields) {
+  if (!Array.isArray(fields) || !Array.isArray(availableFields)) {
+    return fields;
+  }
+
+  const result = [...fields];
+  SYSTEM_FIELD_CANDIDATES.forEach((systemField) => {
+    if (!fieldExists(result, systemField) && fieldExists(availableFields, systemField)) {
+      result.push(systemField);
+    }
+  });
+
+  return result;
+}
+
 function isTimeoutOrCancellation(error) {
   return error?.code === 'ECONNABORTED'
     || error?.code === 'ETIMEDOUT'
@@ -672,6 +788,14 @@ async function executeSearchAggregate(moduleKey, moduleDefinition, options = {})
 async function getCount(moduleKey, options = {}) {
   const normalizedKey = normalizeModuleKey(moduleKey);
   const moduleDefinition = getModuleDefinition(normalizedKey);
+  const availableFields = await getModuleFieldNames(normalizedKey);
+  const dateCriteria = getDateCriteria(moduleDefinition, availableFields, options);
+  if (dateCriteria) {
+    const previousCriteria = normalizeCriteriaValue(options.criteria ?? options.filter ?? options.filters);
+    options.criteria = previousCriteria
+      ? `${previousCriteria}and${dateCriteria}`
+      : dateCriteria;
+  }
 
   const queryPlan = buildQueryPlan(normalizedKey, options);
   if (queryPlan.mode === 'coql') {
@@ -767,6 +891,20 @@ async function getRecords(moduleKey, options = {}) {
     ...retrievalPlan.params,
     retrieval_mode: effectiveRetrievalMode,
   };
+
+  const availableFields = await getModuleFieldNames(normalizedKey);
+  if (!effectiveOptions.fields) {
+    effectiveOptions.fields = addSystemFields(moduleDefinition.defaultFields || [], availableFields);
+  }
+
+  const dateCriteria = getDateCriteria(moduleDefinition, availableFields, effectiveOptions);
+  if (dateCriteria) {
+    const previousCriteria = normalizeCriteriaValue(effectiveOptions.criteria ?? effectiveOptions.filter ?? effectiveOptions.filters);
+    effectiveOptions.criteria = previousCriteria
+      ? `${previousCriteria}and${dateCriteria}`
+      : dateCriteria;
+  }
+
   if (!effectiveOptions.queryPlan && !effectiveOptions.criteria && !effectiveOptions.filter && !effectiveOptions.filters) {
     const inferredCriteria = buildCountCriteria(normalizedKey, moduleDefinition, effectiveOptions, getRequestText(effectiveOptions));
     if (inferredCriteria) effectiveOptions.criteria = inferredCriteria;

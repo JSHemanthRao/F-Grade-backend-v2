@@ -11,14 +11,20 @@
   },
   "host": "f-grade-backend.onrender.com",
   "basePath": "/",
-  "schemes": ["https"],
-  "produces": ["application/json"],
+  "schemes": [
+    "https"
+  ],
+  "produces": [
+    "application/json"
+  ],
   "security": [],
   "paths": {
     "/api/crm/count": {
       "get": {
         "operationId": "countCRMRecords",
-        "tags": ["CRM"],
+        "tags": [
+          "CRM"
+        ],
         "summary": "Count Zoho CRM records",
         "description": "Use this operation whenever the user asks how many, count, total, number of records, or a filtered record count. Returns the complete matching CRM record count. Never use pagination for this operation.",
         "parameters": [
@@ -35,6 +41,27 @@
             "required": false,
             "type": "string",
             "description": "Optional Zoho CRM criteria string for filtered counts."
+          },
+          {
+            "name": "date_field",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Optional CRM date field API name to filter count by, such as Created_Time or Modified_Time."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Date or ISO datetime representing the start of the inclusive date range."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Date or ISO datetime representing the exclusive end of the date range."
           }
         ],
         "responses": {
@@ -43,11 +70,22 @@
             "schema": {
               "type": "object",
               "properties": {
-                "success": { "type": "boolean" },
-                "module": { "type": "string" },
-                "count": { "type": "integer", "format": "int32" },
-                "executionTime": { "type": "string" },
-                "source": { "type": "string" }
+                "success": {
+                  "type": "boolean"
+                },
+                "module": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "executionTime": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -56,8 +94,12 @@
             "schema": {
               "type": "object",
               "properties": {
-                "success": { "type": "boolean" },
-                "error": { "type": "string" }
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -66,8 +108,12 @@
             "schema": {
               "type": "object",
               "properties": {
-                "success": { "type": "boolean" },
-                "error": { "type": "string" }
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -76,8 +122,12 @@
             "schema": {
               "type": "object",
               "properties": {
-                "success": { "type": "boolean" },
-                "error": { "type": "string" }
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -87,7 +137,9 @@
     "/api/crm/query": {
       "get": {
         "operationId": "queryCRMRecords",
-        "tags": ["CRM"],
+        "tags": [
+          "CRM"
+        ],
         "summary": "Query Zoho CRM records",
         "description": "Use this operation when the user asks to view, list, show, retrieve, or inspect CRM records. The backend searches the complete matching CRM dataset internally and returns a display batch. Do not treat one returned batch as the complete dataset.",
         "parameters": [
@@ -124,6 +176,27 @@
             "description": "Optional comma-separated field API names to include in each record."
           },
           {
+            "name": "date_field",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Optional CRM date field API name to filter by, such as Created_Time or Modified_Time."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Date or ISO datetime representing the start of the inclusive date range."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Date or ISO datetime representing the exclusive end of the date range."
+          },
+          {
             "name": "filter",
             "in": "query",
             "required": false,
@@ -144,13 +217,30 @@
             "schema": {
               "type": "object",
               "properties": {
-                "success": { "type": "boolean" },
-                "module": { "type": "string" },
-                "count": { "type": "integer", "format": "int32" },
-                "page": { "type": "integer", "format": "int32" },
-                "per_page": { "type": "integer", "format": "int32" },
-                "executionTime": { "type": "string" },
-                "source": { "type": "string" },
+                "success": {
+                  "type": "boolean"
+                },
+                "module": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "page": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "per_page": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "executionTime": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
                 "data": {
                   "type": "array",
                   "items": {
@@ -165,8 +255,12 @@
             "schema": {
               "type": "object",
               "properties": {
-                "success": { "type": "boolean" },
-                "error": { "type": "string" }
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -175,8 +269,12 @@
             "schema": {
               "type": "object",
               "properties": {
-                "success": { "type": "boolean" },
-                "error": { "type": "string" }
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -185,81 +283,12 @@
             "schema": {
               "type": "object",
               "properties": {
-                "success": { "type": "boolean" },
-                "error": { "type": "string" }
-               }
-            }
-          }
-        }
-      }
-    },
-    "/api/crm/dns": {
-      "get": {
-        "operationId": "dnsChecker",
-        "tags": ["DNS"],
-        "summary": "Check DNS records for a domain",
-        "description": "Use this operation to perform a DNS record lookup for a domain. Returns structured DNS record data and a markdown table format. Do not use web search or website scraping for DNS results.",
-        "parameters": [
-          {
-            "name": "domain",
-            "in": "query",
-            "required": true,
-            "type": "string",
-            "description": "The domain name to query. Example: example.com"
-          },
-          {
-            "name": "type",
-            "in": "query",
-            "required": false,
-            "type": "string",
-            "description": "Optional DNS record type to filter the lookup, such as A, MX, NS, TXT, CNAME, SOA. Multiple types may be separated by commas."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful DNS lookup response",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "success": { "type": "boolean" },
-                "source": { "type": "string" },
-                "domain": { "type": "string" },
-                "summary": { "type": "string" },
-                "data": { "type": "object" },
-                "completeRecords": { "type": "object" },
-                "requestedRecords": { "type": "array", "items": { "type": "string" } },
-                "tables": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "title": { "type": "string" },
-                      "columns": { "type": "array", "items": { "type": "string" } },
-                      "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
-                      "markdown": { "type": "string" }
-                    }
-                  }
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
                 }
-              }
-            }
-          },
-          "400": {
-            "description": "Validation error",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "success": { "type": "boolean" },
-                "error": { "type": "string" }
-              }
-            }
-          },
-          "500": {
-            "description": "Server error or DNS lookup error",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "success": { "type": "boolean" },
-                "error": { "type": "string" }
               }
             }
           }
