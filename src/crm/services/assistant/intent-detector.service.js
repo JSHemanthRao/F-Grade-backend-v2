@@ -12,7 +12,7 @@ const INTENT_PATTERNS = {
   COMPARE: [/(compare|versus|vs|difference|difference between|better than|worse than)/i],
   SUMMARY: [/(summary|overview|snapshot|report)/i],
   ANALYTICS: [/(analytics|trend|distribution|performance|top|bottom|ranking|leader|owner)/i],
-  AGGREGATION: [/(sum|average|total(?:\s+\w+){0,3}\s+(?:value|revenue|amount)|revenue|amount|deal value|median|percentage|growth|rate)/i],
+  AGGREGATION: [/(sum|average|total(?:\s+\w+){0,3}\s+(?:value|revenue|amount|sales)|revenue|sales|amount|deal value|median|percentage|growth|rate)/i],
   EXPLAIN: [/(why|explain|reason|cause)/i],
 };
 

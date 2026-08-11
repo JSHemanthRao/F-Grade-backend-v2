@@ -36,6 +36,34 @@ test('created-in-period requests select Created_Time instead of a deal closing d
   assert.equal(queryPlan.filters.find((filter) => filter.logicalField === 'date').field, 'Created_Time');
 });
 
+test('monthly customer data defaults to deal activity instead of account creation', () => {
+  const plan = buildExecutionPlan('Give me July customer data');
+  assert.deepEqual(plan.modules, ['deals']);
+  assert.equal(plan.queryPlan.module, 'Deals');
+  assert.equal(plan.queryPlan.dateField, 'Closing_Date');
+  assert.equal(plan.queryPlan.startDate, '2026-07-01T00:00:00Z');
+  assert.equal(plan.queryPlan.endDate, '2026-08-01T00:00:00Z');
+  assert.equal(plan.queryPlan.customerScope, 'all');
+  assert.equal(plan.queryPlan.fields.includes('Created_Time'), true);
+});
+
+test('new customer period requests use creation date explicitly', () => {
+  const plan = buildExecutionPlan('Give me July data for new customers only');
+  assert.deepEqual(plan.modules, ['accounts']);
+  assert.equal(plan.queryPlan.dateField, 'Created_Time');
+  assert.equal(plan.queryPlan.customerScope, 'new');
+  assert.equal(plan.queryPlan.filters.find((filter) => filter.logicalField === 'date').field, 'Created_Time');
+});
+
+test('existing customer period requests keep the business date and add an internal scope filter', () => {
+  const plan = buildExecutionPlan('Give me July data for existing customers only');
+  assert.deepEqual(plan.modules, ['deals']);
+  assert.equal(plan.queryPlan.dateField, 'Closing_Date');
+  assert.equal(plan.queryPlan.customerScope, 'existing');
+  assert.equal(plan.queryPlan.filters.some((filter) => filter.logicalField === 'date' && filter.field === 'Closing_Date'), true);
+  assert.equal(plan.queryPlan.filters.some((filter) => filter.logicalField === 'customer_scope' && filter.field === 'Created_Time'), true);
+});
+
 test('aggregate plans contain the exact operation and amount field', () => {
   const queryPlan = buildExecutionPlan('What is the total Closed Won value in June 2026?').queryPlan;
   assert.equal(queryPlan.module, 'Deals');

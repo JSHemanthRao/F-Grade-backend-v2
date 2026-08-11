@@ -11,6 +11,7 @@ const {
   formatCurrency,
   isMonetaryField,
 } = require('./currency.service');
+const { getCustomerRecordScope } = require('../business-criteria.service');
 
 const DATE_FIELDS = ['Closing_Date', 'Created_Time', 'CreatedDate', 'created_time', 'Created_Date', 'Modified_Time'];
 const AVAILABILITY_FIELDS = [
@@ -296,6 +297,57 @@ function matchingRecordTotal(datasets, displayTotal) {
   return Math.max(displayTotal, ...infoFrom(datasets).map((info) => Number(info.count)).filter(Number.isFinite), 0);
 }
 
+function dateInRange(value, startDate, endDate) {
+  const date = value ? new Date(value) : null;
+  const start = startDate ? new Date(startDate) : null;
+  const end = endDate ? new Date(endDate) : null;
+  if (!date || !start || !end || Number.isNaN(date.valueOf()) || Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) return null;
+  return date >= start && date < end;
+}
+
+function amountTotal(records) {
+  return records.reduce((total, record) => (
+    total + (numericValue(record?.Amount ?? record?.amount ?? record?.value ?? record?.Grand_Total ?? record?.Revenue ?? record?.Total_Revenue) ?? 0)
+  ), 0);
+}
+
+function aggregateTotal(calculations, records) {
+  const calculation = calculations.find((item) => ['total_revenue', 'sum', 'closed_won_value', 'pipeline'].includes(item.type));
+  const value = calculation ? numericValue(calculation.value) : null;
+  return value === null ? amountTotal(records) : value;
+}
+
+function buildRetrievalMetadata(plan, datasets, records, calculations, matchingTotal) {
+  const startDate = plan.timeRange?.startDate || null;
+  const endDate = plan.timeRange?.endDate || null;
+  const classified = records.reduce((counts, record) => {
+    const isNew = dateInRange(record?.Created_Time ?? record?.Created_Date ?? record?.CreatedDate, startDate, endDate);
+    if (isNew === true) counts.newRecords += 1;
+    else if (isNew === false) counts.existingRecords += 1;
+    else counts.unclassifiedRecords += 1;
+    return counts;
+  }, { newRecords: 0, existingRecords: 0, unclassifiedRecords: 0 });
+  const total = aggregateTotal(calculations, records);
+  const infos = infoFrom(datasets);
+
+  return {
+    requestedPeriod: {
+      label: plan.timeRange?.label || 'the requested period',
+      startDate,
+      endDate,
+    },
+    businessDateField: plan.queryPlan?.dateField || null,
+    customerScope: plan.queryPlan?.customerScope || getCustomerRecordScope(plan.question),
+    totalRecordsRetrieved: matchingTotal,
+    totalRecordsEvaluated: matchingTotal,
+    newRecords: records.length ? classified.newRecords : null,
+    existingRecords: records.length ? classified.existingRecords : null,
+    unclassifiedRecords: records.length ? classified.unclassifiedRecords : null,
+    duplicateRecordsRemoved: infos.reduce((totalRemoved, info) => totalRemoved + (Number(info.duplicateRecordsRemoved) || 0), 0),
+    totalAmountRevenue: formatCurrency(total),
+  };
+}
+
 const FACTUAL_OBSERVATION_TYPES = new Set([
   'highest_value',
   'lowest_value',
@@ -361,6 +413,7 @@ function formatResponse(plan, datasets, calculations, options = {}) {
   const remainingRecords = Math.max(0, displayTotal - (displayStart + displayRecords.length));
   const formattedRecords = displayRecords.map(formatDisplayedRecord);
   const matchingTotal = matchingRecordTotal(datasets, displayTotal);
+  const retrievalMetadata = buildRetrievalMetadata(plan, datasets, records, calculations, matchingTotal);
   const structuredModule = plan.queryPlan?.module || (plan.modules?.length === 1 ? plan.modules[0] : plan.modules);
   const structuredOperation = plan.queryPlan?.operation || (plan.intents?.includes('LIST') ? 'LIST' : null);
   const observations = factualObservations(options.insights);
@@ -389,6 +442,8 @@ function formatResponse(plan, datasets, calculations, options = {}) {
     records: formattedRecords,
     displayed: formattedRecords.length,
     totalMatching: matchingTotal,
+    crmRetrievalMetadata: retrievalMetadata,
+    retrievalMetadata,
     hasMore: remainingRecords > 0,
     tables: buildTables(formattedRecords),
     continuation: {

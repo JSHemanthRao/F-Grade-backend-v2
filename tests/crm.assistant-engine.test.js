@@ -174,7 +174,7 @@ test('assistant engine builds a count plan for simple count questions', async ()
 });
 
 test('assistant engine returns a clear module error when the question has no module alias', async () => {
-  const response = await assistantEngine.handleAssistantRequest({ question: 'How much revenue is there?' });
+  const response = await assistantEngine.handleAssistantRequest({ question: 'How much is there?' });
 
   assert.equal(response.success, false);
   assert.equal(response.message, 'I could not identify the CRM information needed to answer that question.');
@@ -324,6 +324,69 @@ test('assistant uses CRM-side aggregation for total Closed Won value', async () 
     assert.match(calls[0].criteria, /Closing_Date:greater_equal:2026-06-01/);
     assert.match(response.summary, /₹1,25,000/);
     assert.equal(response.calculations.some((item) => item.type === 'sum' && item.value === 125000), true);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('assistant defaults July customer data to complete new and existing deal activity', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  const calls = [];
+  const julyDeals = [
+    { id: 'new-july', Deal_Name: 'New July customer', Account_Name: 'Asha Foods', Amount: 160000, Closing_Date: '2026-07-08T00:00:00Z', Created_Time: '2026-07-01T00:00:00Z' },
+    { id: 'existing-july', Deal_Name: 'Existing July customer', Account_Name: 'Bharat Retail', Amount: 240000, Closing_Date: '2026-07-15T00:00:00Z', Created_Time: '2026-04-03T00:00:00Z' },
+    { id: 'existing-july-late-page', Deal_Name: 'Existing July page 2', Account_Name: 'Cedar Stores', Amount: '\u20B990,000', Closing_Date: '2026-07-20T00:00:00Z', Created_Time: '2026-06-03T00:00:00Z' },
+    { id: 'existing-july-late-page', Deal_Name: 'Duplicate July page 2', Account_Name: 'Cedar Stores', Amount: '\u20B990,000', Closing_Date: '2026-07-20T00:00:00Z', Created_Time: '2026-06-03T00:00:00Z' },
+    { id: 'august-deal', Deal_Name: 'August customer', Account_Name: 'Delta', Amount: 700000, Closing_Date: '2026-08-01T00:00:00Z', Created_Time: '2026-07-02T00:00:00Z' },
+  ];
+
+  recordsService.getRecords = async (moduleKey, options) => {
+    calls.push({ moduleKey, options });
+    return { data: julyDeals, info: { count: julyDeals.length, retrievalComplete: true, more_records: false, duplicateRecordsRemoved: 1 } };
+  };
+
+  try {
+    const response = await assistantEngine.handleAssistantRequest({ question: 'Give me July customer data' });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].moduleKey, 'deals');
+    assert.equal(calls[0].options.retrieval_mode, 'all');
+    assert.match(calls[0].options.criteria, /Closing_Date:greater_equal:2026-07-01/);
+    assert.match(calls[0].options.criteria, /Closing_Date:less_than:2026-08-01/);
+    assert.doesNotMatch(calls[0].options.criteria, /Created_Time|Modified_Time/);
+    assert.deepEqual(response.data.map((record) => record.id), ['new-july', 'existing-july', 'existing-july-late-page']);
+    assert.equal(response.crmRetrievalMetadata.newRecords, 1);
+    assert.equal(response.crmRetrievalMetadata.existingRecords, 2);
+    assert.equal(response.crmRetrievalMetadata.totalAmountRevenue, '\u20B94,90,000');
+    assert.equal(response.crmRetrievalMetadata.duplicateRecordsRemoved, 1);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('assistant filters July data to existing customers only after complete retrieval', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  let receivedOptions;
+  recordsService.getRecords = async (_moduleKey, options) => {
+    receivedOptions = options;
+    return {
+      data: [
+        { id: 'new-july', Amount: 160000, Closing_Date: '2026-07-05T00:00:00Z', Created_Time: '2026-07-01T00:00:00Z' },
+        { id: 'existing-july', Amount: 240000, Closing_Date: '2026-07-15T00:00:00Z', Created_Time: '2026-06-01T00:00:00Z' },
+      ],
+      info: { count: 2, retrievalComplete: true, more_records: false },
+    };
+  };
+
+  try {
+    const response = await assistantEngine.handleAssistantRequest({ question: 'Give me July data for existing customers only' });
+
+    assert.equal(receivedOptions.retrieval_mode, 'all');
+    assert.match(receivedOptions.criteria, /Closing_Date:greater_equal:2026-07-01/);
+    assert.doesNotMatch(receivedOptions.criteria, /Created_Time:greater_equal/);
+    assert.deepEqual(response.data.map((record) => record.id), ['existing-july']);
+    assert.equal(response.crmRetrievalMetadata.customerScope, 'existing');
+    assert.equal(response.crmRetrievalMetadata.existingRecords, 1);
   } finally {
     recordsService.getRecords = originalGetRecords;
   }

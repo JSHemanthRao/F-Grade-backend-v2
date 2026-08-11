@@ -1,4 +1,5 @@
 const { getModuleDefinition } = require('./module-definition.service');
+const { selectBusinessDateField } = require('./business-criteria.service');
 
 const DATE_WORDS = /\b(created[_\s]*time|created|closing[_\s]*date|modified[_\s]*time|modified|converted[_\s]*time|converted|this\s+month|current\s+month|month[-\s]+to[-\s]+date|last\s+month|previous\s+month|last\s+\d+\s+months?|last\s+year|between\s+dates?|date\s+range|january|february|march|april|may|june|july|august|september|october|november|december)\b/i;
 const ANALYTICS_WORDS = /\b(average|avg|sum|total\s+(?:value|revenue)|revenue|comparison|compare|trend|analytics|distribution|growth|rate|top|bottom|ranking|between|join|conver(?:ted|sion|sions)|qualified|became\s+a\s+deal)\b/i;
@@ -54,15 +55,7 @@ function getWeekWindow(weekOffset = 0) {
 }
 
 function getDateField(moduleKey, requestText, conversionFields = []) {
-  const text = normalizeText(requestText).toLowerCase();
-  if (moduleKey === 'leads' && /conver/.test(text)) {
-    return conversionFields.find((field) => /converted.*(date|time)|converted_time/i.test(field)) || 'Converted_Date_Time';
-  }
-  if (moduleKey === 'deals' && /closed|closing/.test(text)) return 'Closing_Date';
-  if (/modified/.test(text)) return 'Modified_Time';
-  if (/created/.test(text)) return 'Created_Time';
-  if (moduleKey === 'deals') return 'Closing_Date';
-  return 'Created_Time';
+  return selectBusinessDateField(moduleKey, requestText, conversionFields);
 }
 
 function getMonthWindow(monthOffset = 0) {

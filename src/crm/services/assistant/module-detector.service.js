@@ -1,9 +1,10 @@
 const { DEBUG_ASSISTANT } = require('../../../common/config/env');
 const logger = require('../../../common/logging/logger');
+const { shouldDefaultMonthlyBusinessActivityToDeals } = require('../business-criteria.service');
 
 const MODULE_PATTERNS = {
   leads: /\b(lead|leads|prospect|prospects)\b/i,
-  deals: /\b(deal|deals|opportunity|opportunities|sale\b(?!\s+orders?)|sales\b(?!\s+orders?)|closed\s+won|deal\s+value)\b/i,
+  deals: /\b(deal|deals|opportunity|opportunities|sale\b(?!\s+orders?)|sales\b(?!\s+orders?)|revenue|closed\s+won|deal\s+value)\b/i,
   contacts: /\b(contact|contacts)\b/i,
   accounts: /\b(account|accounts|customer|customers|company|companies|business|businesses)\b/i,
   events: /\b(event|events|meeting|meetings|appointment|appointments)\b/i,
@@ -71,7 +72,10 @@ function detectModules(question = '') {
     }
   }
 
-  const finalModule = modules.length > 0 ? modules : [];
+  const finalModule = shouldDefaultMonthlyBusinessActivityToDeals(normalizedQuestion)
+    && (modules.length === 0 || (modules.length === 1 && modules[0] === 'accounts'))
+    ? ['deals']
+    : modules.length > 0 ? modules : [];
   logModuleDebug(question, normalizedQuestion, tokens, normalizedTokens, checks, finalModule);
 
   return finalModule;

@@ -1,11 +1,16 @@
 const { DEBUG_ASSISTANT } = require('../../common/config/env');
 const { getModuleDefinition } = require('./module-definition.service');
 const { detectTimeRange } = require('./assistant/date-detector.service');
+const {
+  getCustomerRecordScope,
+  selectBusinessDateField,
+} = require('./business-criteria.service');
 const logger = require('../../common/logging/logger');
 
 const OPERATORS = new Set([
   'equals', 'not_equals', 'contains', 'starts_with', 'ends_with',
   'greater_than', 'greater_equal', 'less_than', 'less_equal', 'between', 'in',
+  'existing_in_period',
 ]);
 
 const OPERATOR_ALIASES = {
@@ -128,13 +133,7 @@ function parseDateFilter(question, timeRange, moduleKey) {
   if (isCompare && hasRelativeMonthOrYear && range?.periods?.length > 1) return null;
   if (!range?.startDate || !range?.endDate || range.range === 'all_time') return null;
   const text = String(question || '').toLowerCase();
-  const dateField = /conver|converted/i.test(text)
-    ? 'Converted_Date_Time'
-    : /created|creation|added/i.test(text)
-      ? 'Created_Time'
-      : /modified|updated/i.test(text)
-        ? 'Modified_Time'
-        : (DATE_FIELDS_BY_MODULE[moduleKey] || 'Created_Time');
+  const dateField = selectBusinessDateField(moduleKey, text);
   return {
     field: dateField,
     logicalField: 'date',
@@ -161,7 +160,7 @@ function parseYearFilter(question, moduleKey) {
 function parseQuestionFilters(question, moduleKey, timeRange) {
   const text = String(question || '');
   const filters = [];
-  const stageMatches = [...text.matchAll(/\b(closed\s+won|closed\s+lost|qualification|needs\s+analysis|value\s+proposition|negotiation|proposal|new|open|won|lost)\b/gi)]
+  const stageMatches = [...text.matchAll(/\b(closed\s+won|closed\s+lost|qualification|needs\s+analysis|value\s+proposition|negotiation|proposal|open|won|lost)\b/gi)]
     .map((match) => match[1]);
   if (stageMatches.length > 0) {
     filters.push({ field: 'Stage', logicalField: 'stage', operator: 'in', value: [...new Set(stageMatches)], source: 'question' });
@@ -174,7 +173,10 @@ function parseQuestionFilters(question, moduleKey, timeRange) {
   }
 
   const companyMatch = text.match(/\b(?:company|account|customer)\b(?:\s+is|\s+named|\s*=|\s*:)?\s*([a-z][a-z0-9 &.'-]{1,80}?)(?=\s+(?:for|from|in|with|and|above|below|over|under|this|last|between)\b|$)/i);
-  if (companyMatch) filters.push({ field: 'Account_Name', logicalField: 'company', operator: 'equals', value: companyMatch[1].trim(), source: 'question' });
+  const companyValue = companyMatch?.[1]?.trim();
+  if (companyValue && !/^(?:data|records?|only|created|added|new|existing)$/i.test(companyValue)) {
+    filters.push({ field: 'Account_Name', logicalField: 'company', operator: 'equals', value: companyValue, source: 'question' });
+  }
 
   const productMatch = text.match(/\bproduct\b(?:\s+is|\s+named|\s*=|\s*:)?\s*([a-z][a-z0-9 &.'-]{1,80}?)(?=\s+(?:for|from|in|with|and|above|below|over|under|this|last|between)\b|$)/i);
   if (productMatch) filters.push({ field: 'Product_Name', logicalField: 'product', operator: 'equals', value: productMatch[1].trim(), source: 'question' });
@@ -199,12 +201,23 @@ function parseQuestionFilters(question, moduleKey, timeRange) {
   if (textSearch) filters.push({ field: '*', logicalField: 'text', operator: 'contains', value: textSearch[1], source: 'question' });
 
   const dateFilter = parseDateFilter(question, timeRange, moduleKey) || parseYearFilter(question, moduleKey);
-  if (dateFilter) filters.push(dateFilter);
+  if (dateFilter) {
+    filters.push(dateFilter);
+    if (getCustomerRecordScope(question) === 'existing') {
+      filters.push({
+        field: 'Created_Time',
+        logicalField: 'customer_scope',
+        operator: 'existing_in_period',
+        value: dateFilter.value,
+        source: 'customer_scope',
+      });
+    }
+  }
   return filters;
 }
 
 function hasStageRequest(question) {
-  return /(closed\s*won|closed\s*lost|qualification|needs\s+analysis|value\s+proposition|negotiation|proposal|new|open|won|lost)\b/i.test(question);
+  return /\b(closed\s*won|closed\s*lost|qualification|needs\s+analysis|value\s+proposition|negotiation|proposal|open|won|lost)\b/i.test(question);
 }
 
 function hasOwnerRequest(question) {
@@ -212,7 +225,8 @@ function hasOwnerRequest(question) {
 }
 
 function hasCompanyRequest(question) {
-  return /\b(?:company|account|customer)\b(?:\s+is|\s+named|\s*=|\s*:)?/i.test(question);
+  return /\b(?:company|account)\b(?:\s+is|\s+named|\s*=|\s*:)?/i.test(question)
+    || /\bcustomer\b(?:\s+is|\s+named|\s*=|\s*:)\s+/i.test(question);
 }
 
 function hasAmountRequest(question) {
@@ -277,7 +291,7 @@ function validateFilter(filter, moduleKey, records = []) {
   if (filter.operator === 'in' && (!Array.isArray(filter.value) || filter.value.length === 0)) {
     errors.push({ code: 'INVALID_VALUE', field: filter.logicalField, message: 'In filters require one or more values.' });
   }
-  if (!moduleSupportsField(moduleKey, filter.logicalField, records)) errors.push({ code: 'UNSUPPORTED_FIELD', field: filter.field, module: moduleKey, message: `The ${moduleKey} module does not support the ${filter.field} filter.` });
+  if (filter.logicalField !== 'customer_scope' && !moduleSupportsField(moduleKey, filter.logicalField, records)) errors.push({ code: 'UNSUPPORTED_FIELD', field: filter.field, module: moduleKey, message: `The ${moduleKey} module does not support the ${filter.field} filter.` });
   return errors;
 }
 
@@ -294,6 +308,12 @@ function recordValue(record, field) {
 
 function matchesFilter(record, filter) {
   const raw = recordValue(record, filter.field);
+  if (filter.logicalField === 'customer_scope') {
+    const actual = parseDate(raw)?.valueOf();
+    const expected = (Array.isArray(filter.value) ? filter.value : [filter.value]).map((value) => parseDate(value)?.valueOf());
+    if (!actual || expected.some((value) => value === undefined || Number.isNaN(value))) return false;
+    if (filter.operator === 'existing_in_period') return actual < expected[0] || actual >= expected[1];
+  }
   if (filter.logicalField === 'text') return normalizeText(raw).includes(normalizeText(filter.value));
   if (filter.logicalField === 'amount') {
     const actual = normalizeAmount(raw);
@@ -335,7 +355,7 @@ function escapeCriteriaValue(value) {
 function serverCriteria(filters) {
   const clauses = [];
   filters.forEach((filter) => {
-    if (filter.field === '*') return;
+    if (filter.field === '*' || filter.logicalField === 'customer_scope') return;
     if (filter.operator === 'between') {
       clauses.push(`(${filter.field}:greater_equal:${escapeCriteriaValue(filter.value[0])})`);
       clauses.push(`(${filter.field}:less_than:${escapeCriteriaValue(filter.value[1])})`);
@@ -379,19 +399,21 @@ function buildFilterPlan({ question = '', module, modules = [], plan = {}, conte
   const requestedFilters = detectRequestedFilters(question, plan.timeRange, moduleKey);
   const requestedValidationErrors = [];
 
-  if (requestedFilters.stage && !applicableFilters.some((filter) => filter.logicalField === 'stage')) {
+  const ignoredLogicalFields = new Set(ignoredFilters.map((filter) => filter.logicalField));
+
+  if (requestedFilters.stage && !applicableFilters.some((filter) => filter.logicalField === 'stage') && !ignoredLogicalFields.has('stage')) {
     requestedValidationErrors.push({ code: 'MISSING_REQUESTED_STAGE_FILTER', field: 'stage', message: 'A stage filter was requested but could not be applied.' });
   }
-  if (requestedFilters.date && !applicableFilters.some((filter) => filter.logicalField === 'date')) {
+  if (requestedFilters.date && !applicableFilters.some((filter) => filter.logicalField === 'date') && !ignoredLogicalFields.has('date')) {
     requestedValidationErrors.push({ code: 'MISSING_REQUESTED_DATE_FILTER', field: 'date', message: 'A date filter was requested but could not be applied.' });
   }
-  if (requestedFilters.owner && !applicableFilters.some((filter) => filter.logicalField === 'owner')) {
+  if (requestedFilters.owner && !applicableFilters.some((filter) => filter.logicalField === 'owner') && !ignoredLogicalFields.has('owner')) {
     requestedValidationErrors.push({ code: 'MISSING_REQUESTED_OWNER_FILTER', field: 'owner', message: 'An owner filter was requested but could not be applied.' });
   }
-  if (requestedFilters.amount && !applicableFilters.some((filter) => filter.logicalField === 'amount')) {
+  if (requestedFilters.amount && !applicableFilters.some((filter) => filter.logicalField === 'amount') && !ignoredLogicalFields.has('amount')) {
     requestedValidationErrors.push({ code: 'MISSING_REQUESTED_AMOUNT_FILTER', field: 'amount', message: 'An amount filter was requested but could not be applied.' });
   }
-  if (requestedFilters.company && !applicableFilters.some((filter) => filter.logicalField === 'company')) {
+  if (requestedFilters.company && !applicableFilters.some((filter) => filter.logicalField === 'company') && !ignoredLogicalFields.has('company')) {
     requestedValidationErrors.push({ code: 'MISSING_REQUESTED_COMPANY_FILTER', field: 'company', message: 'A company filter was requested but could not be applied.' });
   }
 

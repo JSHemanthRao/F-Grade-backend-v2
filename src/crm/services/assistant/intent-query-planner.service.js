@@ -1,5 +1,10 @@
 const { getModuleDefinition } = require('../module-definition.service');
 const { parseQuestionFilters } = require('../filtering-engine.service');
+const {
+  getCustomerRecordScope,
+  isExplicitCreationRequest,
+  selectBusinessDateField,
+} = require('../business-criteria.service');
 
 const DISPLAY_LIMIT = 25;
 const AMOUNT_FIELDS = ['Amount', 'Grand_Total', 'Annual_Revenue', 'Unit_Price', 'Revenue', 'Total_Revenue'];
@@ -30,12 +35,7 @@ const LABEL_FIELDS_BY_MODULE = {
 const UNIVERSAL_CRM_FIELDS = new Set(['id', 'Created_Time', 'Modified_Time', 'Converted_Date_Time', 'Converted__s', 'Converted_Deal']);
 
 function dateFieldFor(moduleKey, question) {
-  const text = String(question || '').toLowerCase();
-  if (/converted|conversion/.test(text)) return 'Converted_Date_Time';
-  if (/modified|updated/.test(text)) return 'Modified_Time';
-  if (/created|creation|added/.test(text)) return 'Created_Time';
-  if (/closed|closing/.test(text) && moduleKey === 'deals') return 'Closing_Date';
-  return DATE_FIELDS_BY_MODULE[moduleKey] || 'Created_Time';
+  return selectBusinessDateField(moduleKey, question);
 }
 
 function amountFieldFor(moduleDefinition) {
@@ -96,6 +96,7 @@ function fieldsFor({ moduleKey, moduleDefinition, operation, question, timeRange
   if (entities?.companies?.length || /account|company|customer/i.test(text)) fields.add(moduleKey === 'deals' ? 'Account_Name' : 'Company');
   if (entities?.leadSources?.length || /lead\s+source|source/i.test(text)) fields.add(moduleKey === 'deals' ? 'Deal_Source' : 'Lead_Source');
   if (timeRange?.range && timeRange.range !== 'all_time') fields.add(dateFieldFor(moduleKey, question));
+  if (timeRange?.range && timeRange.range !== 'all_time' && !isExplicitCreationRequest(question)) fields.add('Created_Time');
   if (/email/i.test(text)) fields.add('Email');
   if (/phone|mobile|telephone/i.test(text)) fields.add('Phone');
   if (metrics.includes('ranking') || metrics.includes('top_n')) fields.add('Owner');
@@ -120,6 +121,7 @@ function buildIntentQueryPlan({ question, moduleKey, intents = [], metrics = [],
   const parsedFilters = parseQuestionFilters(question, moduleKey, timeRange);
   const fields = fieldsFor({ moduleKey, moduleDefinition, operation, question, timeRange, entities, metrics });
   const amountField = amountFieldFor(moduleDefinition);
+  const customerScope = getCustomerRecordScope(question);
   const periods = Array.isArray(timeRange.periods) ? timeRange.periods.map(normalizePeriod).filter(Boolean) : [];
   const displayLimit = Number.isInteger(pagination.per_page) && pagination.per_page > 0
     ? pagination.per_page
@@ -151,6 +153,7 @@ function buildIntentQueryPlan({ question, moduleKey, intents = [], metrics = [],
       : null,
     displayLimit,
     searchScope: pagination.explicit ? 'bounded_requested_page' : 'all_matching_records',
+    customerScope,
     criteria: null,
     queryValidated: false,
     ...(amountField ? { aggregateField: amountField } : {}),

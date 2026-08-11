@@ -2,6 +2,8 @@ const { zohoClient } = require('../../common/config/axios');
 const { DEBUG_ASSISTANT, NODE_ENV } = require('../../common/config/env');
 const { getModuleDefinition } = require('./module-definition.service');
 const { buildQueryPlan, isInvalidQueryError } = require('./query-builder.service');
+const { numericValue } = require('./assistant/currency.service');
+const { selectBusinessDateField } = require('./business-criteria.service');
 const logger = require('../../common/logging/logger');
 const {
   DEFAULT_PER_PAGE,
@@ -347,7 +349,8 @@ function buildCountCriteria(moduleKey, moduleDefinition, options = {}, requestTe
   }
 
   if (/\b(this|last)\s+month\b/.test(normalizedText)) {
-    const dateField = getPreferredField(moduleDefinition, ['Closing_Date', 'Created_Time', 'Modified_Time']);
+    const requestedDateField = selectBusinessDateField(moduleKey, requestText);
+    const dateField = getPreferredField(moduleDefinition, [requestedDateField, 'Closing_Date', 'Created_Time', 'Modified_Time']);
 
     if (dateField) {
       criteriaParts.push(getMonthRangeCriteria(dateField, /\blast\s+month\b/.test(normalizedText) ? -1 : 0));
@@ -486,8 +489,8 @@ async function executeCoqlAggregate(moduleKey, moduleDefinition, queryPlan, opti
   const recordCount = Number(row.record_count ?? row.count ?? 0);
   const aggregateValues = Object.fromEntries(metrics.map((metric) => {
     const rawValue = row[`${metric}_value`];
-    const value = rawValue === null || rawValue === undefined || rawValue === '' ? 0 : Number(rawValue);
-    return [metric, Number.isFinite(value) ? value : 0];
+    const value = rawValue === null || rawValue === undefined || rawValue === '' ? 0 : numericValue(rawValue);
+    return [metric, value !== null ? value : 0];
   }));
 
   return {
@@ -620,8 +623,8 @@ async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, r
 
 function numericAggregateValues(records, field, metrics) {
   const values = records
-    .map((record) => Number(record?.[field]))
-    .filter((value) => Number.isFinite(value));
+    .map((record) => numericValue(record?.[field]))
+    .filter((value) => value !== null);
   const aggregateValues = {};
   metrics.forEach((metric) => {
     if (metric === 'sum') aggregateValues.sum = values.reduce((total, value) => total + value, 0);

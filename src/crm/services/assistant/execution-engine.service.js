@@ -124,9 +124,13 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
           && !filterPlan.filters?.length
           && (plan.timeRange?.range || 'all_time') === 'all_time';
         const boundedList = explicitList || plainList;
+        const localOnlyFilters = (filterPlan.filters || []).filter((filter) => (
+          filter.field === '*' || filter.logicalField === 'customer_scope'
+        ));
         const aggregateMetrics = step.type === 'aggregate'
+          && localOnlyFilters.length === 0
           ? (step.metrics?.filter((metric) => ['sum', 'average', 'minimum', 'maximum'].includes(metric)) || ['sum'])
-          : step.type === 'compare' && !plan.intents?.includes('LIST') && step.metrics?.some((metric) => ['sum', 'revenue', 'average', 'maximum', 'minimum', 'pipeline'].includes(metric))
+          : step.type === 'compare' && localOnlyFilters.length === 0 && !plan.intents?.includes('LIST') && step.metrics?.some((metric) => ['sum', 'revenue', 'average', 'maximum', 'minimum', 'pipeline'].includes(metric))
             ? ['sum']
             : null;
         const retrievalMode = step.type === 'count'
@@ -141,6 +145,12 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
         const periodPlan = baseQueryPlan?.comparisonPeriods?.find((candidate) => (
           String(candidate.label || '').toLowerCase() === String(period || '').toLowerCase()
         ));
+        const requiredFields = [
+          ...new Set([
+            ...(step.requiredFieldsByModule?.[moduleKey] || []),
+            ...((filterPlan.filters || []).map((filter) => filter.field).filter((field) => field && field !== '*')),
+          ]),
+        ];
         const structuredQueryPlan = baseQueryPlan
           ? {
             ...baseQueryPlan,
@@ -149,7 +159,7 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
               endDate: periodPlan.endDate,
             } : {}),
             criteria: period ? filterPlan.serverCriteriaWithoutDate : filterPlan.serverCriteria,
-            fields: step.requiredFieldsByModule?.[moduleKey] || baseQueryPlan.fields,
+            fields: requiredFields.length ? requiredFields : baseQueryPlan.fields,
           }
           : null;
 
@@ -160,7 +170,7 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
           criteria: period ? filterPlan.serverCriteriaWithoutDate : filterPlan.serverCriteria,
           canonicalFilters: filterPlan.canonicalFilters,
           requestedFilters: filterPlan.requestedFilters,
-          ...(step.requiredFieldsByModule?.[moduleKey]?.length ? { fields: step.requiredFieldsByModule[moduleKey] } : {}),
+          ...(requiredFields.length ? { fields: requiredFields } : {}),
           ...(signal ? { signal } : {}),
           ...(retrievalMode === 'page' ? { page: requestedPage, per_page: requestedLimit, offset: Number(plan.pagination?.offset || 0) } : {}),
           ...(structuredQueryPlan?.sort?.field ? {
