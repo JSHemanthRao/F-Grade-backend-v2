@@ -45,11 +45,12 @@ test('CRM router exposes one GET route per requested module', () => {
     .map((layer) => layer.route.path)
     .sort();
 
-  assert.equal(registeredRoutes.length, expectedRoutes.length + 1);
+  assert.equal(registeredRoutes.length, expectedRoutes.length + 2);
   expectedRoutes.forEach((route) => {
     assert.ok(registeredRoutes.includes(route), `${route} should be registered`);
   });
   assert.ok(registeredRoutes.includes('/assistant'));
+  assert.ok(registeredRoutes.includes('/dns'));
 });
 
 test('CRM assistant endpoint accepts only a question and routes count requests internally', async () => {
@@ -94,6 +95,15 @@ test('CRM assistant endpoint accepts only a question and routes count requests i
   assert.equal(res.payload.calculations[0].value, 12);
 
   recordsService.getRecords = originalGetRecords;
+});
+
+test('CRM router exposes a dedicated DNS checker endpoint', () => {
+  const stack = router.stack || [];
+  const registeredRoutes = stack
+    .filter((layer) => layer.route)
+    .map((layer) => layer.route.path);
+
+  assert.ok(registeredRoutes.includes('/dns'));
 });
 
 test('CRM controller resolves the requested module from the matched route path', async () => {

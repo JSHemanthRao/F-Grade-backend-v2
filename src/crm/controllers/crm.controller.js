@@ -218,7 +218,7 @@ async function handleAssistantRequest(req, res, next) {
     return res.json({
       ...engineResponse,
       executionTime: formatExecutionTime(startTime),
-      source: 'Zoho CRM',
+      source: engineResponse.source || 'Zoho CRM',
     });
   } catch (error) {
     return next(error);

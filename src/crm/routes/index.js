@@ -1,5 +1,6 @@
 const express = require('express');
 const { getModuleCount, getModuleQuery, handleAssistantRequest } = require('../controllers/crm.controller');
+const { handleDnsRequest } = require('../controllers/dns.controller');
 const { getSupportedModuleKeys } = require('../services/module-definition.service');
 const { validateCRMCountRequest, validateCRMQueryRequest } = require('../validators/crm.validator');
 const { requestLogger } = require('../middleware/request-logger');
@@ -13,6 +14,9 @@ const supportedModules = getSupportedModuleKeys();
 supportedModules.forEach((moduleName) => {
   router.get(`/${moduleName}`, validateCRMQueryRequest, getModuleQuery);
 });
+
+// Dedicated DNS checker endpoint
+router.get('/dns', handleDnsRequest);
 
 // New primary read-only dynamic endpoint
 router.get('/count', validateCRMCountRequest, getModuleCount);

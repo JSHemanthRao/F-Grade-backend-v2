@@ -169,14 +169,58 @@ function filterDnsRecords(records, requestedTypes = []) {
 
   const filtered = {};
   normalizedTypes.forEach((type) => {
-    if (type === 'TXT') {
-      filtered[type] = records.TXT || [];
-    } else {
-      filtered[type] = records[type] || [];
-    }
+    filtered[type] = records[type] || [];
   });
 
   return filtered;
+}
+
+function serializeDnsRecord(record) {
+  if (record === undefined || record === null) return '';
+  if (Array.isArray(record)) return record.map(serializeDnsRecord).join(' ');
+  if (typeof record === 'object') {
+    if (record.exchange || record.priority !== undefined) {
+      return `${record.exchange || ''}${record.priority !== undefined ? ` (priority ${record.priority})` : ''}`.trim();
+    }
+    if (record.value || record.nsname || record.hostname || record.host) {
+      return String(record.value || record.nsname || record.hostname || record.host);
+    }
+    return JSON.stringify(record);
+  }
+  return String(record);
+}
+
+function buildDnsTables(records, requestedRecords = []) {
+  const recordTypes = normalizeRequestedTypes(requestedRecords).length > 0
+    ? normalizeRequestedTypes(requestedRecords)
+    : Object.keys(records).sort();
+
+  const rows = [];
+  recordTypes.forEach((type) => {
+    const values = records[type] || [];
+    if (values.length === 0) {
+      rows.push([type, '']);
+      return;
+    }
+
+    values.forEach((value, index) => {
+      rows.push([index === 0 ? type : '', serializeDnsRecord(value)]);
+    });
+  });
+
+  const columns = ['Record Type', 'Value'];
+  const markdown = [
+    `| ${columns.join(' | ')} |`,
+    `| ${columns.map(() => '---').join(' | ')} |`,
+    ...rows.map(([type, value]) => `| ${type} | ${String(value).replace(/\|/g, '\\|')} |`),
+  ].join('\n');
+
+  return [{
+    title: 'DNS Records',
+    columns,
+    rows,
+    markdown,
+  }];
 }
 
 function formatDnsResponse({ domain, completeRecords, filteredRecords, requestedRecords = [] }) {
@@ -207,6 +251,7 @@ function formatDnsResponse({ domain, completeRecords, filteredRecords, requested
     data: filteredRecords,
     completeRecords,
     requestedRecords: normalizedTypes,
+    tables: buildDnsTables(filteredRecords, normalizedTypes),
   };
 }
 

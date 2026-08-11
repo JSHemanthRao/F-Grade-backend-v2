@@ -192,6 +192,79 @@
           }
         }
       }
+    },
+    "/api/crm/dns": {
+      "get": {
+        "operationId": "dnsChecker",
+        "tags": ["DNS"],
+        "summary": "Check DNS records for a domain",
+        "description": "Use this operation to perform a DNS record lookup for a domain. Returns structured DNS record data and a markdown table format. Do not use web search or website scraping for DNS results.",
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "required": true,
+            "type": "string",
+            "description": "The domain name to query. Example: example.com"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Optional DNS record type to filter the lookup, such as A, MX, NS, TXT, CNAME, SOA. Multiple types may be separated by commas."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful DNS lookup response",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": { "type": "boolean" },
+                "source": { "type": "string" },
+                "domain": { "type": "string" },
+                "summary": { "type": "string" },
+                "data": { "type": "object" },
+                "completeRecords": { "type": "object" },
+                "requestedRecords": { "type": "array", "items": { "type": "string" } },
+                "tables": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "title": { "type": "string" },
+                      "columns": { "type": "array", "items": { "type": "string" } },
+                      "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
+                      "markdown": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": { "type": "boolean" },
+                "error": { "type": "string" }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error or DNS lookup error",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": { "type": "boolean" },
+                "error": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
