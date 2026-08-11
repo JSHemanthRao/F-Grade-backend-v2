@@ -718,6 +718,74 @@ async function executeCoqlRecords(moduleKey, queryPlan, options = {}) {
   };
 }
 
+async function fetchSearchPages({ moduleKey = null, baseParams = {}, fetchPage, onPageFetched }) {
+  const allRecords = [];
+  const seenRecordIds = new Set();
+  let page = Number(baseParams.page) || 1;
+  let pagesFetched = 0;
+  let lastInfo = {};
+  const recordsPerCall = [];
+
+  while (true) {
+    const pageParams = {
+      ...baseParams,
+      page,
+    };
+    const payload = await fetchPage(pageParams);
+    const pageRecords = Array.isArray(payload?.data) ? payload.data : [];
+    const info = payload?.info || {};
+    const hasMore = info.more_records === true || info.has_more === true;
+
+    pagesFetched += 1;
+    recordsPerCall.push(pageRecords.length);
+    lastInfo = payload || {};
+
+    if (pageRecords.length === 0) {
+      if (hasMore) {
+        const error = new Error(`Incomplete CRM retrieval for ${moduleKey || 'module'}: an empty Search page reported more records`);
+        error.code = 'RETRIEVAL_INCOMPLETE';
+        throw error;
+      }
+      break;
+    }
+
+    pageRecords.forEach((record) => {
+      const recordId = record?.id ?? record?.ID;
+      if (recordId === undefined || recordId === null || !seenRecordIds.has(String(recordId))) {
+        if (recordId !== undefined && recordId !== null) seenRecordIds.add(String(recordId));
+        allRecords.push(record);
+      }
+    });
+
+    if (!hasMore) {
+      break;
+    }
+
+    if (page >= 10) {
+      const error = new Error(`CRM Search result for ${moduleKey || 'module'} exceeds the 2000 record limit; refine your criteria.`);
+      error.code = 'SEARCH_LIMIT_EXCEEDED';
+      throw error;
+    }
+
+    page += 1;
+    if (onPageFetched) onPageFetched({ page, recordsFetched: pageRecords.length });
+  }
+
+  return {
+    data: allRecords,
+    info: {
+      ...((lastInfo && lastInfo.info) || {}),
+      count: allRecords.length,
+      page: 1,
+      per_page: baseParams.per_page,
+      more_records: false,
+      retrievalComplete: true,
+      pagesFetched,
+      recordsPerCall,
+    },
+  };
+}
+
 async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, retrievalPlan = {}) {
   const { params, fields } = buildQueryParams(moduleKey, options);
   const shouldFetchAll = retrievalPlan.fetchAll || normalizeRetrievalMode(options.retrieval_mode ?? options.retrievalMode) === 'all';
@@ -738,6 +806,30 @@ async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, r
     const fetchAllStart = process.hrtime.bigint();
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
+        if (options.force_search && params.criteria) {
+          logger.info('CRM HTTP', {
+            message: 'Search request',
+            endpoint: `/crm/v8/${moduleDefinition.endpoint}/search`,
+            criteria: params.criteria,
+            per_page: 200,
+          });
+          result = await fetchSearchPages({
+            moduleKey,
+            baseParams: {
+              ...params,
+              page: 1,
+              per_page: 200,
+            },
+            fetchPage: async (pageParams) => {
+              const response = await zohoClient.get(
+                `/crm/v8/${moduleDefinition.endpoint}/search`,
+                buildZohoRequestConfig(options, { params: pageParams }),
+              );
+              return response.data;
+            },
+            onPageFetched: () => { pagesFetched += 1; },
+          });
+        } else {
         result = await fetchAllPages({
           moduleKey,
           baseParams: params,
@@ -750,6 +842,7 @@ async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, r
           },
           onPageFetched: () => { pagesFetched += 1; },
         });
+        }
         lastError = null;
         break;
       } catch (error) {
@@ -780,8 +873,19 @@ async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, r
     );
   }
 
+  const endpoint = options.force_search && params.criteria
+    ? `/crm/v8/${moduleDefinition.endpoint}/search`
+    : `/crm/v8/${moduleDefinition.endpoint}`;
+  if (endpoint.endsWith('/search')) {
+    logger.info('CRM HTTP', {
+      message: 'Search request',
+      endpoint,
+      criteria: params.criteria,
+      per_page: params.per_page,
+    });
+  }
   const response = await zohoClient.get(
-    `/crm/v8/${moduleDefinition.endpoint}`,
+    endpoint,
     buildZohoRequestConfig(options, { params }),
   );
   const queryDurationMs = Number(process.hrtime.bigint() - queryStartTime) / 1e6;

@@ -46,6 +46,7 @@ function amountFieldFor(moduleDefinition) {
 function operationFor(intents = [], metrics = [], question = '') {
   const text = String(question || '').toLowerCase();
   if (intents.includes('COMPARE')) return 'COMPARE';
+  if (intents.includes('CONVERSION')) return 'COUNT';
   if (metrics.includes('average')) return 'AVG';
   if (metrics.includes('maximum')) return 'MAX';
   if (metrics.includes('minimum')) return 'MIN';

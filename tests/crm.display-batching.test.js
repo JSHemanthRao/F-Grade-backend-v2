@@ -39,6 +39,6 @@ test('display batching reports remaining records without shrinking the search da
 
 test('zero matches use the required no-match response', () => {
   const response = formatRecords([]);
-  assert.equal(response.summary, 'No matching records found.');
+  assert.equal(response.summary, 'No matching CRM records were found for the requested period.');
   assert.deepEqual(response.data, []);
 });

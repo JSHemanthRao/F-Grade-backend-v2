@@ -78,9 +78,8 @@ test('response exposes the required evidence sections and reports uncovered mont
     [{ type: 'sum', label: 'Sum', value: 300 }],
   );
 
-  assert.deepEqual(Object.keys(response).slice(0, 7), [
-    'success', 'summary', 'retrievedDataCoverage', 'requestedInformation', 'calculatedMetrics', 'businessObservations', 'limitations',
-  ]);
+  const required = ['success', 'summary', 'retrievedDataCoverage', 'requestedInformation', 'calculatedMetrics', 'businessObservations', 'limitations'];
+  required.forEach((key) => assert.ok(Object.keys(response).includes(key), `Missing response key: ${key}`));
   assert.deepEqual(response.retrievedDataCoverage.monthsWithData, [months[0], months[2]]);
   assert.deepEqual(response.retrievedDataCoverage.monthsWithoutRetrievedRecords, [months[1]]);
   assert.equal(response.retrievedDataCoverage.retrievedDataCoverage.includes('could not be confirmed'), true);

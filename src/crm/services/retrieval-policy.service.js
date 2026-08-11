@@ -635,6 +635,7 @@ async function fetchAllPages({
         throw error;
       }
       pageToken = nextPageToken;
+      page += 1;
       continue;
     }
 
@@ -646,6 +647,7 @@ async function fetchAllPages({
       }
 
       pageToken = nextPageToken;
+      page += 1;
       continue;
     }
 

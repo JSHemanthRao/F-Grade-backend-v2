@@ -413,6 +413,54 @@ test('CRM query endpoint applies Zoho server-side Created_Time date filtering fo
   }
 });
 
+test('CRM query endpoint falls back to Zoho /search with Created_Time criteria when COQL scope is unavailable', async () => {
+  const originalGet = zohoClient.get;
+  const requests = [];
+  let callCount = 0;
+
+  zohoClient.get = async (url, config) => {
+    callCount += 1;
+    requests.push({ url, config });
+    // Simulate COQL scope missing only for COQL endpoint; allow /search to succeed
+    if (String(url).includes('/coql')) {
+      const error = new Error('COQL scope missing');
+      error.response = { status: 401, data: { message: 'invalid oauth scope: coql' } };
+      throw error;
+    }
+    return {
+      data: {
+        data: [
+          { id: '1001', Created_Time: '2026-07-10T12:34:56Z', First_Name: 'Alice', Last_Name: 'Example' },
+        ],
+        info: { count: 1, more_records: false },
+      },
+    };
+  };
+
+  try {
+    const result = await recordsService.getRecords('leads', {
+      module: 'Leads',
+      date_field: 'Created_Time',
+      from: '2026-07-01',
+      to: '2026-08-01',
+      force_coql: true,
+    });
+
+    assert.equal(requests[0].url, '/crm/v8/Leads/search');
+    assert.equal(requests[0].config.params.per_page, 200);
+    assert.equal(requests[0].config.params.page, 1);
+    assert.equal(requests[0].config.params.criteria,
+      '(Created_Time:greater_equal:2026-07-01T00:00:00Z)and(Created_Time:less_than:2026-08-01T00:00:00Z)');
+    assert.ok(requests[0].config.params.fields.includes('Created_Time'));
+    assert.deepEqual(result.data, [
+      { id: '1001', Created_Time: '2026-07-10T12:34:56Z', First_Name: 'Alice', Last_Name: 'Example' },
+    ]);
+    assert.equal(result.info.count, 1);
+  } finally {
+    zohoClient.get = originalGet;
+  }
+});
+
 test('CRM service counts filtered closed won deals without paginating records', async () => {
   const originalGet = zohoClient.get;
   const requests = [];
