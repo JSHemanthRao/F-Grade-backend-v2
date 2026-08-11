@@ -1,7 +1,6 @@
-const dns = require('dns').promises;
+const axios = require('axios');
 
 const HOSTNAME_PATTERN = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\.?$/i;
-const FALLBACK_RECORD_TYPES = ['A', 'AAAA', 'MX', 'NS', 'CNAME', 'TXT', 'SOA', 'CAA', 'SRV', 'NAPTR', 'PTR', 'TLSA'];
 const RECORD_TYPE_ALIASES = {
   SPF: 'TXT',
   DMARC: 'TXT',
@@ -22,7 +21,7 @@ function normalizeDomain(input) {
     .trim();
 
   if (!cleaned || cleaned.includes(' ') || !HOSTNAME_PATTERN.test(cleaned)) {
-    throw new Error('A valid domain name is required for DNS lookup.');
+    throw new Error(`Invalid domain: ${cleaned || input}`);
   }
 
   return cleaned.toLowerCase();
@@ -42,123 +41,76 @@ function normalizeRequestedTypes(requestedTypes = []) {
   return [...new Set(normalized)];
 }
 
+function normalizeApiRecords(records = []) {
+  return records.map((record) => {
+    const type = buildRecordKey(record.type || record.TYPE || '');
+    const name = String(record.name || record.hostname || record.host || record.domain || '').trim();
+    const ttl = Number.isFinite(Number(record.ttl)) ? Number(record.ttl) : null;
+    const rawData = record.data ?? record.value ?? record.address ?? record.exchange ?? record.nsname ?? record.hostname ?? record.host;
+    let value = '';
+    let priority = null;
+
+    if (rawData !== undefined && rawData !== null) {
+      if (typeof rawData === 'object') {
+        if (Number.isFinite(Number(rawData.priority))) {
+          priority = Number(rawData.priority);
+        }
+        value = rawData.exchange || rawData.host || rawData.value || rawData.address || JSON.stringify(rawData);
+      } else {
+        value = String(rawData);
+      }
+    }
+
+    if (!value && record.value !== undefined) {
+      value = String(record.value);
+    }
+
+    if (!value && record.address !== undefined) {
+      value = String(record.address);
+    }
+
+    return {
+      type,
+      name,
+      value,
+      ttl,
+      priority,
+    };
+  }).filter((record) => record.type && record.name && record.value);
+}
+
 function aggregateDnsRecords(records = []) {
   const aggregated = {};
 
-  for (const record of records) {
-    if (!record || typeof record !== 'object') continue;
-    const type = buildRecordKey(record.type || record.TYPE || null);
-    if (!type) continue;
-
-    if (!aggregated[type]) aggregated[type] = [];
-
-    switch (type) {
-      case 'A':
-      case 'AAAA':
-        if (record.address) aggregated[type].push(record.address);
-        break;
-      case 'MX':
-        aggregated[type].push({ exchange: record.exchange || record.value || null, priority: record.priority });
-        break;
-      case 'NS':
-      case 'CNAME':
-        aggregated[type].push(record.value || record.nsname || record.hostname || record.host || null);
-        break;
-      case 'TXT':
-        if (Array.isArray(record.entries)) {
-          aggregated[type].push(record.entries);
-        } else if (Array.isArray(record.text)) {
-          aggregated[type].push(record.text);
-        } else if (record.value) {
-          aggregated[type].push(record.value);
-        } else {
-          aggregated[type].push(record);
-        }
-        break;
-      default:
-        aggregated[type].push(record);
-        break;
-    }
-  }
-
-  for (const type of Object.keys(aggregated)) {
-    aggregated[type] = aggregated[type].filter((item) => item !== undefined && item !== null);
-  }
+  normalizeApiRecords(records).forEach((record) => {
+    if (!aggregated[record.type]) aggregated[record.type] = [];
+    aggregated[record.type].push(record);
+  });
 
   return aggregated;
 }
 
-async function queryRecord(domain, type) {
+async function queryLiveDnsApi(domain) {
   try {
-    switch (type) {
-      case 'A': return { [type]: await dns.resolve4(domain) };
-      case 'AAAA': return { [type]: await dns.resolve6(domain) };
-      case 'MX': return { [type]: await dns.resolveMx(domain) };
-      case 'NS': return { [type]: await dns.resolveNs(domain) };
-      case 'CNAME': return { [type]: await dns.resolveCname(domain) };
-      case 'TXT': return { [type]: await dns.resolveTxt(domain) };
-      case 'SOA': return { [type]: await dns.resolveSoa(domain) };
-      case 'CAA': return { [type]: await dns.resolveCaa(domain) };
-      case 'SRV': return { [type]: await dns.resolveSrv(domain) };
-      case 'NAPTR': return { [type]: await dns.resolveNaptr(domain) };
-      case 'PTR': return { [type]: await dns.resolvePtr(domain) };
-      case 'TLSA': return { [type]: await dns.resolveTlsa(domain) };
-      default: return {}; 
+    const response = await axios.get('https://dns-lookup.com/api/dns', {
+      params: { domain },
+      timeout: 10000,
+    });
+
+    if (response?.status !== 200 || !response?.data || !Array.isArray(response.data.records)) {
+      throw new Error('DNS API returned invalid data.');
     }
+
+    return response.data.records;
   } catch (error) {
-    const suppressedDnsErrors = new Set([
-      'ENODATA', 'ENOTFOUND', 'ENODOMAIN', 'EAI_NONAME', 'ENOTIMP', 'ENOTTL', 'EBADRESP',
-      'ECONNREFUSED', 'ETIMEOUT', 'ECONNRESET', 'EAI_AGAIN', 'EAI_FAIL', 'EAI_SERVICE',
-      'ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'ECONNABORTED', 'EAI_MEMORY', 'EAI_OVERFLOW',
-    ]);
-    if (!error || !error.code || suppressedDnsErrors.has(error.code)) {
-      return { [type]: [] };
-    }
-    return { [type]: [] };
+    throw new Error(`Unable to retrieve DNS records for ${domain} at this time.`);
   }
-}
-
-async function resolveDnsRecordSet(domain) {
-  const results = {};
-
-  for (const type of FALLBACK_RECORD_TYPES) {
-    const answer = await queryRecord(domain, type);
-    if (Array.isArray(answer[type]) && answer[type].length > 0) {
-      results[type] = answer[type];
-    } else if (answer[type] && typeof answer[type] === 'object' && Object.keys(answer[type]).length > 0) {
-      results[type] = [answer[type]];
-    }
-  }
-
-  return results;
 }
 
 async function resolveDnsRecords(domain) {
   const normalizedDomain = normalizeDomain(domain);
-  let aggregated = {};
-  let resolveAnyError = null;
-
-  try {
-    const anyAnswers = await dns.resolveAny(normalizedDomain);
-    aggregated = aggregateDnsRecords(anyAnswers);
-  } catch (error) {
-    resolveAnyError = error;
-  }
-
-  const missingTypes = FALLBACK_RECORD_TYPES.filter((type) => !Object.prototype.hasOwnProperty.call(aggregated, type));
-  if (missingTypes.length > 0) {
-    const fallback = await resolveDnsRecordSet(normalizedDomain);
-    Object.assign(aggregated, fallback);
-  }
-
-  if (Object.keys(aggregated).length === 0) {
-    if (resolveAnyError && ['ENOTFOUND', 'ENODOMAIN', 'EAI_NONAME'].includes(resolveAnyError.code)) {
-      throw new Error(`Domain ${normalizedDomain} could not be resolved.`);
-    }
-    return {};
-  }
-
-  return aggregated;
+  const apiRecords = await queryLiveDnsApi(normalizedDomain);
+  return aggregateDnsRecords(apiRecords);
 }
 
 function filterDnsRecords(records, requestedTypes = []) {
@@ -175,49 +127,48 @@ function filterDnsRecords(records, requestedTypes = []) {
   return filtered;
 }
 
-function serializeDnsRecord(record) {
-  if (record === undefined || record === null) return '';
-  if (Array.isArray(record)) return record.map(serializeDnsRecord).join(' ');
-  if (typeof record === 'object') {
-    if (record.exchange || record.priority !== undefined) {
-      return `${record.exchange || ''}${record.priority !== undefined ? ` (priority ${record.priority})` : ''}`.trim();
-    }
-    if (record.value || record.nsname || record.hostname || record.host) {
-      return String(record.value || record.nsname || record.hostname || record.host);
-    }
-    return JSON.stringify(record);
-  }
-  return String(record);
-}
+function flattenDnsRecords(records, requestedTypes = []) {
+  const normalizedTypes = normalizeRequestedTypes(requestedTypes);
+  const types = normalizedTypes.length > 0 ? normalizedTypes : Object.keys(records);
+  const flattened = [];
 
-function buildDnsTables(records, requestedRecords = []) {
-  const recordTypes = normalizeRequestedTypes(requestedRecords).length > 0
-    ? normalizeRequestedTypes(requestedRecords)
-    : Object.keys(records).sort();
+  types.forEach((type) => {
+    const entries = Array.isArray(records[type]) ? records[type] : [];
+    entries.forEach((entry) => {
+      const rawPriority = entry.priority;
+      const priority = rawPriority === undefined || rawPriority === null ? null : Number(rawPriority);
 
-  const rows = [];
-  recordTypes.forEach((type) => {
-    const values = records[type] || [];
-    if (values.length === 0) {
-      rows.push([type, '']);
-      return;
-    }
-
-    values.forEach((value, index) => {
-      rows.push([index === 0 ? type : '', serializeDnsRecord(value)]);
+      flattened.push({
+        type,
+        name: entry.name || '',
+        value: entry.value || '',
+        priority: Number.isFinite(priority) ? priority : null,
+        ttl: Number.isFinite(Number(entry.ttl)) ? Number(entry.ttl) : null,
+      });
     });
   });
 
-  const columns = ['Record Type', 'Value'];
+  return flattened;
+}
+
+function buildDnsTables(records) {
+  const rows = records.map((record) => [
+    record.type || '',
+    record.name || '',
+    record.value || '',
+    record.priority !== null && record.priority !== undefined ? String(record.priority) : '',
+    record.ttl !== null && record.ttl !== undefined ? String(record.ttl) : '',
+  ]);
+
   const markdown = [
-    `| ${columns.join(' | ')} |`,
-    `| ${columns.map(() => '---').join(' | ')} |`,
-    ...rows.map(([type, value]) => `| ${type} | ${String(value).replace(/\|/g, '\\|')} |`),
+    '| Type | Name | Value | Priority | TTL |',
+    '| --- | --- | --- | --- | --- |',
+    ...rows.map((row) => `| ${row.join(' | ')} |`),
   ].join('\n');
 
   return [{
     title: 'DNS Records',
-    columns,
+    columns: ['Type', 'Name', 'Value', 'Priority', 'TTL'],
     rows,
     markdown,
   }];
@@ -243,15 +194,18 @@ function formatDnsResponse({ domain, completeRecords, filteredRecords, requested
     summary = `DNS records for ${domain}.`;
   }
 
+  const flattened = flattenDnsRecords(filteredRecords, requestedRecords);
+
   return {
     success: true,
     source: 'DNS Checker',
     domain,
     summary,
     data: filteredRecords,
+    records: flattened,
     completeRecords,
     requestedRecords: normalizedTypes,
-    tables: buildDnsTables(filteredRecords, normalizedTypes),
+    tables: buildDnsTables(flattened),
   };
 }
 

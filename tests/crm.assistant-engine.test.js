@@ -122,54 +122,66 @@ test('assistant controller delegates the request to the assistant engine without
 });
 
 test('assistant handles DNS requests by performing a complete lookup and returning DNS results', async () => {
-  const dns = require('dns').promises;
-  const originalResolveAny = dns.resolveAny;
-  const originalResolve4 = dns.resolve4;
-  const originalResolveMx = dns.resolveMx;
+  const axios = require('axios');
+  const originalAxiosGet = axios.get;
 
-  dns.resolveAny = async () => [{ type: 'A', address: '93.184.216.34' }, { type: 'NS', value: 'a.iana-servers.net' }];
-  dns.resolve4 = async () => ['93.184.216.34'];
-  dns.resolveMx = async () => [{ exchange: 'mx.example.com', priority: 10 }];
+  axios.get = async () => ({
+    status: 200,
+    data: {
+      domain: 'example.com',
+      records: [
+        { type: 'A', name: 'example.com', ttl: 300, data: '93.184.216.34' },
+        { type: 'NS', name: 'example.com', ttl: 300, data: 'a.iana-servers.net' },
+        { type: 'MX', name: 'example.com', ttl: 300, data: { priority: 10, exchange: 'mx.example.com' } },
+      ],
+    },
+  });
 
   try {
     const response = await assistantEngine.handleAssistantRequest({ question: 'Check DNS for example.com' });
     assert.equal(response.success, true);
     assert.equal(response.source, 'DNS Checker');
     assert.equal(response.domain, 'example.com');
-    assert.equal(response.completeRecords.A[0], '93.184.216.34');
-    assert.equal(response.completeRecords.NS[0], 'a.iana-servers.net');
-    assert.deepEqual(response.data, response.completeRecords);
+    assert.equal(response.completeRecords.A[0].value, '93.184.216.34');
+    assert.equal(response.completeRecords.NS[0].value, 'a.iana-servers.net');
+    assert.equal(response.completeRecords.MX[0].value, 'mx.example.com');
+    assert.deepEqual(response.records, [
+      { type: 'A', name: 'example.com', value: '93.184.216.34', priority: null, ttl: 300 },
+      { type: 'NS', name: 'example.com', value: 'a.iana-servers.net', priority: null, ttl: 300 },
+      { type: 'MX', name: 'example.com', value: 'mx.example.com', priority: 10, ttl: 300 },
+    ]);
+    assert.equal(response.tables[0].columns[0], 'Type');
   } finally {
-    dns.resolveAny = originalResolveAny;
-    dns.resolve4 = originalResolve4;
-    dns.resolveMx = originalResolveMx;
+    axios.get = originalAxiosGet;
   }
 });
 
 test('assistant filters DNS results when a specific record type is requested', async () => {
-  const dns = require('dns').promises;
-  const originalResolveAny = dns.resolveAny;
-  const originalResolveMx = dns.resolveMx;
-  const originalResolveNs = dns.resolveNs;
-  const originalResolve4 = dns.resolve4;
+  const axios = require('axios');
+  const originalAxiosGet = axios.get;
 
-  dns.resolveAny = async () => [];
-  dns.resolveMx = async () => [{ exchange: 'mx.example.com', priority: 10 }];
-  dns.resolveNs = async () => ['a.iana-servers.net'];
-  dns.resolve4 = async () => ['93.184.216.34'];
+  axios.get = async () => ({
+    status: 200,
+    data: {
+      domain: 'example.com',
+      records: [
+        { type: 'A', name: 'example.com', ttl: 300, data: '93.184.216.34' },
+        { type: 'MX', name: 'example.com', ttl: 300, data: { priority: 10, exchange: 'mx.example.com' } },
+      ],
+    },
+  });
 
   try {
     const response = await assistantEngine.handleAssistantRequest({ question: 'Check the MX records for example.com' });
     assert.equal(response.success, true);
     assert.equal(response.source, 'DNS Checker');
     assert.equal(response.domain, 'example.com');
-    assert.deepEqual(response.data, { MX: [{ exchange: 'mx.example.com', priority: 10 }] });
+    assert.deepEqual(response.data, { MX: [{ type: 'MX', name: 'example.com', value: 'mx.example.com', ttl: 300, priority: 10 }] });
     assert.equal(response.summary, 'DNS MX records for example.com.');
+    assert.equal(response.records.length, 1);
+    assert.equal(response.records[0].type, 'MX');
   } finally {
-    dns.resolveAny = originalResolveAny;
-    dns.resolveMx = originalResolveMx;
-    dns.resolveNs = originalResolveNs;
-    dns.resolve4 = originalResolve4;
+    axios.get = originalAxiosGet;
   }
 });
 
