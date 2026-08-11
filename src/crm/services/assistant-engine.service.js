@@ -1,5 +1,7 @@
 const { DEBUG_ASSISTANT } = require('../../common/config/env');
-const recordsService = require('../services/retrieval-engine.service');
+const recordsService = require('./retrieval-engine.service');
+const { detectDnsRequest } = require('./assistant/dns-detector.service');
+const { resolveDnsRecords, filterDnsRecords, formatDnsResponse } = require('./dns.service');
 const { buildExecutionPlan } = require('./assistant/planner.service');
 const { optimizeExecutionPlan } = require('./assistant/query-optimizer.service');
 const { executePlan } = require('./assistant/execution-engine.service');
@@ -65,6 +67,18 @@ function displayContextFromPayload(context = {}) {
 async function handleAssistantRequest(payload = {}) {
   const question = String(payload?.question || '').trim();
   if (!question) return { success: false, message: 'A question is required.' };
+
+  const dnsRequest = detectDnsRequest(question);
+  if (dnsRequest?.domain) {
+    const completeRecords = await resolveDnsRecords(dnsRequest.domain);
+    const filteredRecords = filterDnsRecords(completeRecords, dnsRequest.requestedRecords);
+    return formatDnsResponse({
+      domain: dnsRequest.domain,
+      completeRecords,
+      filteredRecords,
+      requestedRecords: dnsRequest.requestedRecords,
+    });
+  }
 
   const suppliedContext = payload?.context || payload?.conversationContext || {};
   const continuation = isDisplayContinuation(question);

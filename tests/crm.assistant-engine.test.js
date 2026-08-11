@@ -121,6 +121,58 @@ test('assistant controller delegates the request to the assistant engine without
   }
 });
 
+test('assistant handles DNS requests by performing a complete lookup and returning DNS results', async () => {
+  const dns = require('dns').promises;
+  const originalResolveAny = dns.resolveAny;
+  const originalResolve4 = dns.resolve4;
+  const originalResolveMx = dns.resolveMx;
+
+  dns.resolveAny = async () => [{ type: 'A', address: '93.184.216.34' }, { type: 'NS', value: 'a.iana-servers.net' }];
+  dns.resolve4 = async () => ['93.184.216.34'];
+  dns.resolveMx = async () => [{ exchange: 'mx.example.com', priority: 10 }];
+
+  try {
+    const response = await assistantEngine.handleAssistantRequest({ question: 'Check DNS for example.com' });
+    assert.equal(response.success, true);
+    assert.equal(response.source, 'DNS Checker');
+    assert.equal(response.domain, 'example.com');
+    assert.equal(response.completeRecords.A[0], '93.184.216.34');
+    assert.equal(response.completeRecords.NS[0], 'a.iana-servers.net');
+    assert.deepEqual(response.data, response.completeRecords);
+  } finally {
+    dns.resolveAny = originalResolveAny;
+    dns.resolve4 = originalResolve4;
+    dns.resolveMx = originalResolveMx;
+  }
+});
+
+test('assistant filters DNS results when a specific record type is requested', async () => {
+  const dns = require('dns').promises;
+  const originalResolveAny = dns.resolveAny;
+  const originalResolveMx = dns.resolveMx;
+  const originalResolveNs = dns.resolveNs;
+  const originalResolve4 = dns.resolve4;
+
+  dns.resolveAny = async () => [];
+  dns.resolveMx = async () => [{ exchange: 'mx.example.com', priority: 10 }];
+  dns.resolveNs = async () => ['a.iana-servers.net'];
+  dns.resolve4 = async () => ['93.184.216.34'];
+
+  try {
+    const response = await assistantEngine.handleAssistantRequest({ question: 'Check the MX records for example.com' });
+    assert.equal(response.success, true);
+    assert.equal(response.source, 'DNS Checker');
+    assert.equal(response.domain, 'example.com');
+    assert.deepEqual(response.data, { MX: [{ exchange: 'mx.example.com', priority: 10 }] });
+    assert.equal(response.summary, 'DNS MX records for example.com.');
+  } finally {
+    dns.resolveAny = originalResolveAny;
+    dns.resolveMx = originalResolveMx;
+    dns.resolveNs = originalResolveNs;
+    dns.resolve4 = originalResolve4;
+  }
+});
+
 test('assistant engine executes compare steps with both datasets and formats real CRM output', async () => {
   const originalGetRecords = recordsService.getRecords;
   const calls = [];
