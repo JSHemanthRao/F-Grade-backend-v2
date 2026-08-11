@@ -147,11 +147,11 @@ test('leads created in July uses server-side Created_Time criteria and bounded l
     });
 
     assert.equal(requests.length, 1);
-    assert.equal(requests[0].url, '/crm/v8/Leads');
+    assert.equal(requests[0].url, '/crm/v8/Leads/search');
     assert.equal(requests[0].config.params.page, 1);
     assert.equal(requests[0].config.params.per_page, DEFAULT_LIMITED_PER_PAGE);
     assert.equal(requests[0].config.params.criteria,
-      '(Created_Time:greater_equal:2026-07-01T00:00:00Z)and(Created_Time:less_than:2026-08-01T00:00:00Z)');
+      '(Created_Time:greater_equal:2026-07-01T00:00:00+05:30)and(Created_Time:less_than:2026-08-01T00:00:00+05:30)');
   } finally {
     zohoClient.get = originalGet;
   }

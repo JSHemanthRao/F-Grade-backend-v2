@@ -137,6 +137,16 @@ async function getModuleQuery(req, res, next) {
     const requestContext = createRequestAbortSignal(req, res);
     const isCountOperation = String(options.operation || '').toLowerCase() === 'count';
 
+    if (!isCountOperation) {
+      logger.info('QUERY DATE DEBUG', {
+        module: moduleDefinition.label,
+        date_field: options.date_field ?? null,
+        from: options.from ?? null,
+        to: options.to ?? null,
+        limit: options.limit ?? options.per_page ?? null,
+      });
+    }
+
     logger.info('Retrieval Engine', {
       module: moduleDefinition.label,
       operation: isCountOperation ? 'count' : 'query',

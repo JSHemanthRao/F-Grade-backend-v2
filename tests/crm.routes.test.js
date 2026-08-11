@@ -372,37 +372,54 @@ test('CRM service uses Zoho count endpoint for count and total questions', async
 test('CRM query endpoint applies Zoho server-side Created_Time date filtering for July 2026 leads', async () => {
   const originalGet = zohoClient.get;
   const requests = [];
+  const julyLead = { id: '1001', Created_Time: '2026-07-10T12:34:56+05:30', First_Name: 'Alice', Last_Name: 'Example' };
+  const augustLead = { id: '1002', Created_Time: '2026-08-09T22:39:33+05:30', First_Name: 'August', Last_Name: 'Example' };
+  const mockZohoRecords = [julyLead, augustLead];
+  const expectedCriteria = '(Created_Time:greater_equal:2026-07-01T00:00:00+05:30)and(Created_Time:less_than:2026-08-01T00:00:00+05:30)';
 
   zohoClient.get = async (url, config) => {
     requests.push({ url, config });
     return {
       data: {
-        data: [
-          { id: '1001', Created_Time: '2026-07-10T12:34:56Z', First_Name: 'Alice', Last_Name: 'Example' },
-        ],
-        info: { count: 1, more_records: false },
+        // Emulate Zoho server-side filtering: an unfiltered module request
+        // returns both July and August data.
+        data: url === '/crm/v8/Leads/search' && config.params.criteria === expectedCriteria
+          ? mockZohoRecords.filter((record) => record.id === julyLead.id)
+          : mockZohoRecords,
+        info: { count: 1, per_page: config.params.per_page, more_records: false },
       },
     };
   };
 
   try {
-    const result = await recordsService.getRecords('leads', {
-      module: 'Leads',
-      date_field: 'Created_Time',
-      from: '2026-07-01',
-      to: '2026-08-01',
-    });
+    const req = {
+      method: 'GET',
+      query: {
+        module: 'Leads',
+        date_field: 'Created_Time',
+        from: '2026-07-01',
+        to: '2026-08-01',
+        limit: '10',
+      },
+      route: { path: '/query' },
+    };
+    const res = { json(payload) { this.payload = payload; } };
+
+    await controller.getModuleQuery(req, res, () => {});
 
     assert.equal(requests.length, 1);
-    assert.equal(requests[0].url, '/crm/v8/Leads');
-    assert.equal(requests[0].config.params.per_page, 25);
-    assert.equal(requests[0].config.params.criteria,
-      '(Created_Time:greater_equal:2026-07-01T00:00:00Z)and(Created_Time:less_than:2026-08-01T00:00:00Z)');
+    assert.equal(requests[0].url, '/crm/v8/Leads/search');
+    assert.equal(requests[0].config.params.per_page, 10);
+    assert.equal(requests[0].config.params.criteria, expectedCriteria);
     assert.ok(requests[0].config.params.fields.includes('Created_Time'));
-    assert.deepEqual(result.data, [
-      { id: '1001', Created_Time: '2026-07-10T12:34:56Z', First_Name: 'Alice', Last_Name: 'Example' },
-    ]);
-    assert.equal(result.info.count, 1);
+    assert.deepEqual(res.payload.data, [julyLead]);
+    assert.equal(res.payload.per_page, 10);
+    assert.equal(res.payload.data.every((record) => {
+      const createdTime = new Date(record.Created_Time).valueOf();
+      return createdTime >= new Date('2026-07-01T00:00:00+05:30').valueOf()
+        && createdTime < new Date('2026-08-01T00:00:00+05:30').valueOf();
+    }), true);
+    assert.equal(res.payload.count, 1);
   } finally {
     zohoClient.get = originalGet;
   }
@@ -443,7 +460,7 @@ test('CRM query endpoint falls back to Zoho /search with Created_Time criteria w
     assert.equal(requests[0].config.params.per_page, 25);
     assert.equal(requests[0].config.params.page, 1);
     assert.equal(requests[0].config.params.criteria,
-      '(Created_Time:greater_equal:2026-07-01T00:00:00Z)and(Created_Time:less_than:2026-08-01T00:00:00Z)');
+      '(Created_Time:greater_equal:2026-07-01T00:00:00+05:30)and(Created_Time:less_than:2026-08-01T00:00:00+05:30)');
     assert.ok(requests[0].config.params.fields.includes('Created_Time'));
     assert.deepEqual(result.data, [
       { id: '1001', Created_Time: '2026-07-10T12:34:56Z', First_Name: 'Alice', Last_Name: 'Example' },

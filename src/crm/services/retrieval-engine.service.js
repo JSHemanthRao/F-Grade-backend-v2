@@ -131,7 +131,7 @@ async function getModuleFieldNames(moduleKey) {
   }
 }
 
-function buildDateRangeCriteria(dateField, fromValue, toValue) {
+function buildDateRangeCriteria(dateField, fromValue, toValue, { dateOnlyOffset = 'Z' } = {}) {
   if (!dateField) {
     return null;
   }
@@ -143,8 +143,8 @@ function buildDateRangeCriteria(dateField, fromValue, toValue) {
     throw error;
   }
 
-  const start = normalizeDateInput(fromValue, 'from');
-  const end = normalizeDateInput(toValue, 'to');
+  const start = normalizeDateInput(fromValue, 'from', dateOnlyOffset);
+  const end = normalizeDateInput(toValue, 'to', dateOnlyOffset);
 
   if (new Date(start).valueOf() >= new Date(end).valueOf()) {
     const error = new Error('The from date must be earlier than the to date.');
@@ -155,11 +155,11 @@ function buildDateRangeCriteria(dateField, fromValue, toValue) {
   return `(${dateField}:greater_equal:${start})and(${dateField}:less_than:${end})`;
 }
 
-function normalizeDateInput(value, name) {
+function normalizeDateInput(value, name, dateOnlyOffset = 'Z') {
   const raw = String(value || '').trim();
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    return `${raw}T00:00:00Z`;
+    return `${raw}T00:00:00${dateOnlyOffset}`;
   }
 
   const date = new Date(raw);
@@ -184,7 +184,9 @@ function getDateCriteria(moduleDefinition, availableFields, options = {}) {
     throw error;
   }
 
-  return buildDateRangeCriteria(requestedDateField, options.from, options.to);
+  return buildDateRangeCriteria(requestedDateField, options.from, options.to, {
+    dateOnlyOffset: options.dateOnlyOffset,
+  });
 }
 
 function addSystemFields(fields, availableFields) {
@@ -807,8 +809,7 @@ async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, r
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
         if (options.force_search && params.criteria) {
-          logger.info('CRM HTTP', {
-            message: 'Search request',
+          logger.info('ZOHO REQUEST DEBUG', {
             endpoint: `/crm/v8/${moduleDefinition.endpoint}/search`,
             criteria: params.criteria,
             per_page: 200,
@@ -877,8 +878,7 @@ async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, r
     ? `/crm/v8/${moduleDefinition.endpoint}/search`
     : `/crm/v8/${moduleDefinition.endpoint}`;
   if (endpoint.endsWith('/search')) {
-    logger.info('CRM HTTP', {
-      message: 'Search request',
+    logger.info('ZOHO REQUEST DEBUG', {
       endpoint,
       criteria: params.criteria,
       per_page: params.per_page,
@@ -1079,7 +1079,12 @@ async function getRecords(moduleKey, options = {}) {
     effectiveOptions.fields = addSystemFields(moduleDefinition.defaultFields || [], availableFields);
   }
 
-  const dateCriteria = getDateCriteria(moduleDefinition, availableFields, effectiveOptions);
+  // Date-only record-query parameters represent calendar dates in the CRM's
+  // +05:30 business timezone. Count retrieval keeps its existing UTC range.
+  const dateCriteria = getDateCriteria(moduleDefinition, availableFields, {
+    ...effectiveOptions,
+    dateOnlyOffset: retrievalPlan.strategy === RETRIEVAL_STRATEGIES.COUNT ? 'Z' : '+05:30',
+  });
   if (dateCriteria) {
     const previousCriteria = normalizeCriteriaValue(effectiveOptions.criteria ?? effectiveOptions.filter ?? effectiveOptions.filters);
     effectiveOptions.criteria = previousCriteria
@@ -1258,6 +1263,25 @@ async function getRecords(moduleKey, options = {}) {
       logRequestError(error, normalizedKey, moduleDefinition, { select_query: queryPlan.query }, queryPlan.fields);
       throw error;
     }
+  }
+
+  // Zoho's module records endpoint ignores criteria. Date-filtered record
+  // queries must use /search so Zoho applies the range before returning data.
+  if (dateCriteria) {
+    const searchResult = await executeSearchRecords(normalizedKey, moduleDefinition, {
+      ...effectiveOptions,
+      force_search: true,
+    }, retrievalPlan);
+    logRetrievalTelemetry({
+      moduleKey: normalizedKey,
+      criteria: effectiveOptions.criteria,
+      fields: normalizeFields(effectiveOptions.fields),
+      calls: searchResult.info?.pagesFetched || 1,
+      recordsPerCall: searchResult.info?.recordsPerCall,
+      totalMatchingRecords: searchResult.data.length,
+      startedAt: retrievalStartedAt,
+    });
+    return cacheResult(searchResult);
   }
 
   if (normalizedKey === 'users') {
