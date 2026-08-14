@@ -315,6 +315,13 @@ async function getDashboardData(req, res, next) {
     const requestContext = createRequestAbortSignal(req, res);
     const dashboardService = require('../services/dashboard.service');
 
+    const inputData = requestSource?.data
+      || requestSource?.records
+      || requestSource?.deals
+      || requestSource?.items
+      || requestSource?.queryResult?.data
+      || requestSource?.queryResult;
+
     const options = {
       title: requestSource?.title,
       type: requestSource?.type,
@@ -323,6 +330,10 @@ async function getDashboardData(req, res, next) {
         from: requestSource?.from || requestSource?.date_from,
         to: requestSource?.to || requestSource?.date_to,
       },
+      data: Array.isArray(inputData) ? inputData : undefined,
+      records: Array.isArray(inputData) ? inputData : undefined,
+      leads: Array.isArray(requestSource?.leads) ? requestSource.leads : undefined,
+      activities: Array.isArray(requestSource?.activities) ? requestSource.activities : undefined,
       modules: requestSource?.modules,
       metrics: requestSource?.metrics,
       groupings: requestSource?.groupings,
@@ -343,6 +354,7 @@ async function getDashboardData(req, res, next) {
       event: 'dashboard_response_constructed',
       title: result.dashboard?.title,
       widgetCount: result.dashboard?.widgets?.length,
+      recordsCount: result.data?.length || result.dashboard?.data?.length || 0,
       executionTime: formatExecutionTime(startTime),
     });
 

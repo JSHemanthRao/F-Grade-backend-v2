@@ -467,7 +467,12 @@ const spec = {
         operationId: 'generateCRMDashboard',
         tags: ['CRM'],
         summary: 'Generate an enterprise CRM analytics dashboard',
-        description: "Use this operation when the user asks for a dashboard (e.g. sales dashboard, management dashboard, activity dashboard, period comparison). Returns structured Dashboard JSON with KPI metrics, stage distributions, employee performance, and trends.",
+        description: [
+          'Use this operation to generate a complete enterprise analytics dashboard (sales, management, activity, or comparison).',
+          'DATA PIPELINE INSTRUCTION: If you already queried Zoho CRM (e.g. using queryCRMRecords), pass the returned record array directly in the request body as "data" or "records".',
+          'If no pre-fetched data is passed, provide "date_from" (e.g. 2026-07-01) and "date_to" (e.g. 2026-08-01) and the backend will retrieve records from Zoho CRM automatically.',
+          'The backend deterministically calculates all metrics (total revenue, deal count, closed won, win rate %, average deal size, stage distribution, employee performance, trend) and returns structured dashboard widgets, metrics, data records, and tables.',
+        ].join(' '),
         parameters: [
           {
             name: 'body',
@@ -476,11 +481,22 @@ const spec = {
             schema: {
               type: 'object',
               properties: {
-                title: { type: 'string', description: 'Dashboard title, e.g. July Sales Dashboard' },
+                title: { type: 'string', description: 'Dashboard title, e.g. July 2026 Sales Dashboard' },
                 type: { type: 'string', enum: ['sales', 'management', 'activity', 'comparison'], description: 'Dashboard type' },
-                date_from: { type: 'string', description: 'Start date or ISO datetime' },
-                date_to: { type: 'string', description: 'End date or ISO datetime' },
+                date_from: { type: 'string', description: 'Start date or ISO datetime (e.g. 2026-07-01)' },
+                date_to: { type: 'string', description: 'End date or ISO datetime (e.g. 2026-08-01)' },
                 employee: { type: 'string', description: 'Employee name or ID to filter by' },
+                module: { type: 'string', description: 'CRM module name, e.g. Deals' },
+                data: {
+                  type: 'array',
+                  description: 'Optional array of CRM records (e.g. Deals returned by queryCRMRecords) to analyze and visualize directly.',
+                  items: { type: 'object' },
+                },
+                records: {
+                  type: 'array',
+                  description: 'Alias for data: array of CRM records to analyze.',
+                  items: { type: 'object' },
+                },
                 theme: {
                   type: 'object',
                   properties: {
@@ -495,7 +511,7 @@ const spec = {
         ],
         responses: {
           200: {
-            description: 'Successful CRM dashboard response',
+            description: 'Successful CRM dashboard response with computed metrics, raw records, and widgets',
             schema: {
               type: 'object',
               properties: {
@@ -506,12 +522,21 @@ const spec = {
                     title: { type: 'string' },
                     type: { type: 'string' },
                     summary: { type: 'string' },
+                    metrics: { type: 'object' },
+                    data: { type: 'array', items: { type: 'object' } },
+                    tables: { type: 'array', items: { type: 'object' } },
                     widgets: {
                       type: 'array',
                       items: { type: 'object' },
                     },
                   },
                 },
+                metrics: { type: 'object' },
+                data: { type: 'array', items: { type: 'object' } },
+                records: { type: 'array', items: { type: 'object' } },
+                tables: { type: 'array', items: { type: 'object' } },
+                executionTime: { type: 'string' },
+                source: { type: 'string' },
               },
             },
           },
@@ -567,6 +592,10 @@ const spec = {
               properties: {
                 success: { type: 'boolean' },
                 dashboard: { type: 'object' },
+                metrics: { type: 'object' },
+                data: { type: 'array', items: { type: 'object' } },
+                records: { type: 'array', items: { type: 'object' } },
+                tables: { type: 'array', items: { type: 'object' } },
               },
             },
           },

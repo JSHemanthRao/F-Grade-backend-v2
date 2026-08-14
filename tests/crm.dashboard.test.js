@@ -452,3 +452,99 @@ test('13. POST /api/crm/dashboard and GET /api/crm/dashboard/view HTTP endpoints
     recordsService.getRecords = originalGetRecords;
   }
 });
+
+test('14. Data Pipeline: passing pre-fetched CRM data directly to POST /api/crm/dashboard calculates metrics from that dataset', async () => {
+  const customDeals = [
+    { Deal_Name: 'Enterprise AI Suite', Amount: 1250000, Stage: 'Closed Won', Owner: { name: 'Sanjay' }, Closing_Date: '2026-07-10' },
+    { Deal_Name: 'Cybersecurity Setup', Amount: 350000, Stage: 'Closed Won', Owner: { name: 'Ravi' }, Closing_Date: '2026-07-15' },
+    { Deal_Name: 'Cloud Migration', Amount: 400000, Stage: 'Proposal/Price Quote', Owner: { name: 'Sanjay' }, Closing_Date: '2026-07-22' },
+  ];
+
+  const app = express();
+  app.use(express.json());
+  app.use('/api/crm', crmRouter);
+
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, resolve));
+  const port = server.address().port;
+
+  try {
+    const res = await fetch(`http://localhost:${port}/api/crm/dashboard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'July 2026 Sales Pipeline',
+        type: 'sales',
+        data: customDeals,
+      }),
+    });
+
+    const json = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(json.success, true);
+    assert.ok(json.metrics);
+    // Total = 1250000 + 350000 + 400000 = 2000000 -> ₹20,00,000
+    assert.equal(json.metrics.totalRevenue, 2000000);
+    assert.equal(json.metrics.formattedTotalRevenue, '₹20,00,000');
+    assert.equal(json.metrics.dealCount, 3);
+    assert.equal(json.metrics.closedWonCount, 2);
+    assert.equal(json.metrics.closedWonRevenue, 1600000);
+    assert.equal(json.metrics.formattedClosedWonRevenue, '₹16,00,000');
+    assert.equal(json.data.length, 3);
+    assert.ok(Array.isArray(json.tables));
+  } finally {
+    server.close();
+  }
+});
+
+test('15. End-to-end: "Create a sales dashboard for July 2026 showing total revenue, total deals, closed-won deals, deal stages, revenue by employee, and a monthly trend" produces all 7 required components', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async (module) => {
+      if (module === 'deals') return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+      return { data: MOCK_LEADS, info: { count: MOCK_LEADS.length } };
+    };
+
+    const res = await assistantEngine.handleAssistantRequest({
+      question: 'Create a sales dashboard for July 2026 showing total revenue, total deals, closed-won deals, deal stages, revenue by employee, and a monthly trend.',
+    });
+
+    assert.equal(res.success, true);
+    assert.ok(res.dashboard);
+    assert.ok(Array.isArray(res.data) && res.data.length > 0);
+    assert.ok(res.metrics);
+
+    // 1. Total Revenue KPI
+    const totalRevKpi = res.dashboard.widgets.find((w) => w.id === 'total-revenue-kpi');
+    assert.ok(totalRevKpi);
+    assert.equal(totalRevKpi.value, 1650000);
+    assert.equal(totalRevKpi.formattedValue, '₹16,50,000');
+
+    // 2. Closed Won KPI
+    const wonKpi = res.dashboard.widgets.find((w) => w.id === 'closed-won-kpi');
+    assert.ok(wonKpi);
+    assert.equal(wonKpi.value, 1250000);
+    assert.equal(wonKpi.formattedValue, '₹12,50,000');
+
+    // 3. Deal Stage donut
+    const donutWidget = res.dashboard.widgets.find((w) => w.id === 'deal-stage-donut');
+    assert.ok(donutWidget);
+    assert.equal(donutWidget.type, 'donut');
+
+    // 4. Revenue by Employee
+    const empBarWidget = res.dashboard.widgets.find((w) => w.id === 'revenue-by-employee-bar');
+    assert.ok(empBarWidget);
+    assert.ok(empBarWidget.data.length >= 2);
+
+    // 5. Revenue Trend
+    const trendWidget = res.dashboard.widgets.find((w) => w.id === 'revenue-trend-line');
+    assert.ok(trendWidget);
+
+    // 6. Top Deals Table
+    const tableWidget = res.dashboard.widgets.find((w) => w.id === 'top-deals-table');
+    assert.ok(tableWidget);
+    assert.ok(tableWidget.rows.length >= 1);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});

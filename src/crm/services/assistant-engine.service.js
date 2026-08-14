@@ -148,6 +148,13 @@ async function handleAssistantRequest(payload = {}) {
 
   if (DASHBOARD_QUESTION_PATTERN.test(question)) {
     const params = extractDashboardParams(question);
+    const suppliedData = payload?.data
+      || payload?.records
+      || payload?.deals
+      || payload?.context?.datasets?.flatMap((ds) => ds?.result?.data || ds?.data || [])
+      || payload?.conversationContext?.datasets?.flatMap((ds) => ds?.result?.data || ds?.data || [])
+      || undefined;
+
     try {
       const dashboardResult = await dashboardService.getDashboard({
         question,
@@ -155,10 +162,12 @@ async function handleAssistantRequest(payload = {}) {
         theme: params.theme,
         dateRange: params.dateRange,
         employee: params.employee,
+        data: Array.isArray(suppliedData) && suppliedData.length > 0 ? suppliedData : undefined,
         signal: payload.signal,
       });
 
       const dashboardObj = dashboardResult.dashboard;
+      const rawRecords = dashboardResult.data || dashboardObj.data || [];
       const summary = dashboardObj.summary
         ? `Here’s the ${dashboardObj.title}. ${dashboardObj.summary}`
         : `Here’s the ${dashboardObj.title}.`;
@@ -167,8 +176,10 @@ async function handleAssistantRequest(payload = {}) {
         success: true,
         summary,
         dashboard: dashboardObj,
-        data: dashboardObj.widgets,
-        tables: [],
+        data: rawRecords.length > 0 ? rawRecords : dashboardObj.widgets,
+        records: rawRecords,
+        metrics: dashboardResult.metrics || dashboardObj.metrics || {},
+        tables: dashboardResult.tables || dashboardObj.tables || [],
       };
     } catch (error) {
       logger.error('Assistant Engine Dashboard', { error: error.message });

@@ -205,34 +205,45 @@ async function buildSalesDashboard(options = {}) {
   let dealsError = null;
   let leadsError = null;
 
-  try {
-    const dealsResult = await recordsService.getRecords('deals', {
-      from: dateRange.from,
-      to: dateRange.to,
-      date_field: options.date_field || 'Closing_Date',
-      retrieval_mode: 'all',
-      limit: options.limit || 200,
-      signal: options.signal,
-    });
-    deals = dealsResult?.data || [];
-  } catch (err) {
-    dealsError = err.message;
-    logger.warn('Dashboard Service', { event: 'deals_fetch_failed', error: err.message });
+  // 1. Check if pre-fetched CRM data was provided directly from CRM connector or previous tool step
+  const providedDeals = options.data || options.records || options.deals;
+  if (Array.isArray(providedDeals) && providedDeals.length > 0) {
+    deals = providedDeals;
+  } else {
+    try {
+      const dealsResult = await recordsService.getRecords('deals', {
+        from: dateRange.from,
+        to: dateRange.to,
+        date_field: options.date_field || 'Closing_Date',
+        retrieval_mode: 'all',
+        limit: options.limit || 200,
+        signal: options.signal,
+      });
+      deals = dealsResult?.data || [];
+    } catch (err) {
+      dealsError = err.message;
+      logger.warn('Dashboard Service', { event: 'deals_fetch_failed', error: err.message });
+    }
   }
 
-  try {
-    const leadsResult = await recordsService.getRecords('leads', {
-      from: dateRange.from,
-      to: dateRange.to,
-      date_field: 'Created_Time',
-      retrieval_mode: 'all',
-      limit: options.limit || 200,
-      signal: options.signal,
-    });
-    leads = leadsResult?.data || [];
-  } catch (err) {
-    leadsError = err.message;
-    logger.warn('Dashboard Service', { event: 'leads_fetch_failed', error: err.message });
+  // 2. Leads data
+  if (Array.isArray(options.leads) && options.leads.length > 0) {
+    leads = options.leads;
+  } else if (!dealsError) {
+    try {
+      const leadsResult = await recordsService.getRecords('leads', {
+        from: dateRange.from,
+        to: dateRange.to,
+        date_field: 'Created_Time',
+        retrieval_mode: 'all',
+        limit: options.limit || 200,
+        signal: options.signal,
+      });
+      leads = leadsResult?.data || [];
+    } catch (err) {
+      leadsError = err.message;
+      logger.warn('Dashboard Service', { event: 'leads_fetch_failed', error: err.message });
+    }
   }
 
   // Filter by employee if requested
@@ -240,7 +251,7 @@ async function buildSalesDashboard(options = {}) {
     const resolvedUser = await metadataService.resolveUser(options.employee || options.user_id);
     const targetName = (resolvedUser?.name || options.employee || options.user_id).toLowerCase();
     deals = deals.filter((d) => {
-      const owner = (d.Owner?.name || d.Owner || '').toLowerCase();
+      const owner = (d.Owner?.name || d.Owner || d.Created_By?.name || '').toLowerCase();
       return owner.includes(targetName) || targetName.includes(owner);
     });
     leads = leads.filter((l) => {
@@ -260,6 +271,26 @@ async function buildSalesDashboard(options = {}) {
   const revenueTrend = computeRevenueTrend(deals);
   const dealFunnel = computeDealFunnel(deals);
   const leadSources = computeLeadSourceDistribution(leads);
+  const topPerformer = employeeRevenue[0]?.employee || 'Team';
+
+  const metrics = {
+    totalRevenue,
+    formattedTotalRevenue: formatCurrency(totalRevenue),
+    dealCount: deals.length,
+    closedWonCount: closedWonDeals.length,
+    closedWonRevenue,
+    formattedClosedWonRevenue: formatCurrency(closedWonRevenue),
+    winRate: Number(winRate.toFixed(1)),
+    formattedWinRate: `${formatNumber(winRate)}%`,
+    averageDealSize: Number(avgDealSize.toFixed(2)),
+    formattedAverageDealSize: formatCurrency(avgDealSize),
+    topPerformer,
+    stageCounts: stageDistribution,
+    employeeRevenue,
+    revenueTrend,
+    dealFunnel,
+    leadSources,
+  };
 
   const widgets = [];
 
@@ -389,6 +420,17 @@ async function buildSalesDashboard(options = {}) {
   }
 
   // 10. Top Deals Table
+  const topDealsRows = deals
+    .sort((a, b) => (numericValue(b.Amount || b.amount || 0) || 0) - (numericValue(a.Amount || a.amount || 0) || 0))
+    .slice(0, 10)
+    .map((d) => [
+      d.Deal_Name || d.Deal || 'Untitled Deal',
+      d.Owner?.name || d.Owner || 'Unassigned',
+      d.Stage || d.stage || 'Open',
+      d.Closing_Date || d.Created_Time?.slice(0, 10) || '-',
+      formatCurrency(numericValue(d.Amount || d.amount || 0) || 0),
+    ]);
+
   if (deals.length > 0) {
     widgets.push({
       id: 'top-deals-table',
@@ -396,38 +438,56 @@ async function buildSalesDashboard(options = {}) {
       title: 'Top Deals in Pipeline',
       subtitle: 'Highest value opportunities',
       headers: ['Deal Name', 'Owner', 'Stage', 'Closing Date', 'Amount'],
-      rows: deals
-        .sort((a, b) => (numericValue(b.Amount || b.amount || 0) || 0) - (numericValue(a.Amount || a.amount || 0) || 0))
-        .slice(0, 5)
-        .map((d) => [
-          d.Deal_Name || d.Deal || 'Untitled Deal',
-          d.Owner?.name || d.Owner || 'Unassigned',
-          d.Stage || d.stage || 'Open',
-          d.Closing_Date || d.Created_Time?.slice(0, 10) || '-',
-          formatCurrency(numericValue(d.Amount || d.amount || 0) || 0),
-        ]),
+      rows: topDealsRows.slice(0, 5),
       status: dealsError ? 'error' : 'success',
     });
   }
 
-  const topPerformer = employeeRevenue[0]?.employee || 'Team';
+  const tables = [
+    {
+      title: 'Top Deals in Pipeline',
+      headers: ['Deal Name', 'Owner', 'Stage', 'Closing Date', 'Amount'],
+      rows: topDealsRows,
+    },
+    {
+      title: 'Revenue by Sales Rep',
+      headers: ['Employee', 'Deals', 'Won Deals', 'Revenue'],
+      rows: employeeRevenue.map((e) => [
+        e.employee,
+        String(e.dealCount),
+        String(e.wonCount),
+        e.formattedRevenue,
+      ]),
+    },
+  ];
+
   const summary = deals.length > 0
     ? `Total pipeline value is ${formatCurrency(totalRevenue)} across ${deals.length} deals with a ${formatNumber(winRate)}% win rate (${closedWonDeals.length} won). ${topPerformer} generated the highest revenue.`
     : 'No CRM deals or records were found for the selected period.';
 
+  const dashboardObj = {
+    title: options.title || 'Sales Performance Dashboard',
+    type: 'sales',
+    theme,
+    dateRange,
+    filters: [
+      { type: 'Date Range', from: dateRange.from.slice(0, 10), to: dateRange.to.slice(0, 10) },
+      { type: 'Employee', value: options.employee || 'All Employees' },
+    ],
+    summary,
+    metrics,
+    data: deals,
+    records: deals,
+    tables,
+    widgets,
+  };
+
   return {
-    dashboard: {
-      title: options.title || 'Sales Performance Dashboard',
-      type: 'sales',
-      theme,
-      dateRange,
-      filters: [
-        { type: 'Date Range', from: dateRange.from.slice(0, 10), to: dateRange.to.slice(0, 10) },
-        { type: 'Employee', value: options.employee || 'All Employees' },
-      ],
-      summary,
-      widgets,
-    },
+    dashboard: dashboardObj,
+    metrics,
+    data: deals,
+    records: deals,
+    tables,
   };
 }
 
@@ -436,14 +496,24 @@ async function buildSalesDashboard(options = {}) {
 // ---------------------------------------------------------------------------
 async function buildActivityDashboard(options = {}) {
   const theme = resolveTheme(options.theme);
-  const activityResult = await activityService.getActivity({
-    ...options,
-    from: options.from || options.dateRange?.from,
-    to: options.to || options.dateRange?.to,
-    user_id: options.user_id || options.employee,
-  });
 
-  const activities = activityResult?.data || [];
+  let activities = [];
+  let reportDate = new Date().toISOString().slice(0, 10);
+
+  const providedActivities = options.data || options.records || options.activities;
+  if (Array.isArray(providedActivities) && providedActivities.length > 0) {
+    activities = providedActivities;
+  } else {
+    const activityResult = await activityService.getActivity({
+      ...options,
+      from: options.from || options.dateRange?.from,
+      to: options.to || options.dateRange?.to,
+      user_id: options.user_id || options.employee,
+    });
+    activities = activityResult?.data || [];
+    reportDate = activityResult?.date || reportDate;
+  }
+
   const totalActivities = activities.length;
 
   const dealsCount = activities.filter((a) => a.activity_type === 'deal').length;
@@ -552,24 +622,30 @@ async function buildActivityDashboard(options = {}) {
     })),
   });
 
-  return {
-    dashboard: {
-      title: options.title || "Today's CRM Activity Dashboard",
-      type: 'activity',
-      theme,
-      dateRange: {
-        from: activityResult.date || new Date().toISOString().slice(0, 10),
-        to: activityResult.date || new Date().toISOString().slice(0, 10),
-      },
-      filters: [
-        { type: 'Employee', value: options.user_id || options.employee || 'All Employees' },
-        { type: 'Date', value: activityResult.date || 'Today' },
-      ],
-      summary: totalActivities > 0
-        ? `Total of ${totalActivities} activities logged today across ${Object.keys(empMap).length || 1} team member(s).`
-        : 'No CRM activity was logged for today.',
-      widgets,
+  const dashboardObj = {
+    title: options.title || "Today's CRM Activity Dashboard",
+    type: 'activity',
+    theme,
+    dateRange: {
+      from: reportDate,
+      to: reportDate,
     },
+    filters: [
+      { type: 'Employee', value: options.user_id || options.employee || 'All Employees' },
+      { type: 'Date', value: reportDate },
+    ],
+    summary: totalActivities > 0
+      ? `Total of ${totalActivities} activities logged today across ${Object.keys(empMap).length || 1} team member(s).`
+      : 'No CRM activity was logged for today.',
+    data: activities,
+    records: activities,
+    widgets,
+  };
+
+  return {
+    dashboard: dashboardObj,
+    data: activities,
+    records: activities,
   };
 }
 
