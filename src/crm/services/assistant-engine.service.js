@@ -28,7 +28,7 @@ const { detectTimeRange } = require('./assistant/date-detector.service');
 
 const ACTIVITY_QUESTION_PATTERN = /(today'?s?\s+(?:crm\s+)?activity|crm\s+activity|what\s+did\s+.*\s+do\s+today|what\s+changes\s+did\s+.*\s+make\s+today|activity\s+for\s+all\s+employees|daily\s+activity|activity\s+report)/i;
 
-const DASHBOARD_QUESTION_PATTERN = /\b(?:create|build|generate|show|view)?\s*(?:a\s+)?(?:sales|management|performance|comparison|employee|analytics)?\s*dashboard\b|\b(?:compare\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|q[1-4]|this\s+month|last\s+month|this\s+quarter|last\s+quarter|this\s+year|last\s+year)\s+(?:with|and|versus|vs)\s+[a-z0-9\s]+)\b|\b(?:deal-stage\s+donut|donut\s+chart|sales\s+performance\s+by\s+employee|revenue\s+by\s+employee|change\s+(?:the\s+)?(?:this\s+)?dashboard\s+to\s+(?:dark|light)\s+mode)\b/i;
+const DASHBOARD_QUESTION_PATTERN = /\bdashboard\b|\b(?:deal-stage\s+donut|donut\s+chart|sales\s+performance\s+by\s+employee|revenue\s+by\s+employee\s+chart|change\s+(?:the\s+)?(?:this\s+)?dashboard\s+to\s+(?:dark|light)\s+mode|make\s+(?:the\s+dashboard\s+)?(?:dark|light)\s*mode)\b|^\s*compare\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+(?:with|and|versus|vs)\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s*$/i;
 
 function extractActivityUser(question) {
   const matchDid = question.match(/what\s+did\s+([A-Za-z\s.'-]+?)\s+do\s+today/i);
@@ -51,7 +51,7 @@ function extractDashboardParams(question) {
     employee = matchExplicit[1].trim();
   } else {
     const matchBy = question.match(/(?:for|by)\s+([A-Za-z]+)(?:\s+only)?$/i);
-    if (matchBy && !/dashboard|month|week|year|sales|july|june|august|employee/i.test(matchBy[1])) {
+    if (matchBy && !/dashboard|month|week|year|sales|july|june|august|employee|today/i.test(matchBy[1])) {
       employee = matchBy[1].trim();
     }
   }
@@ -60,6 +60,7 @@ function extractDashboardParams(question) {
   if (/activity/i.test(question)) type = 'activity';
   else if (/compare|versus|vs/i.test(question)) type = 'comparison';
   else if (/management/i.test(question)) type = 'sales';
+  else if (/employee|performance/i.test(question)) type = 'sales';
 
   const timeRange = detectTimeRange(question);
   const dateRange = timeRange?.startDate && timeRange?.endDate

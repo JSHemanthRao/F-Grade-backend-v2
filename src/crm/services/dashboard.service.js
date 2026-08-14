@@ -2,6 +2,7 @@ const recordsService = require('./retrieval-engine.service');
 const activityService = require('./activity.service');
 const metadataService = require('./crm-metadata.service');
 const { formatCurrency, formatNumber, numericValue } = require('./assistant/currency.service');
+const { detectTimeRange } = require('./assistant/date-detector.service');
 const logger = require('../../common/logging/logger');
 
 const DEFAULT_THEME = {
@@ -32,7 +33,7 @@ function resolveTheme(themeInput = {}) {
   };
 }
 
-function resolveDateRange(dateRangeInput = {}) {
+function resolveDateRange(dateRangeInput = {}, question = '') {
   const from = dateRangeInput.from || dateRangeInput.startDate || dateRangeInput.start;
   const to = dateRangeInput.to || dateRangeInput.endDate || dateRangeInput.end;
 
@@ -40,7 +41,15 @@ function resolveDateRange(dateRangeInput = {}) {
     return { from, to };
   }
 
-  // Default to current month or today in Asia/Kolkata
+  // Check if dates can be inferred from question
+  if (question) {
+    const timeRange = detectTimeRange(question);
+    if (timeRange?.startDate && timeRange?.endDate) {
+      return { from: timeRange.startDate, to: timeRange.endDate };
+    }
+  }
+
+  // Default to current month in Asia/Kolkata
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
@@ -73,7 +82,8 @@ function computeStageDistribution(deals = []) {
   return Object.keys(counts).map((stage) => ({
     label: stage,
     count: counts[stage],
-    value: values[stage],
+    value: counts[stage],
+    totalAmount: values[stage],
     formattedValue: formatCurrency(values[stage]),
   }));
 }
@@ -81,20 +91,30 @@ function computeStageDistribution(deals = []) {
 function computeEmployeeRevenue(deals = []) {
   const userRevenue = {};
   const userDeals = {};
+  const userWon = {};
 
   deals.forEach((deal) => {
     const ownerName = deal.Owner?.name || deal.Owner || deal.Created_By?.name || 'Unassigned';
     const amount = numericValue(deal.Amount || deal.amount || 0) || 0;
+    const isWon = /closed\s*won|\bwon\b/i.test(deal.Stage || deal.stage || '');
+
     userRevenue[ownerName] = (userRevenue[ownerName] || 0) + amount;
     userDeals[ownerName] = (userDeals[ownerName] || 0) + 1;
+    if (isWon) {
+      userWon[ownerName] = (userWon[ownerName] || 0) + 1;
+    }
   });
 
   return Object.keys(userRevenue)
     .map((employee) => ({
       employee,
+      name: employee,
       revenue: userRevenue[employee],
       formattedRevenue: formatCurrency(userRevenue[employee]),
+      formattedValue: formatCurrency(userRevenue[employee]),
       dealCount: userDeals[employee],
+      wonCount: userWon[employee] || 0,
+      subtitle: `${userDeals[employee]} deals (${userWon[employee] || 0} won)`,
     }))
     .sort((a, b) => b.revenue - a.revenue);
 }
@@ -114,7 +134,10 @@ function computeRevenueTrend(deals = []) {
     .sort()
     .map((date) => ({
       date,
+      label: date,
+      value: dailyRevenue[date],
       revenue: dailyRevenue[date],
+      formattedValue: formatCurrency(dailyRevenue[date]),
       formattedRevenue: formatCurrency(dailyRevenue[date]),
     }));
 }
@@ -123,159 +146,59 @@ function computeLeadSourceDistribution(leads = []) {
   const sourceCounts = {};
 
   leads.forEach((lead) => {
-    const source = lead.Lead_Source || lead.lead_source || 'Direct / Organic';
+    const source = lead.Lead_Source || lead.lead_source || 'Direct / Website';
     sourceCounts[source] = (sourceCounts[source] || 0) + 1;
   });
 
   return Object.keys(sourceCounts).map((source) => ({
+    label: source,
     source,
+    value: sourceCounts[source],
     count: sourceCounts[source],
+    formattedValue: String(sourceCounts[source]),
   }));
 }
 
-async function buildActivityDashboard(options = {}) {
-  const activityResult = await activityService.getActivity({
-    ...options,
-    from: options.from || options.dateRange?.from,
-    to: options.to || options.dateRange?.to,
-    user_id: options.user_id || options.employee,
-  });
-
-  const activities = activityResult?.data || [];
-  const theme = resolveTheme(options.theme);
-
-  const totalActivities = activities.length;
-  const dealsCount = activities.filter((a) => a.activity_type === 'deal').length;
-  const meetingsCount = activities.filter((a) => a.activity_type === 'meeting').length;
-  const notesCount = activities.filter((a) => a.activity_type === 'note').length;
-  const otherCount = totalActivities - (dealsCount + meetingsCount + notesCount);
-
-  // Group by Employee
-  const empMap = {};
-  // Group by Module
-  const modMap = {};
-  // Group by Action
-  const actMap = {};
-  // Group by Time bucket (Hour)
-  const timeMap = {};
-
-  activities.forEach((act) => {
-    const emp = act.user_name || 'Unknown';
-    empMap[emp] = (empMap[emp] || 0) + 1;
-
-    const mod = act.module || 'Other';
-    modMap[mod] = (modMap[mod] || 0) + 1;
-
-    const action = act.action || 'created';
-    actMap[action] = (actMap[action] || 0) + 1;
-
-    if (act.audited_time) {
-      const timeStr = String(act.audited_time).slice(11, 16); // HH:MM
-      const hourStr = `${timeStr.slice(0, 2)}:00`;
-      timeMap[hourStr] = (timeMap[hourStr] || 0) + 1;
-    }
-  });
-
-  const widgets = [
-    {
-      id: 'total-activities-kpi',
-      type: 'kpi',
-      title: 'Total Activities',
-      value: totalActivities,
-      formattedValue: String(totalActivities),
-      subtitle: "Today's logged CRM actions",
-      icon: 'activity',
-      accent: theme.primaryColor,
-    },
-    {
-      id: 'deals-created-kpi',
-      type: 'kpi',
-      title: 'Deals Actioned',
-      value: dealsCount,
-      formattedValue: String(dealsCount),
-      subtitle: 'Created or stage updated',
-      icon: 'dollar',
-      accent: '#10B981',
-    },
-    {
-      id: 'meetings-kpi',
-      type: 'kpi',
-      title: 'Meetings Logged',
-      value: meetingsCount,
-      formattedValue: String(meetingsCount),
-      subtitle: 'Client & team meetings',
-      icon: 'calendar',
-      accent: '#6366F1',
-    },
-    {
-      id: 'notes-kpi',
-      type: 'kpi',
-      title: 'Notes Added',
-      value: notesCount,
-      formattedValue: String(notesCount),
-      subtitle: 'Customer record notes',
-      icon: 'file-text',
-      accent: '#F59E0B',
-    },
-    {
-      id: 'activities-by-employee-bar',
-      type: 'bar',
-      title: 'Activities by Employee',
-      subtitle: 'Action count per team member',
-      data: Object.keys(empMap).map((name) => ({ label: name, value: empMap[name] })),
-    },
-    {
-      id: 'activities-by-module-donut',
-      type: 'donut',
-      title: 'Activities by Module',
-      subtitle: 'Distribution across CRM modules',
-      data: Object.keys(modMap).map((name) => ({ label: name, value: modMap[name] })),
-    },
-    {
-      id: 'activities-by-action-pie',
-      type: 'pie',
-      title: 'Activities by Action',
-      subtitle: 'Created vs Updated vs Added',
-      data: Object.keys(actMap).map((name) => ({ label: name, value: actMap[name] })),
-    },
-    {
-      id: 'activity-timeline',
-      type: 'activity_timeline',
-      title: 'Recent Activity Timeline',
-      subtitle: 'Chronological events stream',
-      data: activities.slice(0, 15).map((a) => ({
-        id: a.record_id,
-        user: a.user_name,
-        action: a.action,
-        module: a.module,
-        recordName: a.record_name,
-        time: a.audited_time,
-      })),
-    },
+function computeDealFunnel(deals = []) {
+  const standardStages = [
+    { label: 'Qualification', match: /qualification/i },
+    { label: 'Needs Analysis', match: /needs\s*analysis|discovery/i },
+    { label: 'Proposal / Quote', match: /proposal|quote/i },
+    { label: 'Negotiation', match: /negotiat/i },
+    { label: 'Closed Won', match: /closed\s*won|\bwon\b/i },
   ];
 
-  return {
-    dashboard: {
-      title: options.title || "Today's CRM Activity Dashboard",
-      type: 'activity',
-      theme,
-      dateRange: {
-        from: activityResult.date,
-        to: activityResult.date,
-      },
-      filters: [
-        { type: 'employee', value: options.user_id || 'All Employees' },
-        { type: 'date', value: activityResult.date },
-      ],
-      summary: `Total of ${totalActivities} activities logged today by ${Object.keys(empMap).length || 1} employee(s).`,
-      widgets,
-    },
-  };
+  const stageCounts = {};
+  const stageValues = {};
+
+  deals.forEach((deal) => {
+    const stage = String(deal.Stage || deal.stage || 'Open');
+    const amount = numericValue(deal.Amount || deal.amount || 0) || 0;
+
+    let matchedLabel = 'Other Stages';
+    for (const std of standardStages) {
+      if (std.match.test(stage)) {
+        matchedLabel = std.label;
+        break;
+      }
+    }
+    stageCounts[matchedLabel] = (stageCounts[matchedLabel] || 0) + 1;
+    stageValues[matchedLabel] = (stageValues[matchedLabel] || 0) + amount;
+  });
+
+  return Object.keys(stageCounts).map((stage) => ({
+    label: stage,
+    value: stageCounts[stage],
+    formattedValue: `${stageCounts[stage]} (${formatCurrency(stageValues[stage] || 0)})`,
+  }));
 }
 
+// ---------------------------------------------------------------------------
+// 1. Sales / Management Dashboard
+// ---------------------------------------------------------------------------
 async function buildSalesDashboard(options = {}) {
   const theme = resolveTheme(options.theme);
-  const dateRange = resolveDateRange(options.dateRange);
+  const dateRange = resolveDateRange(options.dateRange, options.question);
 
   let deals = [];
   let leads = [];
@@ -286,8 +209,9 @@ async function buildSalesDashboard(options = {}) {
     const dealsResult = await recordsService.getRecords('deals', {
       from: dateRange.from,
       to: dateRange.to,
+      date_field: options.date_field || 'Closing_Date',
       retrieval_mode: 'all',
-      limit: 200,
+      limit: options.limit || 200,
       signal: options.signal,
     });
     deals = dealsResult?.data || [];
@@ -300,8 +224,9 @@ async function buildSalesDashboard(options = {}) {
     const leadsResult = await recordsService.getRecords('leads', {
       from: dateRange.from,
       to: dateRange.to,
+      date_field: 'Created_Time',
       retrieval_mode: 'all',
-      limit: 200,
+      limit: options.limit || 200,
       signal: options.signal,
     });
     leads = leadsResult?.data || [];
@@ -333,6 +258,7 @@ async function buildSalesDashboard(options = {}) {
   const stageDistribution = computeStageDistribution(deals);
   const employeeRevenue = computeEmployeeRevenue(deals);
   const revenueTrend = computeRevenueTrend(deals);
+  const dealFunnel = computeDealFunnel(deals);
   const leadSources = computeLeadSourceDistribution(leads);
 
   const widgets = [];
@@ -348,7 +274,8 @@ async function buildSalesDashboard(options = {}) {
     comparisonText: '+8.4% vs last period',
     trend: 'up',
     subtitle: `${deals.length} total deals`,
-    icon: 'dollar',
+    icon: '💰',
+    accent: theme.primaryColor,
     status: dealsError ? 'error' : 'success',
     error: dealsError ? 'Could not retrieve Deals from CRM' : null,
   });
@@ -360,8 +287,8 @@ async function buildSalesDashboard(options = {}) {
     title: 'Closed Won Revenue',
     value: closedWonRevenue,
     formattedValue: formatCurrency(closedWonRevenue),
-    subtitle: `${closedWonDeals.length} won deals`,
-    icon: 'check-circle',
+    subtitle: `${closedWonDeals.length} won opportunities`,
+    icon: '🏆',
     accent: '#10B981',
     status: dealsError ? 'error' : 'success',
   });
@@ -374,7 +301,7 @@ async function buildSalesDashboard(options = {}) {
     value: winRate,
     formattedValue: `${formatNumber(winRate)}%`,
     subtitle: `${closedWonDeals.length} of ${deals.length} closed won`,
-    icon: 'award',
+    icon: '🎯',
     accent: '#6366F1',
     status: dealsError ? 'error' : 'success',
   });
@@ -383,66 +310,110 @@ async function buildSalesDashboard(options = {}) {
   widgets.push({
     id: 'lead-count-kpi',
     type: 'kpi',
-    title: 'New Leads',
+    title: 'New Leads Acquired',
     value: leads.length,
     formattedValue: String(leads.length),
     subtitle: 'Acquired in selected period',
-    icon: 'users',
+    icon: '👥',
     accent: '#F59E0B',
     status: leadsError ? 'error' : 'success',
     error: leadsError ? 'Could not retrieve Leads from CRM' : null,
   });
 
-  // 5. Revenue by Employee
-  widgets.push({
-    id: 'revenue-by-employee-bar',
-    type: 'bar',
-    title: 'Revenue by Employee',
-    subtitle: 'Pipeline contribution per rep',
-    data: employeeRevenue.map((item) => ({ label: item.employee, value: item.revenue, formattedValue: item.formattedRevenue })),
-    status: dealsError ? 'error' : 'success',
-  });
+  // 5. Revenue Trend (Area / Line Chart)
+  if (revenueTrend.length > 0) {
+    widgets.push({
+      id: 'revenue-trend-line',
+      type: 'area',
+      title: 'Revenue & Deal Value Trend',
+      subtitle: 'Timeline of deal amounts across period',
+      data: revenueTrend,
+      status: dealsError ? 'error' : 'success',
+    });
+  }
 
-  // 6. Deal Stage Donut
-  widgets.push({
-    id: 'deal-stage-donut',
-    type: 'donut',
-    title: 'Deal Stage Distribution',
-    subtitle: 'Deal count by stage pipeline',
-    data: stageDistribution.map((item) => ({ label: item.label, value: item.count })),
-    status: dealsError ? 'error' : 'success',
-  });
+  // 6. Revenue by Employee (Horizontal Bar)
+  if (employeeRevenue.length > 0) {
+    widgets.push({
+      id: 'revenue-by-employee-bar',
+      type: 'horizontal_bar',
+      title: 'Revenue by Sales Rep',
+      subtitle: 'Pipeline contribution per team member',
+      data: employeeRevenue.map((item) => ({
+        label: item.employee,
+        value: item.revenue,
+        formattedValue: item.formattedRevenue,
+      })),
+      status: dealsError ? 'error' : 'success',
+    });
+  }
 
-  // 7. Revenue Trend Line
-  widgets.push({
-    id: 'revenue-trend-line',
-    type: 'line',
-    title: 'Revenue Trend',
-    subtitle: 'Timeline of deal values',
-    data: revenueTrend.map((item) => ({ label: item.date, value: item.revenue, formattedValue: item.formattedRevenue })),
-    status: dealsError ? 'error' : 'success',
-  });
+  // 7. Deal Stage Distribution (Donut Chart)
+  if (stageDistribution.length > 0) {
+    widgets.push({
+      id: 'deal-stage-donut',
+      type: 'donut',
+      title: 'Deal Stage Distribution',
+      subtitle: 'Deal count by stage pipeline',
+      data: stageDistribution.map((item) => ({
+        label: item.label,
+        value: item.count,
+        formattedValue: `${item.count} deals`,
+      })),
+      status: dealsError ? 'error' : 'success',
+    });
+  }
 
-  // 8. Top Deals Table
-  widgets.push({
-    id: 'top-deals-table',
-    type: 'table',
-    title: 'Top Deals in Pipeline',
-    subtitle: 'Highest value opportunities',
-    headers: ['Deal Name', 'Owner', 'Stage', 'Amount'],
-    rows: deals
-      .sort((a, b) => (numericValue(b.Amount || b.amount || 0) || 0) - (numericValue(a.Amount || a.amount || 0) || 0))
-      .slice(0, 5)
-      .map((d) => [
-        d.Deal_Name || d.Deal || 'Untitled Deal',
-        d.Owner?.name || d.Owner || 'Unassigned',
-        d.Stage || d.stage || 'Open',
-        formatCurrency(numericValue(d.Amount || d.amount || 0) || 0),
-      ]),
-    status: dealsError ? 'error' : 'success',
-  });
+  // 8. Sales Pipeline Funnel (Funnel Chart)
+  if (dealFunnel.length > 0) {
+    widgets.push({
+      id: 'deal-funnel-chart',
+      type: 'funnel',
+      title: 'Sales Pipeline Funnel',
+      subtitle: 'Conversion stages and volume',
+      data: dealFunnel,
+      status: dealsError ? 'error' : 'success',
+    });
+  }
+
+  // 9. Lead Sources Distribution (Pie Chart)
+  if (leadSources.length > 0) {
+    widgets.push({
+      id: 'lead-sources-pie',
+      type: 'pie',
+      title: 'Lead Acquisition Sources',
+      subtitle: 'Channel breakdown for new leads',
+      data: leadSources,
+      status: leadsError ? 'error' : 'success',
+    });
+  }
+
+  // 10. Top Deals Table
+  if (deals.length > 0) {
+    widgets.push({
+      id: 'top-deals-table',
+      type: 'table',
+      title: 'Top Deals in Pipeline',
+      subtitle: 'Highest value opportunities',
+      headers: ['Deal Name', 'Owner', 'Stage', 'Closing Date', 'Amount'],
+      rows: deals
+        .sort((a, b) => (numericValue(b.Amount || b.amount || 0) || 0) - (numericValue(a.Amount || a.amount || 0) || 0))
+        .slice(0, 5)
+        .map((d) => [
+          d.Deal_Name || d.Deal || 'Untitled Deal',
+          d.Owner?.name || d.Owner || 'Unassigned',
+          d.Stage || d.stage || 'Open',
+          d.Closing_Date || d.Created_Time?.slice(0, 10) || '-',
+          formatCurrency(numericValue(d.Amount || d.amount || 0) || 0),
+        ]),
+      status: dealsError ? 'error' : 'success',
+    });
+  }
 
   const topPerformer = employeeRevenue[0]?.employee || 'Team';
+  const summary = deals.length > 0
+    ? `Total pipeline value is ${formatCurrency(totalRevenue)} across ${deals.length} deals with a ${formatNumber(winRate)}% win rate (${closedWonDeals.length} won). ${topPerformer} generated the highest revenue.`
+    : 'No CRM deals or records were found for the selected period.';
 
   return {
     dashboard: {
@@ -451,23 +422,182 @@ async function buildSalesDashboard(options = {}) {
       theme,
       dateRange,
       filters: [
-        { type: 'date', from: dateRange.from, to: dateRange.to },
-        { type: 'employee', value: options.employee || 'All Employees' },
+        { type: 'Date Range', from: dateRange.from.slice(0, 10), to: dateRange.to.slice(0, 10) },
+        { type: 'Employee', value: options.employee || 'All Employees' },
       ],
-      summary: `Total pipeline value is ${formatCurrency(totalRevenue)} across ${deals.length} deals with a ${formatNumber(winRate)}% win rate. ${topPerformer} leads in revenue contribution.`,
+      summary,
       widgets,
     },
   };
 }
 
+// ---------------------------------------------------------------------------
+// 2. Activity Dashboard
+// ---------------------------------------------------------------------------
+async function buildActivityDashboard(options = {}) {
+  const theme = resolveTheme(options.theme);
+  const activityResult = await activityService.getActivity({
+    ...options,
+    from: options.from || options.dateRange?.from,
+    to: options.to || options.dateRange?.to,
+    user_id: options.user_id || options.employee,
+  });
+
+  const activities = activityResult?.data || [];
+  const totalActivities = activities.length;
+
+  const dealsCount = activities.filter((a) => a.activity_type === 'deal').length;
+  const meetingsCount = activities.filter((a) => a.activity_type === 'meeting').length;
+  const notesCount = activities.filter((a) => a.activity_type === 'note').length;
+  const callsCount = activities.filter((a) => a.activity_type === 'call').length;
+  const otherCount = totalActivities - (dealsCount + meetingsCount + notesCount + callsCount);
+
+  // Group by Employee
+  const empMap = {};
+  // Group by Module
+  const modMap = {};
+  // Group by Human vs Automation
+  const actorMap = { 'User Activity': 0, 'Automation': 0 };
+
+  activities.forEach((act) => {
+    const isAuto = /automation|system|deluge/i.test(act.source || act.user_name || '');
+    if (isAuto) {
+      actorMap['Automation'] += 1;
+    } else {
+      actorMap['User Activity'] += 1;
+      const emp = act.user_name || 'Unknown';
+      empMap[emp] = (empMap[emp] || 0) + 1;
+    }
+
+    const mod = act.module || 'Other';
+    modMap[mod] = (modMap[mod] || 0) + 1;
+  });
+
+  const widgets = [
+    {
+      id: 'total-activities-kpi',
+      type: 'kpi',
+      title: 'Total Activities',
+      value: totalActivities,
+      formattedValue: String(totalActivities),
+      subtitle: "Logged CRM actions",
+      icon: '⚡',
+      accent: theme.primaryColor,
+    },
+    {
+      id: 'deals-actioned-kpi',
+      type: 'kpi',
+      title: 'Deals Actioned',
+      value: dealsCount,
+      formattedValue: String(dealsCount),
+      subtitle: 'Created or stage updated',
+      icon: '💼',
+      accent: '#10B981',
+    },
+    {
+      id: 'meetings-logged-kpi',
+      type: 'kpi',
+      title: 'Meetings Logged',
+      value: meetingsCount,
+      formattedValue: String(meetingsCount),
+      subtitle: 'Client & team meetings',
+      icon: '📅',
+      accent: '#6366F1',
+    },
+    {
+      id: 'notes-added-kpi',
+      type: 'kpi',
+      title: 'Notes Added',
+      value: notesCount,
+      formattedValue: String(notesCount),
+      subtitle: 'Customer record notes',
+      icon: '📝',
+      accent: '#F59E0B',
+    },
+  ];
+
+  if (Object.keys(empMap).length > 0) {
+    widgets.push({
+      id: 'activities-by-employee-bar',
+      type: 'bar',
+      title: 'Activities by Employee',
+      subtitle: 'Human actions per team member',
+      data: Object.keys(empMap).map((name) => ({ label: name, value: empMap[name] })),
+    });
+  }
+
+  if (Object.keys(modMap).length > 0) {
+    widgets.push({
+      id: 'activities-by-module-donut',
+      type: 'donut',
+      title: 'Activities by Module',
+      subtitle: 'Distribution across CRM modules',
+      data: Object.keys(modMap).map((name) => ({ label: name, value: modMap[name] })),
+    });
+  }
+
+  widgets.push({
+    id: 'activity-timeline',
+    type: 'activity_timeline',
+    title: 'Recent Activity Stream',
+    subtitle: 'Chronological timeline of CRM events',
+    data: activities.slice(0, 15).map((a) => ({
+      id: a.record_id,
+      user: a.user_name,
+      action: a.action,
+      module: a.module,
+      recordName: a.record_name,
+      time: a.audited_time,
+      source: a.source,
+    })),
+  });
+
+  return {
+    dashboard: {
+      title: options.title || "Today's CRM Activity Dashboard",
+      type: 'activity',
+      theme,
+      dateRange: {
+        from: activityResult.date || new Date().toISOString().slice(0, 10),
+        to: activityResult.date || new Date().toISOString().slice(0, 10),
+      },
+      filters: [
+        { type: 'Employee', value: options.user_id || options.employee || 'All Employees' },
+        { type: 'Date', value: activityResult.date || 'Today' },
+      ],
+      summary: totalActivities > 0
+        ? `Total of ${totalActivities} activities logged today across ${Object.keys(empMap).length || 1} team member(s).`
+        : 'No CRM activity was logged for today.',
+      widgets,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 3. Comparison Dashboard (e.g. June vs July)
+// ---------------------------------------------------------------------------
 async function buildComparisonDashboard(options = {}) {
   const theme = resolveTheme(options.theme);
   const primaryRange = options.primaryRange || { from: '2026-07-01T00:00:00+05:30', to: '2026-08-01T00:00:00+05:30' };
   const comparisonRange = options.comparisonRange || { from: '2026-06-01T00:00:00+05:30', to: '2026-07-01T00:00:00+05:30' };
 
   const [currentDealsResult, prevDealsResult] = await Promise.all([
-    recordsService.getRecords('deals', { from: primaryRange.from, to: primaryRange.to, retrieval_mode: 'all', limit: 200, signal: options.signal }).catch(() => ({ data: [] })),
-    recordsService.getRecords('deals', { from: comparisonRange.from, to: comparisonRange.to, retrieval_mode: 'all', limit: 200, signal: options.signal }).catch(() => ({ data: [] })),
+    recordsService.getRecords('deals', {
+      from: primaryRange.from,
+      to: primaryRange.to,
+      date_field: 'Closing_Date',
+      retrieval_mode: 'all',
+      limit: 200,
+      signal: options.signal,
+    }).catch(() => ({ data: [] })),
+    recordsService.getRecords('deals', {
+      from: comparisonRange.from,
+      to: comparisonRange.to,
+      date_field: 'Closing_Date',
+      retrieval_mode: 'all',
+      limit: 200,
+      signal: options.signal,
+    }).catch(() => ({ data: [] })),
   ]);
 
   const currentDeals = currentDealsResult?.data || [];
@@ -479,51 +609,54 @@ async function buildComparisonDashboard(options = {}) {
 
   const currentWon = currentDeals.filter((d) => /closed\s*won|\bwon\b/i.test(d.Stage || d.stage || ''));
   const prevWon = prevDeals.filter((d) => /closed\s*won|\bwon\b/i.test(d.Stage || d.stage || ''));
-  const wonGrowth = prevWon.length > 0 ? ((currentWon.length - prevWon.length) / prevWon.length) * 100 : 0;
 
   const widgets = [
     {
       id: 'comparison-revenue-kpi',
       type: 'kpi',
-      title: 'Current vs Previous Revenue',
+      title: 'Current vs Prior Revenue',
       value: currentRevenue,
       formattedValue: formatCurrency(currentRevenue),
       previousValue: formatCurrency(prevRevenue),
       comparison: Number(revenueGrowth.toFixed(1)),
-      comparisonText: `${formatPercentage(revenueGrowth)} vs previous period`,
+      comparisonText: `${formatPercentage(revenueGrowth)} vs prior period (${formatCurrency(prevRevenue)})`,
       trend: revenueGrowth >= 0 ? 'up' : 'down',
-      icon: 'trending-up',
+      icon: '📈',
+      accent: theme.primaryColor,
     },
     {
       id: 'comparison-deals-kpi',
       type: 'kpi',
       title: 'Deal Volume Comparison',
       value: currentDeals.length,
-      formattedValue: String(currentDeals.length),
-      previousValue: String(prevDeals.length),
-      comparisonText: `${currentDeals.length} deals vs ${prevDeals.length} deals`,
+      formattedValue: `${currentDeals.length} Deals`,
+      previousValue: `${prevDeals.length} Deals`,
+      comparisonText: `${currentDeals.length} deals vs ${prevDeals.length} in prior period`,
       trend: currentDeals.length >= prevDeals.length ? 'up' : 'down',
-      icon: 'layers',
+      icon: '📊',
+      accent: '#10B981',
     },
     {
       id: 'period-revenue-bar',
       type: 'bar',
       title: 'Period Revenue Comparison',
-      subtitle: 'Primary Period vs Prior Period',
+      subtitle: 'Primary vs Comparison Period Total Value',
       data: [
-        { label: 'Prior Period', value: prevRevenue, formattedValue: formatCurrency(prevRevenue) },
-        { label: 'Current Period', value: currentRevenue, formattedValue: formatCurrency(currentRevenue) },
+        { label: 'Prior Period', value: prevRevenue, formattedValue: formatCurrency(prevRevenue), color: '#94A3B8' },
+        { label: 'Current Period', value: currentRevenue, formattedValue: formatCurrency(currentRevenue), color: theme.primaryColor },
       ],
     },
     {
-      id: 'period-won-comparison',
-      type: 'comparison',
-      title: 'Won Deals Performance',
-      currentLabel: 'Current Period',
-      currentValue: currentWon.length,
-      previousLabel: 'Previous Period',
-      previousValue: prevWon.length,
-      growth: formatPercentage(wonGrowth),
+      id: 'comparison-table',
+      type: 'table',
+      title: 'Key Metric Comparison',
+      subtitle: 'Side-by-side performance indicators',
+      headers: ['Metric', 'Current Period', 'Prior Period', 'Change (%)'],
+      rows: [
+        ['Total Revenue', formatCurrency(currentRevenue), formatCurrency(prevRevenue), formatPercentage(revenueGrowth)],
+        ['Total Deals', String(currentDeals.length), String(prevDeals.length), formatPercentage(prevDeals.length ? ((currentDeals.length - prevDeals.length) / prevDeals.length) * 100 : 0)],
+        ['Closed Won Deals', String(currentWon.length), String(prevWon.length), formatPercentage(prevWon.length ? ((currentWon.length - prevWon.length) / prevWon.length) * 100 : 0)],
+      ],
     },
   ];
 
@@ -540,6 +673,9 @@ async function buildComparisonDashboard(options = {}) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Main Dashboard Controller
+// ---------------------------------------------------------------------------
 async function getDashboard(options = {}) {
   const question = String(options.question || options.title || '').toLowerCase();
   const type = String(options.type || '').toLowerCase();

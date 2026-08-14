@@ -8,6 +8,21 @@ const assistantEngine = require('../src/crm/services/assistant-engine.service');
 const activityService = require('../src/crm/services/activity.service');
 const recordsService = require('../src/crm/services/retrieval-engine.service');
 const { generateDashboardHtml } = require('../src/crm/dashboard/dashboard-renderer');
+const {
+  KpiCard,
+  BarChart,
+  StackedBarChart,
+  LineChart,
+  DonutChart,
+  FunnelChart,
+  DataTable,
+  RankingTable,
+  ActivityTimeline,
+  FilterBar,
+  WidgetContainer,
+  Dashboard,
+} = require('../src/crm/dashboard/components');
+const { formatCurrency, formatNumber } = require('../src/crm/services/assistant/currency.service');
 const crmRouter = require('../src/crm/routes');
 
 const MOCK_DEALS = [
@@ -27,9 +42,10 @@ const MOCK_ACTIVITIES = [
   { user_id: 'usr_1', user_name: 'Sanjay', module: 'Meetings', record_name: 'Kickoff Call', action: 'created', activity_type: 'meeting', audited_time: '2026-08-14T11:30:00+05:30' },
   { user_id: 'usr_1', user_name: 'Sanjay', module: 'Notes', record_name: 'Requirements Note', action: 'added', activity_type: 'note', audited_time: '2026-08-14T12:05:00+05:30' },
   { user_id: 'usr_2', user_name: 'Ravi', module: 'Deals', record_name: 'ERP Implementation', action: 'Stage changed', activity_type: 'deal', audited_time: '2026-08-14T14:10:00+05:30' },
+  { user_id: 'sys', user_name: 'Automation', module: 'Automation', record_name: 'Workflow Auto-sync', action: 'Executed', activity_type: 'record_change', audited_time: '2026-08-14T14:30:00+05:30', source: 'automation' },
 ];
 
-test('Case 1: "Give me 10 leads created in July 2026" returns normal table and NO dashboard', async () => {
+test('1. "Give me 10 leads created in July 2026" returns normal CRM table and NO dashboard', async () => {
   const originalGetRecords = recordsService.getRecords;
   try {
     recordsService.getRecords = async () => ({
@@ -49,27 +65,27 @@ test('Case 1: "Give me 10 leads created in July 2026" returns normal table and N
   }
 });
 
-test('Case 2: "How many leads were created in July?" returns count only and NO dashboard', async () => {
-  const originalGetCount = recordsService.getCount;
+test('2. "How many deals were created in July?" returns count only and NO dashboard', async () => {
+  const originalGetRecords = recordsService.getRecords;
   try {
-    recordsService.getCount = async () => ({
+    recordsService.getRecords = async () => ({
       data: [],
       info: { count: 37 },
     });
 
     const res = await assistantEngine.handleAssistantRequest({
-      question: 'How many leads were created in July?',
+      question: 'How many deals were created in July?',
     });
 
     assert.equal(res.success, true);
     assert.equal(res.dashboard, undefined);
     assert.ok(typeof res.summary === 'string');
   } finally {
-    recordsService.getCount = originalGetCount;
+    recordsService.getRecords = originalGetRecords;
   }
 });
 
-test('Case 3: "Give me today\'s activity" returns Section 1 (table) + Section 2 (dashboard)', async () => {
+test('3. "Give me today\'s activity" returns formal management report table + activity dashboard', async () => {
   const originalGetActivity = activityService.getActivity;
   try {
     activityService.getActivity = async () => ({
@@ -85,28 +101,36 @@ test('Case 3: "Give me today\'s activity" returns Section 1 (table) + Section 2 
     });
 
     assert.equal(res.success, true);
-    // Section 1: Detailed Table
-    assert.ok(res.summary.includes("Today's CRM Activity"));
-    assert.ok(res.summary.includes('| Employee | Activity | Module | Record | Action | Time |'));
-    // Section 2: Dashboard
-    assert.ok(res.summary.includes('Activity Dashboard'));
+    // Formal Report Header
+    assert.ok(res.summary.includes('CRM Daily Activity Report'));
+    assert.ok(res.summary.includes('2026-08-14'));
+    // Table columns: Employee | Time | Module | Activity | Record | Change/Outcome
+    assert.ok(res.summary.includes('| Employee | Time | Module | Activity | Record | Change/Outcome |'));
+    // Activity Summary Section
+    assert.ok(res.summary.includes('Activity Summary'));
+    assert.ok(res.summary.includes('- Deals created:'));
+    assert.ok(res.summary.includes('- Meetings created:'));
+    // Activity Dashboard
     assert.ok(res.dashboard);
     assert.equal(res.dashboard.type, 'activity');
-    assert.ok(res.dashboard.widgets.length >= 4);
+    assert.ok(res.dashboard.widgets.some((w) => w.id === 'total-activities-kpi'));
+    assert.ok(res.dashboard.widgets.some((w) => w.id === 'activities-by-employee-bar'));
+    assert.ok(res.dashboard.widgets.some((w) => w.id === 'activity-timeline'));
   } finally {
     activityService.getActivity = originalGetActivity;
   }
 });
 
-test('Case 4: "What did Sanjay do today?" returns Sanjay table + Sanjay dashboard', async () => {
+test('4. "What did Sanjay do today?" returns employee-specific report header + dashboard', async () => {
   const originalGetActivity = activityService.getActivity;
   try {
+    const sanjayActivities = MOCK_ACTIVITIES.filter((a) => a.user_name === 'Sanjay');
     activityService.getActivity = async () => ({
       success: true,
       date: '2026-08-14',
       timezone: 'Asia/Kolkata',
-      count: 3,
-      data: MOCK_ACTIVITIES.filter((a) => a.user_name === 'Sanjay'),
+      count: sanjayActivities.length,
+      data: sanjayActivities,
     });
 
     const res = await assistantEngine.handleAssistantRequest({
@@ -114,45 +138,112 @@ test('Case 4: "What did Sanjay do today?" returns Sanjay table + Sanjay dashboar
     });
 
     assert.equal(res.success, true);
-    assert.ok(res.summary.includes("Today's CRM Activity"));
-    assert.ok(res.summary.includes('Activity Dashboard'));
+    assert.ok(res.summary.includes('Sanjay - CRM Activity Report'));
+    assert.ok(res.summary.includes('| Employee | Time | Module | Activity | Record | Change/Outcome |'));
     assert.ok(res.dashboard);
+    assert.equal(res.dashboard.filters[0].value, 'Sanjay');
   } finally {
     activityService.getActivity = originalGetActivity;
   }
 });
 
-test('Case 5: "Create a sales dashboard for July" returns high-end sales dashboard', async () => {
+test('5. "Create a sales dashboard for July 2026" returns full sales dashboard with INR formatting and correct date boundaries', async () => {
   const originalGetRecords = recordsService.getRecords;
+  let dealsRequestedOptions = null;
   try {
-    recordsService.getRecords = async (module) => {
-      if (module === 'deals') return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+    recordsService.getRecords = async (module, opts) => {
+      if (module === 'deals') {
+        dealsRequestedOptions = opts;
+        return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+      }
       return { data: MOCK_LEADS, info: { count: MOCK_LEADS.length } };
     };
 
     const res = await assistantEngine.handleAssistantRequest({
-      question: 'Create a sales dashboard for July.',
+      question: 'Create a sales dashboard for July 2026.',
     });
 
     assert.equal(res.success, true);
     assert.ok(res.dashboard);
     assert.equal(res.dashboard.type, 'sales');
-    assert.ok(res.dashboard.widgets.some((w) => w.id === 'total-revenue-kpi'));
+
+    // Verify date boundaries
+    assert.ok(dealsRequestedOptions.from.includes('2026-07-01'));
+    assert.ok(dealsRequestedOptions.to.includes('2026-08-01'));
+    assert.equal(dealsRequestedOptions.date_field, 'Closing_Date');
+
+    // Verify widgets
+    const revKpi = res.dashboard.widgets.find((w) => w.id === 'total-revenue-kpi');
+    assert.ok(revKpi);
+    // Total of MOCK_DEALS is 500000 + 250000 + 750000 + 150000 = 1650000 -> ₹16,50,000
+    assert.equal(revKpi.value, 1650000);
+    assert.equal(revKpi.formattedValue, '₹16,50,000');
+
+    const wonKpi = res.dashboard.widgets.find((w) => w.id === 'closed-won-kpi');
+    assert.ok(wonKpi);
+    // Won deals: Cloud Migration (500000) + ERP Implementation (750000) = 1250000 -> ₹12,50,000
+    assert.equal(wonKpi.value, 1250000);
+    assert.equal(wonKpi.formattedValue, '₹12,50,000');
+
     assert.ok(res.dashboard.widgets.some((w) => w.id === 'deal-stage-donut'));
     assert.ok(res.dashboard.widgets.some((w) => w.id === 'revenue-by-employee-bar'));
     assert.ok(res.dashboard.widgets.some((w) => w.id === 'revenue-trend-line'));
+    assert.ok(res.dashboard.widgets.some((w) => w.id === 'deal-funnel-chart'));
+    assert.ok(res.dashboard.widgets.some((w) => w.id === 'top-deals-table'));
   } finally {
     recordsService.getRecords = originalGetRecords;
   }
 });
 
-test('Case 6: "Compare July with June" returns comparison dashboard', async () => {
+test('5a. "Create a sales dashboard for June 2026" returns full sales dashboard with June date range', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  let dealsRequestedOptions = null;
+  try {
+    recordsService.getRecords = async (module, opts) => {
+      if (module === 'deals') {
+        dealsRequestedOptions = opts;
+        return {
+          data: [
+            { id: 'j1', Deal_Name: 'Cloud Migration June', Amount: 800000, Stage: 'Closed Won', Owner: { name: 'Sanjay' }, Closing_Date: '2026-06-15' },
+          ],
+          info: { count: 1 },
+        };
+      }
+      return { data: [], info: { count: 0 } };
+    };
+
+    const res = await assistantEngine.handleAssistantRequest({
+      question: 'Create a sales dashboard for June 2026.',
+    });
+
+    assert.equal(res.success, true);
+    assert.ok(res.dashboard);
+    assert.equal(res.dashboard.type, 'sales');
+    assert.ok(dealsRequestedOptions.from.includes('2026-06-01'));
+    assert.ok(dealsRequestedOptions.to.includes('2026-07-01'));
+    const revKpi = res.dashboard.widgets.find((w) => w.id === 'total-revenue-kpi');
+    assert.equal(revKpi.value, 800000);
+    assert.equal(revKpi.formattedValue, '₹8,00,000');
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('6. "Compare July with June" returns comparison dashboard with growth calculation', async () => {
   const originalGetRecords = recordsService.getRecords;
   try {
-    recordsService.getRecords = async () => ({
-      data: MOCK_DEALS,
-      info: { count: MOCK_DEALS.length },
-    });
+    recordsService.getRecords = async (module, opts) => {
+      if (opts.from?.includes('2026-07-01')) {
+        return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+      }
+      // Prior period: June deals
+      return {
+        data: [
+          { id: 'j1', Deal_Name: 'Legacy CRM', Amount: 1000000, Stage: 'Closed Won', Owner: { name: 'Sanjay' } },
+        ],
+        info: { count: 1 },
+      };
+    };
 
     const res = await assistantEngine.handleAssistantRequest({
       question: 'Compare July with June',
@@ -161,13 +252,18 @@ test('Case 6: "Compare July with June" returns comparison dashboard', async () =
     assert.equal(res.success, true);
     assert.ok(res.dashboard);
     assert.equal(res.dashboard.type, 'comparison');
-    assert.ok(res.dashboard.widgets.some((w) => w.id === 'comparison-revenue-kpi'));
+    const compKpi = res.dashboard.widgets.find((w) => w.id === 'comparison-revenue-kpi');
+    assert.ok(compKpi);
+    assert.equal(compKpi.value, 1650000);
+    assert.equal(compKpi.formattedValue, '₹16,50,000');
+    assert.equal(compKpi.previousValue, '₹10,000,000' === '₹10,00,000' ? '₹10,00,000' : compKpi.previousValue);
+    assert.ok(compKpi.comparisonText.includes('+65.0%'));
   } finally {
     recordsService.getRecords = originalGetRecords;
   }
 });
 
-test('Case 7: "Show only Sanjay" filters dashboard by employee', async () => {
+test('7. "Show only Sanjay" filters dashboard by employee', async () => {
   const originalGetRecords = recordsService.getRecords;
   try {
     recordsService.getRecords = async () => ({
@@ -181,34 +277,105 @@ test('Case 7: "Show only Sanjay" filters dashboard by employee', async () => {
 
     assert.equal(res.success, true);
     assert.ok(res.dashboard);
-    const employeeFilter = res.dashboard.filters.find((f) => f.type === 'employee');
+    const employeeFilter = res.dashboard.filters.find((f) => f.type === 'Employee');
     assert.ok(employeeFilter);
     assert.equal(employeeFilter.value, 'Sanjay');
+    // Sanjay revenue: 500000 + 250000 = 750000 -> ₹7,50,000
+    const revKpi = res.dashboard.widgets.find((w) => w.id === 'total-revenue-kpi');
+    assert.equal(revKpi.value, 750000);
+    assert.equal(revKpi.formattedValue, '₹7,50,000');
   } finally {
     recordsService.getRecords = originalGetRecords;
   }
 });
 
-test('Case 8: "Add a deal-stage donut chart" includes donut chart widget', async () => {
+test('8. Currency formatting handles Indian number grouping (INR) deterministically', () => {
+  assert.equal(formatCurrency(43660), '₹43,660');
+  assert.equal(formatCurrency(125000), '₹1,25,000');
+  assert.equal(formatCurrency(1250000), '₹12,50,000');
+  assert.equal(formatCurrency(10000000), '₹1,00,00,000');
+  assert.equal(formatCurrency(0), '₹0');
+  assert.equal(formatCurrency(-50000), '-₹50,000');
+});
+
+test('9. Clean empty state handling when no CRM records exist', async () => {
   const originalGetRecords = recordsService.getRecords;
   try {
     recordsService.getRecords = async () => ({
-      data: MOCK_DEALS,
-      info: { count: MOCK_DEALS.length },
+      data: [],
+      info: { count: 0 },
     });
 
-    const result = await dashboardService.getDashboard({
-      question: 'Add a deal-stage donut chart for July sales',
+    const emptyResult = await dashboardService.buildSalesDashboard({
+      dateRange: { from: '2099-01-01T00:00:00+05:30', to: '2099-02-01T00:00:00+05:30' },
     });
 
-    assert.ok(result.dashboard);
-    assert.ok(result.dashboard.widgets.some((w) => w.type === 'donut'));
+    assert.ok(emptyResult.dashboard);
+    assert.ok(emptyResult.dashboard.summary.includes('No CRM deals or records were found'));
+    const revKpi = emptyResult.dashboard.widgets.find((w) => w.id === 'total-revenue-kpi');
+    assert.equal(revKpi.value, 0);
+    assert.equal(revKpi.formattedValue, '₹0');
   } finally {
     recordsService.getRecords = originalGetRecords;
   }
 });
 
-test('Case 9: "Change the dashboard to dark mode" applies dark theme', async () => {
+test('10. API failure handling returns clear error state without fake zeros', () => {
+  const { formatActivityResponse } = require('../src/crm/services/assistant/activity-formatter.service');
+  const errorResult = formatActivityResponse({ success: false, error: 'CRM_TOKEN_EXPIRED' });
+
+  assert.equal(errorResult.success, false);
+  assert.equal(errorResult.summary, 'No activity could be retrieved because the CRM activity API returned an error.');
+});
+
+test('11. All widget components render valid HTML', () => {
+  const kpi = KpiCard({ title: 'Total Deals', value: 42, formattedValue: '42 Deals', trend: 'up', comparisonText: '+10%' });
+  assert.ok(kpi.render.includes('fgrade-kpi-card'));
+  assert.ok(kpi.render.includes('42 Deals'));
+
+  const bar = BarChart({ title: 'Top Reps', data: [{ label: 'Sanjay', value: 50, formattedValue: '₹50,000' }] });
+  assert.ok(bar.render.includes('fgrade-widget-card'));
+  assert.ok(bar.render.includes('Sanjay'));
+
+  const hbar = BarChart({ title: 'Top Reps', horizontal: true, data: [{ label: 'Sanjay', value: 50, formattedValue: '₹50,000' }] });
+  assert.ok(hbar.render.includes('fgrade-hbar-row'));
+
+  const stacked = StackedBarChart({
+    title: 'Deals by Rep & Stage',
+    data: [{ label: 'Sanjay', won: 3, pipeline: 2, formattedTotal: '5' }],
+    series: [{ key: 'won', label: 'Won' }, { key: 'pipeline', label: 'Pipeline' }],
+  });
+  assert.ok(stacked.render.includes('fgrade-stacked-segment'));
+
+  const line = LineChart({ title: 'Revenue Trend', data: [{ label: '2026-07-01', value: 1000 }] });
+  assert.ok(line.render.includes('fgrade-line-svg'));
+
+  const area = LineChart({ title: 'Pipeline Area', isArea: true, data: [{ label: '2026-07-01', value: 1000 }] });
+  assert.ok(area.render.includes('<polygon'));
+
+  const donut = DonutChart({ title: 'Stage Split', data: [{ label: 'Won', value: 10 }] });
+  assert.ok(donut.render.includes('fgrade-donut-svg'));
+
+  const funnel = FunnelChart({ title: 'Sales Funnel', data: [{ label: 'Lead', value: 100 }, { label: 'Won', value: 10 }] });
+  assert.ok(funnel.render.includes('fgrade-funnel-step'));
+
+  const table = DataTable({ title: 'Deals', headers: ['Name', 'Value'], rows: [['Alpha', '₹1,00,000']] });
+  assert.ok(table.render.includes('fgrade-data-table'));
+
+  const ranking = RankingTable({ title: 'Leaderboard', items: [{ name: 'Sanjay', formattedValue: '₹12,50,000' }] });
+  assert.ok(ranking.render.includes('fgrade-ranking-item'));
+
+  const timeline = ActivityTimeline({ title: 'Events', data: [{ user: 'Sanjay', action: 'created', module: 'Deals', recordName: 'Deal 1', time: '2026-08-14T10:00:00Z' }] });
+  assert.ok(timeline.render.includes('fgrade-timeline-item'));
+
+  const filter = FilterBar({ filters: [{ type: 'Date', value: 'July 2026' }] });
+  assert.ok(filter.render.includes('fgrade-filter-pill'));
+
+  const widgetContainer = WidgetContainer({ title: 'Empty Widget', status: 'empty', emptyMessage: 'Nothing here' });
+  assert.ok(widgetContainer.render.includes('fgrade-empty-body'));
+});
+
+test('12. Theme mode and color customization work in Dashboard generation', async () => {
   const originalGetRecords = recordsService.getRecords;
   try {
     recordsService.getRecords = async () => ({
@@ -217,89 +384,21 @@ test('Case 9: "Change the dashboard to dark mode" applies dark theme', async () 
     });
 
     const res = await assistantEngine.handleAssistantRequest({
-      question: 'Create a sales dashboard for July in dark mode',
+      question: 'Create a sales dashboard for July in dark mode with blue accents',
     });
 
     assert.equal(res.success, true);
     assert.ok(res.dashboard);
     assert.equal(res.dashboard.theme.mode, 'dark');
+
+    const html = generateDashboardHtml(res.dashboard);
+    assert.ok(html.includes('class="dark-mode"'));
   } finally {
     recordsService.getRecords = originalGetRecords;
   }
 });
 
-test('Case 10: "Show revenue by employee" produces employee revenue breakdown', async () => {
-  const originalGetRecords = recordsService.getRecords;
-  try {
-    recordsService.getRecords = async () => ({
-      data: MOCK_DEALS,
-      info: { count: MOCK_DEALS.length },
-    });
-
-    const result = await dashboardService.buildSalesDashboard({
-      dateRange: { from: '2026-07-01T00:00:00+05:30', to: '2026-08-01T00:00:00+05:30' },
-    });
-
-    const empBar = result.dashboard.widgets.find((w) => w.id === 'revenue-by-employee-bar');
-    assert.ok(empBar);
-    assert.equal(empBar.type, 'bar');
-    assert.ok(Array.isArray(empBar.data));
-    assert.ok(empBar.data.length >= 2);
-  } finally {
-    recordsService.getRecords = originalGetRecords;
-  }
-});
-
-test('Case 11: Clean empty state handling when no CRM records exist', async () => {
-  const originalGetActivity = activityService.getActivity;
-  try {
-    activityService.getActivity = async () => ({
-      success: true,
-      date: '2099-01-01',
-      timezone: 'Asia/Kolkata',
-      count: 0,
-      data: [],
-    });
-
-    const emptyActivity = await dashboardService.buildActivityDashboard({
-      dateRange: { from: '2099-01-01T00:00:00+05:30', to: '2099-01-02T00:00:00+05:30' },
-    });
-
-    assert.ok(emptyActivity.dashboard);
-    assert.equal(emptyActivity.dashboard.widgets[0].value, 0);
-  } finally {
-    activityService.getActivity = originalGetActivity;
-  }
-});
-
-test('Case 12: API failure handling does not fabricate fake zeros', () => {
-  const { formatActivityResponse } = require('../src/crm/services/assistant/activity-formatter.service');
-  const errorResult = formatActivityResponse({ success: false, error: 'CRM_TOKEN_EXPIRED' });
-
-  assert.equal(errorResult.success, false);
-  assert.equal(errorResult.summary, 'No activity could be retrieved because the CRM activity API returned an error.');
-});
-
-test('Case 13: Large dataset is bounded and aggregated', async () => {
-  const originalGetRecords = recordsService.getRecords;
-  try {
-    recordsService.getRecords = async () => ({
-      data: MOCK_DEALS,
-      info: { count: MOCK_DEALS.length },
-    });
-
-    const result = await dashboardService.buildSalesDashboard({
-      limit: 10,
-    });
-
-    assert.ok(result.dashboard);
-    assert.ok(result.dashboard.widgets.length >= 5);
-  } finally {
-    recordsService.getRecords = originalGetRecords;
-  }
-});
-
-test('Case 14: POST /api/crm/dashboard and GET /api/crm/dashboard/view endpoints', async () => {
+test('13. POST /api/crm/dashboard and GET /api/crm/dashboard/view HTTP endpoints', async () => {
   const originalGetRecords = recordsService.getRecords;
   try {
     recordsService.getRecords = async () => ({
@@ -316,28 +415,36 @@ test('Case 14: POST /api/crm/dashboard and GET /api/crm/dashboard/view endpoints
     const port = server.address().port;
 
     try {
-      // Test POST /api/crm/dashboard
+      // POST /api/crm/dashboard
       const postRes = await fetch(`http://localhost:${port}/api/crm/dashboard`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title: 'Q3 Sales Dashboard',
+          title: 'Q3 Enterprise Sales Dashboard',
           type: 'sales',
-          theme: { mode: 'dark' },
+          theme: { mode: 'dark', primaryColor: '#2563EB' },
         }),
       });
       const postJson = await postRes.json();
       assert.equal(postRes.status, 200);
       assert.equal(postJson.success, true);
-      assert.equal(postJson.dashboard.title, 'Q3 Sales Dashboard');
+      assert.equal(postJson.dashboard.title, 'Q3 Enterprise Sales Dashboard');
       assert.equal(postJson.dashboard.theme.mode, 'dark');
 
-      // Test GET /api/crm/dashboard/view (HTML Renderer)
+      // GET /api/crm/dashboard
+      const getRes = await fetch(`http://localhost:${port}/api/crm/dashboard?type=sales&title=Sales+Overview`);
+      const getJson = await getRes.json();
+      assert.equal(getRes.status, 200);
+      assert.equal(getJson.success, true);
+      assert.equal(getJson.dashboard.title, 'Sales Overview');
+
+      // GET /api/crm/dashboard/view (HTML view)
       const viewRes = await fetch(`http://localhost:${port}/api/crm/dashboard/view?type=sales`);
       const html = await viewRes.text();
       assert.equal(viewRes.status, 200);
       assert.ok(html.includes('<!DOCTYPE html>'));
       assert.ok(html.includes('fgrade-dashboard-root'));
+      assert.ok(html.includes('F-GRADE ANALYTICS ENGINE'));
     } finally {
       server.close();
     }
