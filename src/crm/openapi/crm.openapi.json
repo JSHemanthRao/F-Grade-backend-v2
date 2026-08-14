@@ -3,7 +3,7 @@
   "info": {
     "title": "F-Grade Zoho CRM API",
     "version": "1.0.0",
-    "description": "Read-only Zoho CRM API for Microsoft Copilot Studio. Determine the user's requested record count, filters, date range, operation, and fields and pass them as structured inputs. Never default to retrieving the complete module.",
+    "description": "Read-only Zoho CRM API for Microsoft Copilot Studio.  CRITICAL DATA ACCURACY RULES: 1. ALWAYS call the appropriate CRM tool before answering any CRM question involving a record count, date, user, module, or business metric. Never answer from model knowledge. 2. Treat the tool response as the sole source of truth. 3. When the user mentions a month, convert it to an exact half-open date range: June 2026 → from=2026-06-01, to=2026-07-01. July 2026 → from=2026-07-01, to=2026-08-01. 4. The from date is inclusive (>=) and the to date is exclusive (<). 5. For \"leads created in June\": module=Leads, date_field=Created_Time, from=2026-06-01, to=2026-07-01. 6. For \"leads modified in June\": date_field=Modified_Time. 7. For \"deals closed in June\": date_field=Closing_Date. 8. If the tool returns zero records, say only: \"No matching CRM records were found for the requested criteria.\" Do not add explanations about what dates the CRM contains. 9. If the tool call fails, say: \"I couldn't retrieve the CRM data because the CRM request failed.\" Never convert a failure into 0 records. 10. Never add unsupported statements about what date ranges exist in the CRM unless the tool explicitly returned that evidence. 11. Do not ask the user for technical parameters (page, per_page, fields, from, to, filter) when they can be inferred from the request. 12. After the tool returns records, present them directly. Do not replace them with generic statements.",
     "license": {
       "name": "ISC",
       "url": "https://spdx.org/licenses/ISC.html"
@@ -26,7 +26,7 @@
           "CRM"
         ],
         "summary": "Count Zoho CRM records",
-        "description": "Use this operation whenever the user asks how many, count, total, number of records, or a filtered record count. Determine the user's filters and date range and pass them as structured inputs. Returns the complete matching CRM record count without retrieving records.",
+        "description": "ALWAYS call this tool for count/how-many questions before answering. Use when the user asks: how many, count, total, number of records, or any filtered count. MONTH CONVERSION (required): \"leads created in June\" → from=2026-06-01, to=2026-07-01. The from is inclusive, to is exclusive. Infer the date field from context: \"created in June\" → date_field=Created_Time. \"modified in June\" → date_field=Modified_Time. \"closed in June\" → date_field=Closing_Date. Return the exact count the tool provides. Do not invent or estimate a count. Zero result: say \"No matching CRM records were found for the requested criteria.\" Tool failure: say \"I couldn't retrieve the CRM data because the CRM request failed.\"",
         "parameters": [
           {
             "name": "module",
@@ -71,14 +71,14 @@
             "in": "query",
             "required": false,
             "type": "string",
-            "description": "Date or ISO datetime representing the start of the inclusive date range."
+            "description": "Inclusive start of the date range (>=). Convert month names to the 1st of the month: June 2026 → 2026-06-01. July 2026 → 2026-07-01. August 2026 → 2026-08-01."
           },
           {
             "name": "to",
             "in": "query",
             "required": false,
             "type": "string",
-            "description": "Date or ISO datetime representing the exclusive end of the date range."
+            "description": "Exclusive end of the date range (<). Convert month names to the 1st of the following month: June 2026 → 2026-07-01. July 2026 → 2026-08-01. August 2026 → 2026-09-01."
           },
           {
             "name": "search",
@@ -175,7 +175,7 @@
           "CRM"
         ],
         "summary": "Query Zoho CRM records",
-        "description": "Use this operation when the user asks to view, list, show, retrieve, or inspect CRM records. Determine the user's requested record count, filters, date range, operation, and fields and pass them as structured inputs. Never default to retrieving the complete module. For \"first 10 leads\", pass operation=query, limit=10, retrieval_mode=limited. For date or company filters, pass server-side criteria/date inputs and retrieval_mode=filtered with a bounded limit.",
+        "description": "ALWAYS call this tool for any list/view/show/retrieve/find request before answering. Never default to retrieving the complete module. MONTH CONVERSION (required): \"leads created in June\" → from=2026-06-01, to=2026-07-01. \"July leads\" → from=2026-07-01, to=2026-08-01. The from is inclusive (>=), the to is exclusive (<). Infer the date field: \"created\" → date_field=Created_Time. \"modified\" → date_field=Modified_Time. \"closed\" → date_field=Closing_Date. Pass the user-requested limit directly: \"give me 10 leads\" → limit=10. Do not ask the user for technical parameters. After the tool returns, present the returned records directly. Do not substitute them with a generic statement. Zero result: say \"No matching CRM records were found for the requested criteria.\" Tool failure: say \"I couldn't retrieve the CRM data because the CRM request failed.\" Never claim all records are from a specific date unless the tool explicitly returned evidence for that. For list requests, use retrieval_mode=limited (explicit count) or retrieval_mode=filtered (date/filter). Never use all in normal Copilot conversations.",
         "parameters": [
           {
             "name": "module",
@@ -242,14 +242,14 @@
             "in": "query",
             "required": false,
             "type": "string",
-            "description": "Date or ISO datetime representing the start of the inclusive date range."
+            "description": "Inclusive start of the date range (>=). Convert month names to the 1st of the month: June 2026 → 2026-06-01. July 2026 → 2026-07-01. August 2026 → 2026-08-01."
           },
           {
             "name": "to",
             "in": "query",
             "required": false,
             "type": "string",
-            "description": "Date or ISO datetime representing the exclusive end of the date range."
+            "description": "Exclusive end of the date range (<). Convert month names to the 1st of the following month: June 2026 → 2026-07-01. July 2026 → 2026-08-01. August 2026 → 2026-09-01."
           },
           {
             "name": "filter",

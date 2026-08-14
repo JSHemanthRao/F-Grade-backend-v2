@@ -377,7 +377,7 @@ function formatResponse(plan, datasets, calculations, options = {}) {
   const limitations = [];
   if (options.limitation) limitations.push(options.limitation);
   if (Array.isArray(options.limitations)) limitations.push(...options.limitations);
-  if (!coverage.complete && coverage.requestedPeriod !== 'the requested period') limitations.push('Available CRM data does not cover the entire requested period.');
+  // Rule 4/13: Only report a coverage limitation when the CRM tool explicitly returned evidence.
   if (requestedMonths(plan).length > 0 && records.length > 0 && coverage.monthsWithData.length === 0) limitations.push('Available CRM records do not contain a usable date field for month coverage.');
 
   if (conversionUnavailable) {
@@ -399,7 +399,7 @@ function formatResponse(plan, datasets, calculations, options = {}) {
   const summary = conversionUnavailable
     ? 'Lead conversion cannot be calculated from the CRM records.'
     : incompleteRetrieval
-      ? 'The CRM search could not be completed, so I cannot confirm whether matching records exist.'
+      ? "I couldn't retrieve the CRM data because the CRM request failed."
     : records.length === 0 && calculations.length === 0
       ? emptySummary
       : plan.intents?.includes('LIST') && calculations.length === 0
@@ -407,9 +407,8 @@ function formatResponse(plan, datasets, calculations, options = {}) {
           ? `${currentMonthLabel}${displayRecords.length} records.`
           : `${currentMonthLabel}Showing ${displayRecords.length} of ${displayTotal} matching records.${displayTotal > displayRecords.length ? ` There are ${displayTotal - (displayStart + displayRecords.length)} more matching records available.` : ''}`
       : `${currentMonthLabel}${metricSummary(calculations, records.length)}`;
-  const summaryWithAvailability = crmReturnedDate(datasets)
-    ? `${summary} Data available through ${crmReturnedDate(datasets)}.`
-    : summary;
+  // Do NOT append unsupported 'Data available through ...' claims (CRM Accuracy Rule 4 & 13).
+  const summaryWithAvailability = summary;
   const remainingRecords = Math.max(0, displayTotal - (displayStart + displayRecords.length));
   const formattedRecords = displayRecords.map(formatDisplayedRecord);
   const matchingTotal = matchingRecordTotal(datasets, displayTotal);

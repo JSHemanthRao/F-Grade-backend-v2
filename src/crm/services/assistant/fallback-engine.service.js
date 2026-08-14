@@ -7,10 +7,10 @@ const FALLBACK_REASONS = Object.freeze({
 const logger = require('../../../common/logging/logger');
 
 const SAFE_MESSAGES = Object.freeze({
-  [FALLBACK_REASONS.EMPTY_RESULT]: 'No matching CRM records were found for the requested period.',
+  [FALLBACK_REASONS.EMPTY_RESULT]: 'No matching CRM records were found for the requested criteria.',
   [FALLBACK_REASONS.UNSUPPORTED_METRIC]: "I couldn't calculate this metric because the CRM records do not contain the required information.",
   [FALLBACK_REASONS.INSUFFICIENT_DATA]: "I couldn't calculate this metric because the CRM records do not contain the required information.",
-  [FALLBACK_REASONS.INVALID_QUERY]: 'The CRM could not provide the requested information at this time.',
+  [FALLBACK_REASONS.INVALID_QUERY]: "I couldn't retrieve the CRM data because the CRM request failed.",
 });
 
 function logFallbackReason(reason, details = {}) {
