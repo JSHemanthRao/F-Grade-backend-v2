@@ -7,6 +7,7 @@ const dashboardService = require('../src/crm/services/dashboard.service');
 const assistantEngine = require('../src/crm/services/assistant-engine.service');
 const activityService = require('../src/crm/services/activity.service');
 const recordsService = require('../src/crm/services/retrieval-engine.service');
+const { zohoClient } = require('../src/common/config/axios');
 const { generateDashboardHtml } = require('../src/crm/dashboard/dashboard-renderer');
 const {
   KpiCard,
@@ -1194,6 +1195,103 @@ test('35. Dashboard fromVal and toVal passed directly to service populate dateRa
       assert.ok(capturedOpts.from.includes('2026-07-01'), `from must include 2026-07-01, got: ${capturedOpts.from}`);
       assert.ok(capturedOpts.to.includes('2026-08-01'), `to must include 2026-08-01, got: ${capturedOpts.to}`);
       assert.equal(capturedOpts.date_field, 'Closing_Date');
+    } finally {
+      server.close();
+    }
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('36. COQL query generation for Deals has valid SQL syntax and YYYY-MM-DD date format for Closing_Date', () => {
+  const queryBuilder = require('../src/crm/services/query-builder.service');
+  const plan = queryBuilder.buildQueryPlan('deals', {
+    criteria: '(Closing_Date:greater_equal:2026-07-01)and(Closing_Date:less_than:2026-08-01)',
+    retrieval_mode: 'all',
+  });
+
+  assert.equal(plan.mode, 'coql');
+  // Must have spaces around 'and': "Closing_Date >= '2026-07-01' and Closing_Date < '2026-08-01'"
+  assert.equal(plan.whereClause, "Closing_Date >= '2026-07-01' and Closing_Date < '2026-08-01'");
+  assert.ok(!plan.whereClause.includes("'and"), 'Must not have unspaced \'and');
+  assert.ok(plan.query.includes("where Closing_Date >= '2026-07-01' and Closing_Date < '2026-08-01'"));
+});
+
+test('37. COQL 400 error falls back to Search API seamlessly', async () => {
+  const originalPost = zohoClient.post;
+  const originalGet = zohoClient.get;
+  let searchCalled = false;
+  try {
+    // COQL fails with 400
+    zohoClient.post = async () => {
+      const err = new Error('Request failed with status code 400');
+      err.response = { status: 400, data: { code: 'INVALID_QUERY', message: 'limit value should not exceed 200' } };
+      throw err;
+    };
+
+    // Search API succeeds
+    zohoClient.get = async (url) => {
+      if (url.includes('/search')) {
+        searchCalled = true;
+        return { data: { data: MOCK_DEALS, info: { count: MOCK_DEALS.length, more_records: false } } };
+      }
+      return { data: { data: [], info: { count: 0 } } };
+    };
+
+    const res = await recordsService.getRecords('deals', {
+      criteria: '(Closing_Date:greater_equal:2026-07-01)and(Closing_Date:less_than:2026-08-01)',
+      retrieval_mode: 'all',
+    });
+
+    assert.ok(searchCalled, 'Search API should have been called as fallback');
+    assert.equal(res.data.length, MOCK_DEALS.length);
+  } finally {
+    zohoClient.post = originalPost;
+    zohoClient.get = originalGet;
+  }
+});
+
+test('38. Detailed Zoho error message from response body is surfaced on CRM failure', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async () => {
+      const err = new Error('Request failed with status code 400');
+      err.response = {
+        status: 400,
+        data: {
+          code: 'INVALID_QUERY',
+          message: 'limit value should not exceed 200',
+        },
+      };
+      throw err;
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api/crm', crmRouter);
+
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+
+    try {
+      const res = await fetch(`http://localhost:${port}/api/crm/dashboard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          request: 'Create a sales dashboard for July 2026',
+          from: '2026-07-01',
+          to: '2026-08-01',
+        }),
+      });
+
+      const json = await res.json();
+      assert.equal(res.status, 502);
+      assert.equal(json.success, false);
+      assert.ok(
+        json.error.message.includes('limit value should not exceed 200') || json.error.message.includes('INVALID_QUERY'),
+        `Error message must contain actual Zoho response details, got: ${json.error.message}`
+      );
     } finally {
       server.close();
     }

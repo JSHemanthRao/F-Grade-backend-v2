@@ -134,14 +134,19 @@ function buildWhereClause(moduleKey, requestText, criteria, options = {}) {
     clauses.push(`${field} >= '${window.start}'`, `${field} < '${window.end}'`);
   }
   if (criteria) {
-    const translated = String(criteria).replace(
+    const spacedCriteria = String(criteria)
+      .replace(/\)\s*and\s*\(/gi, ') and (')
+      .replace(/\)\s*or\s*\(/gi, ') or (');
+    const translated = spacedCriteria.replace(
       /\(?([A-Za-z0-9_]+):(equals|greater_equal|greater_than|less_equal|less_than):([^\)]+)\)?/gi,
       (_match, field, operator, rawValue) => {
         const value = rawValue.trim().replace(/'/g, "\\'");
         const operators = { equals: '=', greater_equal: '>=', greater_than: '>', less_equal: '<=', less_than: '<' };
         return `${field} ${operators[operator.toLowerCase()]} '${value}'`;
       },
-    );
+    )
+    .replace(/('|\w)\s*and\s*([A-Za-z_])/gi, '$1 and $2')
+    .replace(/('|\w)\s*or\s*([A-Za-z_])/gi, '$1 or $2');
     if (!translated) return null;
 
     // Period-specific comparison requests reuse the non-date criteria and

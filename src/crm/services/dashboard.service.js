@@ -264,9 +264,11 @@ async function buildSalesDashboard(options = {}) {
         count: deals.length,
       });
     } catch (err) {
-      dealsError = err.message;
       const statusCode = err.response?.status || err.status || 'unknown';
       const crmBody = err.response?.data || {};
+      dealsError = crmBody.message
+        ? `Zoho CRM error (${crmBody.code || statusCode}): ${crmBody.message}`
+        : (crmBody.code ? `Zoho CRM error: ${crmBody.code}` : err.message);
       logger.error('[DASHBOARD ERROR]', {
         endpoint: 'Deals',
         status: statusCode,

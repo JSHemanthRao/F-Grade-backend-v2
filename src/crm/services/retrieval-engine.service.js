@@ -131,6 +131,11 @@ async function getModuleFieldNames(moduleKey) {
   }
 }
 
+function isDateOnlyField(fieldName) {
+  const name = String(fieldName || '').trim().toLowerCase();
+  return ['closing_date', 'due_date', 'start_date', 'end_date', 'renewal_date', 'converted_date'].includes(name);
+}
+
 function buildDateRangeCriteria(dateField, fromValue, toValue, { dateOnlyOffset = 'Z' } = {}) {
   if (!dateField) {
     return null;
@@ -143,8 +148,9 @@ function buildDateRangeCriteria(dateField, fromValue, toValue, { dateOnlyOffset 
     throw error;
   }
 
-  const start = normalizeDateInput(fromValue, 'from', dateOnlyOffset);
-  const end = normalizeDateInput(toValue, 'to', dateOnlyOffset);
+  const isDateOnly = isDateOnlyField(dateField);
+  const start = normalizeDateInput(fromValue, 'from', isDateOnly ? null : dateOnlyOffset);
+  const end = normalizeDateInput(toValue, 'to', isDateOnly ? null : dateOnlyOffset);
 
   if (new Date(start).valueOf() >= new Date(end).valueOf()) {
     const error = new Error('The from date must be earlier than the to date.');
@@ -159,6 +165,9 @@ function normalizeDateInput(value, name, dateOnlyOffset = 'Z') {
   const raw = String(value || '').trim();
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    if (!dateOnlyOffset) {
+      return raw;
+    }
     return `${raw}T00:00:00${dateOnlyOffset}`;
   }
 
@@ -167,6 +176,10 @@ function normalizeDateInput(value, name, dateOnlyOffset = 'Z') {
     const error = new Error(`${name} must be a valid date or ISO datetime string.`);
     error.status = 400;
     throw error;
+  }
+
+  if (!dateOnlyOffset) {
+    return date.toISOString().slice(0, 10);
   }
 
   return formatZohoDate(date);
@@ -668,8 +681,9 @@ async function executeCoqlRecords(moduleKey, queryPlan, options = {}) {
   const requestedPage = Number(options.page || 1);
   const requestedPerPage = Number(options.per_page || 0);
   const completeRequest = normalizeRetrievalMode(options.retrieval_mode ?? options.retrievalMode) === 'all';
-  const batchSize = completeRequest ? 2000 : requestedPerPage;
-  const firstOffset = Number(options.offset ?? ((requestedPage - 1) * requestedPerPage));
+  const batchSize = requestedPerPage > 0 ? requestedPerPage : (completeRequest ? 2000 : 200);
+  const maxLimit = Number(options.limit) > 0 ? Number(options.limit) : Infinity;
+  const firstOffset = Number(options.offset ?? ((requestedPage - 1) * batchSize));
   const records = [];
   const seenIds = new Set();
   let offset = firstOffset;
@@ -679,13 +693,46 @@ async function executeCoqlRecords(moduleKey, queryPlan, options = {}) {
 
   while (true) {
     let query = queryPlan.query;
-    if (batchSize > 0) query += ` limit ${batchSize}${offset > 0 ? ` offset ${offset}` : ''}`;
+    if (batchSize > 0 && !/\blimit\s+\d+/i.test(query)) {
+      query += ` limit ${batchSize}${offset > 0 ? ` offset ${offset}` : ''}`;
+    }
     logGeneratedQuery({ ...queryPlan, query });
-    const response = await zohoClient.post('/crm/v8/coql', { select_query: query }, buildZohoRequestConfig(options));
+    logger.info('[DASHBOARD CRM REQUEST]', {
+      method: 'POST',
+      endpoint: '/crm/v8/coql',
+      module: moduleKey,
+      date_field: options.date_field || options.dateField || null,
+      criteria: options.criteria || null,
+      query,
+    });
+
+    let response;
+    try {
+      response = await zohoClient.post('/crm/v8/coql', { select_query: query }, buildZohoRequestConfig(options));
+    } catch (error) {
+      const status = error.response?.status || 500;
+      const crmData = error.response?.data;
+      logger.error('[DASHBOARD ERROR]', {
+        endpoint: '/crm/v8/coql',
+        status,
+        message: error.message,
+        crmCode: crmData?.code || null,
+        crmMessage: crmData?.message || null,
+      });
+      throw error;
+    }
+
     const pageData = Array.isArray(response.data?.data) ? response.data.data : [];
     lastInfo = response.data?.info || {};
     pagesFetched += 1;
     recordsPerCall.push(pageData.length);
+
+    logger.info('[DASHBOARD CRM RESPONSE]', {
+      status: response.status,
+      count: pageData.length,
+      body: { count: pageData.length, info: lastInfo },
+    });
+
     pageData.forEach((record) => {
       const id = record?.id ?? record?.ID;
       if (id === undefined || id === null || !seenIds.has(String(id))) {
@@ -695,12 +742,8 @@ async function executeCoqlRecords(moduleKey, queryPlan, options = {}) {
     });
 
     const hasMore = lastInfo.more_records === true || lastInfo.has_more === true;
-    if (!completeRequest || !batchSize || !hasMore && pageData.length < batchSize) break;
-    if (pageData.length === 0) {
-      const error = new Error(`Incomplete CRM retrieval for ${moduleKey || 'module'}: an empty COQL page reported more records`);
-      error.code = 'RETRIEVAL_INCOMPLETE';
-      throw error;
-    }
+    if (!completeRequest || !batchSize || (!hasMore && pageData.length < batchSize) || records.length >= maxLimit) break;
+    if (pageData.length === 0) break;
     offset += batchSize;
   }
 
@@ -1237,10 +1280,10 @@ async function getRecords(moduleKey, options = {}) {
         coqlResult.info?.retrievalComplete !== false,
       ));
     } catch (error) {
-      if (isCoqlScopeError(error)) {
+      if (isCoqlScopeError(error) || isInvalidQueryError(error) || error?.response?.status === 400) {
         logger.warn('Retrieval Engine', {
           module: normalizedKey,
-          reason: 'coql_scope_unavailable',
+          reason: error.response?.data?.code || error.message,
           message: 'Falling back to CRM Search with the same server criteria',
         });
         const fallbackOptions = {
