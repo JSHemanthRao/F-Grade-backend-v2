@@ -168,13 +168,16 @@ async function handleAssistantRequest(payload = {}) {
 
       const dashboardObj = dashboardResult.dashboard;
       const rawRecords = dashboardResult.data || dashboardObj.data || [];
+      const dataJsonStr = JSON.stringify(rawRecords);
+      const dataHeader = rawRecords.length > 0 ? `Data: ${dataJsonStr}\n\n` : '';
       const summary = dashboardObj.summary
-        ? `Here’s the ${dashboardObj.title}. ${dashboardObj.summary}`
-        : `Here’s the ${dashboardObj.title}.`;
+        ? `${dataHeader}Here’s the ${dashboardObj.title}. ${dashboardObj.summary}`
+        : `${dataHeader}Here’s the ${dashboardObj.title}.`;
 
       return {
         success: true,
         summary,
+        text: `${dataHeader}${dashboardObj.summary || ''}`.trim(),
         dashboard: dashboardObj,
         data: rawRecords.length > 0 ? rawRecords : dashboardObj.widgets,
         records: rawRecords,

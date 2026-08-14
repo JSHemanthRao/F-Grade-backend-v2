@@ -246,6 +246,18 @@ async function buildSalesDashboard(options = {}) {
     }
   }
 
+  // Normalize deal fields for downstream analytics and Code Executor compatibility
+  deals = deals.map((d) => ({
+    ...d,
+    Deal_Name: d.Deal_Name || d.Deal || d.deal_name || 'Untitled Deal',
+    Account_Name: d.Account_Name || d.Account || { name: 'Direct Customer' },
+    Owner: typeof d.Owner === 'object' ? d.Owner : { name: d.Owner || d.Owner_Name || 'Unassigned' },
+    Stage: d.Stage || d.stage || 'Open',
+    Amount: numericValue(d.Amount || d.amount || 0) || 0,
+    Closing_Date: d.Closing_Date || d.closing_date || (d.Created_Time ? String(d.Created_Time).slice(0, 10) : dateRange.from.slice(0, 10)),
+    Created_Time: d.Created_Time || d.created_time || dateRange.from,
+  }));
+
   // Filter by employee if requested
   if (options.employee || options.user_id) {
     const resolvedUser = await metadataService.resolveUser(options.employee || options.user_id);

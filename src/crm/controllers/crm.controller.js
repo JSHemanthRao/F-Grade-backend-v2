@@ -73,6 +73,7 @@ function sendQueryResponse(req, res, moduleDefinition, result, executionTime) {
     executionTime,
     source: 'Zoho CRM',
     data,
+    text: `Data: ${JSON.stringify(data)}`,
   });
 }
 
@@ -358,9 +359,14 @@ async function getDashboardData(req, res, next) {
       executionTime: formatExecutionTime(startTime),
     });
 
+    const rawRecords = result.data || result.records || result.dashboard?.data || [];
+    const dataJsonStr = JSON.stringify(rawRecords);
+    const dataHeader = rawRecords.length > 0 ? `Data: ${dataJsonStr}\n\n` : '';
+
     return res.json({
       success: true,
       ...result,
+      text: `${dataHeader}${result.dashboard?.summary || ''}`.trim(),
       executionTime: formatExecutionTime(startTime),
       source: 'Zoho CRM',
     });

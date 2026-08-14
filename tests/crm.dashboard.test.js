@@ -548,3 +548,43 @@ test('15. End-to-end: "Create a sales dashboard for July 2026 showing total reve
     recordsService.getRecords = originalGetRecords;
   }
 });
+
+test('16. Code Executor Compatibility: summary and text contain Data:[JSON] matching PromptExecutor regex', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async (module) => {
+      if (module === 'deals') return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+      return { data: MOCK_LEADS, info: { count: MOCK_LEADS.length } };
+    };
+
+    const res = await assistantEngine.handleAssistantRequest({
+      question: 'Create a sales dashboard for July 2026 showing total revenue, total deals, closed-won deals, deal stages, revenue by employee, and a monthly trend.',
+    });
+
+    assert.equal(res.success, true);
+    assert.ok(res.summary);
+    // Verify the exact regex used by Python PromptExecutor: r'Data:\s*\[.*\]'
+    const match = res.summary.match(/Data:\s*\[.*\]/s);
+    assert.ok(match, 'PromptExecutor regex must match Data: [...] in summary');
+
+    const dealsBlock = match[0];
+    const iStart = dealsBlock.indexOf('[');
+    const iEnd = dealsBlock.lastIndexOf(']');
+    assert.ok(iStart !== -1 && iEnd !== -1);
+
+    const dealsJson = JSON.parse(dealsBlock.slice(iStart, iEnd + 1));
+    assert.ok(Array.isArray(dealsJson));
+    assert.equal(dealsJson.length, MOCK_DEALS.length);
+
+    // Verify all expected fields for DataFrame processing
+    for (const d of dealsJson) {
+      assert.ok(d.Deal_Name !== undefined);
+      assert.ok(d.Amount !== undefined);
+      assert.ok(d.Stage !== undefined);
+      assert.ok(d.Owner !== undefined);
+      assert.ok(d.Closing_Date !== undefined);
+    }
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
