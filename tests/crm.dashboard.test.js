@@ -975,3 +975,91 @@ test('29. No August or June records leak into July metrics when provided raw mix
   const empList = res.metrics.employeeRevenue.map((e) => e.employee);
   assert.ok(!empList.includes('Priya'), 'Priya should not appear in July employee revenue');
 });
+
+test('30. Dedicated POST /api/crm/dashboard endpoint handles business request with from/to without file uploads', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  let capturedOpts = null;
+  try {
+    recordsService.getRecords = async (module, opts) => {
+      if (module === 'deals') {
+        capturedOpts = opts;
+        return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+      }
+      return { data: [], info: { count: 0 } };
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api/crm', crmRouter);
+
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+
+    try {
+      const res = await fetch(`http://localhost:${port}/api/crm/dashboard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          request: 'Create a sales dashboard for July 2026',
+          from: '2026-07-01',
+          to: '2026-08-01',
+        }),
+      });
+
+      const json = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.ok(json.dashboard);
+      assert.ok(json.metrics);
+      assert.equal(json.metrics.closedWonCount, 2);
+      assert.equal(json.metrics.closedWonRevenue, 1250000);
+      assert.equal(json.metrics.dealCount, 4);
+      assert.equal(json.metrics.totalRevenue, 1650000);
+      assert.equal(capturedOpts.date_field, 'Closing_Date');
+      assert.ok(capturedOpts.from.includes('2026-07-01'));
+      assert.ok(capturedOpts.to.includes('2026-08-01'));
+
+      // Ensure widgets exist
+      assert.ok(json.dashboard.widgets.length >= 6);
+    } finally {
+      server.close();
+    }
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('31. Date field selection: created vs closed vs modified deals', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  const capturedDealCalls = [];
+  try {
+    recordsService.getRecords = async (module, opts) => {
+      if (module === 'deals') {
+        capturedDealCalls.push(opts);
+      }
+      return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+    };
+
+    // 1. Deals closed in July -> Closing_Date
+    await assistantEngine.handleAssistantRequest({
+      question: 'Show sales dashboard for deals closed in July 2026',
+    });
+    assert.equal(capturedDealCalls[0].date_field, 'Closing_Date');
+
+    // 2. Deals created in July -> Created_Time
+    await assistantEngine.handleAssistantRequest({
+      question: 'Show dashboard for deals created in July 2026',
+    });
+    assert.equal(capturedDealCalls[1].date_field, 'Created_Time');
+
+    // 3. Deals modified in July -> Modified_Time
+    await assistantEngine.handleAssistantRequest({
+      question: 'Show dashboard for deals modified in July 2026',
+    });
+    assert.equal(capturedDealCalls[2].date_field, 'Modified_Time');
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+

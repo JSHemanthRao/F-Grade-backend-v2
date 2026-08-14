@@ -323,14 +323,17 @@ async function getDashboardData(req, res, next) {
       || requestSource?.queryResult?.data
       || requestSource?.queryResult;
 
+    const fromVal = requestSource?.from || requestSource?.date_from || requestSource?.dateRange?.from || requestSource?.startDate;
+    const toVal = requestSource?.to || requestSource?.date_to || requestSource?.dateRange?.to || requestSource?.endDate;
+
     const options = {
       title: requestSource?.title,
       type: requestSource?.type,
       theme: requestSource?.theme,
-      dateRange: requestSource?.dateRange || {
-        from: requestSource?.from || requestSource?.date_from,
-        to: requestSource?.to || requestSource?.date_to,
-      },
+      dateRange: (fromVal && toVal) ? { from: fromVal, to: toVal } : requestSource?.dateRange,
+      from: fromVal,
+      to: toVal,
+      date_field: requestSource?.date_field || requestSource?.dateField,
       data: Array.isArray(inputData) ? inputData : undefined,
       records: Array.isArray(inputData) ? inputData : undefined,
       leads: Array.isArray(requestSource?.leads) ? requestSource.leads : undefined,
@@ -340,7 +343,7 @@ async function getDashboardData(req, res, next) {
       groupings: requestSource?.groupings,
       employee: requestSource?.employee || requestSource?.user_id,
       user_id: requestSource?.user_id || requestSource?.employee,
-      question: requestSource?.question || requestSource?.prompt,
+      question: requestSource?.request || requestSource?.question || requestSource?.prompt,
       signal: requestContext.signal,
     };
 

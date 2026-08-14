@@ -207,6 +207,16 @@ async function buildSalesDashboard(options = {}) {
   let dealsError = null;
   let leadsError = null;
 
+  let dateField = options.date_field;
+  if (!dateField && options.question) {
+    if (/created|creation/i.test(options.question)) {
+      dateField = 'Created_Time';
+    } else if (/modified|updated|changed/i.test(options.question)) {
+      dateField = 'Modified_Time';
+    }
+  }
+  dateField = dateField || 'Closing_Date';
+
   // 1. Check if pre-fetched CRM data was provided directly from CRM connector or previous tool step
   const providedDeals = options.data || options.records || options.deals;
   if (Array.isArray(providedDeals) && providedDeals.length > 0) {
@@ -216,7 +226,7 @@ async function buildSalesDashboard(options = {}) {
       const dealsResult = await recordsService.getRecords('deals', {
         from: dateRange.from,
         to: dateRange.to,
-        date_field: options.date_field || 'Closing_Date',
+        date_field: dateField,
         retrieval_mode: 'all',
         limit: options.limit || 2000,
         signal: options.signal,

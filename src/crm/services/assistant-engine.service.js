@@ -62,12 +62,21 @@ function extractDashboardParams(question) {
   else if (/management/i.test(question)) type = 'sales';
   else if (/employee|performance/i.test(question)) type = 'sales';
 
+  let date_field = undefined;
+  if (/modified|updated|changed/i.test(question)) {
+    date_field = 'Modified_Time';
+  } else if (/created|creation/i.test(question)) {
+    date_field = 'Created_Time';
+  } else if (/closed|closing|sales|revenue|amount/i.test(question)) {
+    date_field = 'Closing_Date';
+  }
+
   const timeRange = detectTimeRange(question);
   const dateRange = timeRange?.startDate && timeRange?.endDate
     ? { from: timeRange.startDate, to: timeRange.endDate }
     : undefined;
 
-  return { theme, employee, type, dateRange };
+  return { theme, employee, type, dateRange, date_field };
 }
 
 let lastDisplayContext = null;
@@ -88,6 +97,25 @@ function displayLimitFor(plan) {
   const requested = Number(plan?.pagination?.per_page);
   if (!Number.isInteger(requested) || requested <= 0) return DISPLAY_LIMIT;
   return plan?.pagination?.explicit ? requested : Math.min(requested, DISPLAY_LIMIT);
+}
+
+function formatRecordsPreview(records = [], limit = 3) {
+  return records.slice(0, limit).map((record) => {
+    const name = record.Full_Name
+      || `${record.First_Name || ''} ${record.Last_Name || ''}`.trim()
+      || record.Deal_Name
+      || record.Account_Name?.name
+      || record.Account_Name
+      || record.Vendor_Name
+      || record.Product_Name
+      || record.Subject
+      || record.Email
+      || record.id;
+    const company = record.Company || record.Account_Name?.name || record.Account_Name || null;
+    const email = record.Email || null;
+    const details = [company, email].filter(Boolean).join(' • ');
+    return details ? `${name} (${details})` : name;
+  }).join('; ');
 }
 
 function displayContextFromPayload(context = {}) {
@@ -113,7 +141,7 @@ function displayContextFromPayload(context = {}) {
 }
 
 async function handleAssistantRequest(payload = {}) {
-  const question = String(payload?.question || '').trim();
+  const question = (typeof payload === 'string' ? payload : payload.question || payload.prompt || '').trim();
   if (!question) return { success: false, message: 'A question is required.' };
 
   const dnsRequest = detectDnsRequest(question);
@@ -161,6 +189,7 @@ async function handleAssistantRequest(payload = {}) {
         type: params.type,
         theme: params.theme,
         dateRange: params.dateRange,
+        date_field: params.date_field,
         employee: params.employee,
         data: Array.isArray(suppliedData) && suppliedData.length > 0 ? suppliedData : undefined,
         signal: payload.signal,

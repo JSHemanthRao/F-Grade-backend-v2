@@ -466,12 +466,13 @@ const spec = {
       post: {
         operationId: 'generateCRMDashboard',
         tags: ['CRM'],
-        summary: 'Generate an enterprise CRM analytics dashboard',
+        summary: 'Generate a complete CRM sales or activity dashboard',
         description: [
-          'Use this operation to generate a complete enterprise analytics dashboard (sales, management, activity, or comparison).',
-          'DATA PIPELINE INSTRUCTION: If you already queried Zoho CRM (e.g. using queryCRMRecords), pass the returned record array directly in the request body as "data" or "records".',
-          'If no pre-fetched data is passed, provide "date_from" (e.g. 2026-07-01) and "date_to" (e.g. 2026-08-01) and the backend will retrieve records from Zoho CRM automatically.',
-          'The backend deterministically calculates all metrics (total revenue, deal count, closed won, win rate %, average deal size, stage distribution, employee performance, trend) and returns structured dashboard widgets, metrics, data records, and tables.',
+          'ALWAYS call this tool directly whenever the user asks to create, show, or generate a dashboard (sales dashboard, management dashboard, activity dashboard, monthly trend, revenue by employee, deal stages, etc.).',
+          'DO NOT ask the user for CSV, Excel, or uploaded files.',
+          'DO NOT use external code execution or file interpreter tools.',
+          'The backend automatically queries Zoho CRM, calculates all metrics deterministically (total deals, closed-won deals, closed-won revenue, stage distribution, revenue by employee, daily/monthly trend), and returns the complete dashboard with KPI cards, charts, and tables.',
+          'Pass the natural-language user query in "request" (e.g. "Create a sales dashboard for July 2026") or pass exact date boundaries in "from" (e.g. 2026-07-01) and "to" (e.g. 2026-08-01).',
         ].join(' '),
         parameters: [
           {
@@ -481,20 +482,24 @@ const spec = {
             schema: {
               type: 'object',
               properties: {
-                title: { type: 'string', description: 'Dashboard title, e.g. July 2026 Sales Dashboard' },
-                type: { type: 'string', enum: ['sales', 'management', 'activity', 'comparison'], description: 'Dashboard type' },
-                date_from: { type: 'string', description: 'Start date or ISO datetime (e.g. 2026-07-01)' },
-                date_to: { type: 'string', description: 'End date or ISO datetime (e.g. 2026-08-01)' },
-                employee: { type: 'string', description: 'Employee name or ID to filter by' },
+                request: { type: 'string', description: 'The natural-language dashboard request, e.g. "Create a sales dashboard for July 2026"' },
+                title: { type: 'string', description: 'Optional dashboard title, e.g. July 2026 Sales Dashboard' },
+                type: { type: 'string', enum: ['sales', 'management', 'activity', 'comparison'], description: 'Dashboard type (defaults to sales for sales queries)' },
+                from: { type: 'string', description: 'Inclusive start date (e.g. 2026-07-01)' },
+                to: { type: 'string', description: 'Exclusive end date (e.g. 2026-08-01)' },
+                date_from: { type: 'string', description: 'Alias for from date (e.g. 2026-07-01)' },
+                date_to: { type: 'string', description: 'Alias for to date (e.g. 2026-08-01)' },
+                date_field: { type: 'string', description: 'Optional date field API name (defaults to Closing_Date for sales deals)' },
+                employee: { type: 'string', description: 'Optional employee name to filter by' },
                 module: { type: 'string', description: 'CRM module name, e.g. Deals' },
                 data: {
                   type: 'array',
-                  description: 'Optional array of CRM records (e.g. Deals returned by queryCRMRecords) to analyze and visualize directly.',
+                  description: 'Optional pre-fetched array of CRM records to analyze.',
                   items: { type: 'object' },
                 },
                 records: {
                   type: 'array',
-                  description: 'Alias for data: array of CRM records to analyze.',
+                  description: 'Alias for data: array of CRM records.',
                   items: { type: 'object' },
                 },
                 theme: {
