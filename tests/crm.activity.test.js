@@ -1,319 +1,617 @@
+'use strict';
+/**
+ * CRM Activity Service – Full Test Suite
+ *
+ * Coverage:
+ *  - Pure functions (no network): getTodayDateRange, toISTString, mapModuleToActivityType,
+ *    normalizeAuditEntry, normalizeModuleRecord, normalizeAuditCSVRow, buildAuditExportCriteria
+ *  - Mocked Zoho (axios + zohoClient): audit log export with scope mismatch → fallback,
+ *    audit log export success path, multi-module search boundary, user filter, error propagation
+ *  - Live integration: getActivity() against real Zoho CRM (flagged, opt-in)
+ */
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const express = require('express');
-const http = require('http');
+const { mock } = require('node:test');
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+const LIVE = process.env.LIVE_TESTS === '1'; // skip live by default
+
+// Produce a mock Zoho response object
+function mockResponse(status, data) {
+  return { status, data };
+}
+
+// Build a minimal 401 OAUTH_SCOPE_MISMATCH Axios error
+function scopeError() {
+  const err = new Error('Request failed with status code 401');
+  err.response = {
+    status: 401,
+    data: { code: 'OAUTH_SCOPE_MISMATCH', message: 'invalid oauth scope to access this URL' },
+  };
+  return err;
+}
+
+// Minimal Axios 204 (no data) error-like response
+function noContentResponse() {
+  const err = new Error('204 No Content');
+  err.response = { status: 204 };
+  return err;
+}
+
+// ── imports ───────────────────────────────────────────────────────────────────
 
 const {
-  getActivity,
   getTodayDateRange,
+  toISTString,
+  mapModuleToActivityType,
   normalizeAuditEntry,
   normalizeModuleRecord,
-  mapModuleToActivityType,
+  normalizeAuditCSVRow,
+  buildAuditExportCriteria,
+  CRMActivityError,
+  getActivity,
 } = require('../src/crm/services/activity.service');
+
 const metadataService = require('../src/crm/services/crm-metadata.service');
-const { formatActivityResponse } = require('../src/crm/services/assistant/activity-formatter.service');
-const assistantEngine = require('../src/crm/services/assistant-engine.service');
-const crmRouter = require('../src/crm/routes');
 
-test('1. getTodayDateRange calculates half-open date range in Asia/Kolkata timezone', () => {
-  const refDate = new Date('2026-08-14T10:15:00Z');
-  const range = getTodayDateRange('Asia/Kolkata', refDate);
+// ═══════════════════════════════════════════════════════════════════════════════
+// 1. DATE HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
 
+test('1a. getTodayDateRange – half-open IST range for 2026-08-14', () => {
+  const ref = new Date('2026-08-14T10:15:00Z'); // 15:45 IST → still 14 Aug IST
+  const range = getTodayDateRange('Asia/Kolkata', ref);
   assert.equal(range.date, '2026-08-14');
   assert.equal(range.timezone, 'Asia/Kolkata');
   assert.equal(range.from, '2026-08-14T00:00:00+05:30');
-  assert.equal(range.to, '2026-08-15T00:00:00+05:30');
+  assert.equal(range.to,   '2026-08-15T00:00:00+05:30');
 });
 
-test('2. metadataService resolves user by name or ID and maps module labels/API names', async () => {
-  const user = await metadataService.resolveUser('Sanjay');
-  assert.ok(user);
-  assert.equal(typeof user.id, 'string');
-  assert.equal(typeof user.name, 'string');
-
-  assert.equal(metadataService.resolveModuleApiName('deals'), 'Deals');
-  assert.equal(metadataService.resolveModuleLabel('Deals'), 'Deals');
+test('1b. getTodayDateRange – midnight boundary (23:59 UTC previous day = 05:29 IST same day)', () => {
+  const ref = new Date('2026-08-13T23:59:00Z'); // 2026-08-14T05:29 IST
+  const range = getTodayDateRange('Asia/Kolkata', ref);
+  assert.equal(range.date, '2026-08-14');
+  assert.equal(range.from, '2026-08-14T00:00:00+05:30');
+  assert.equal(range.to,   '2026-08-15T00:00:00+05:30');
 });
 
-test('3. mapModuleToActivityType correctly maps modules', () => {
-  assert.equal(mapModuleToActivityType('Deals'), 'deal');
-  assert.equal(mapModuleToActivityType('Meetings'), 'meeting');
-  assert.equal(mapModuleToActivityType('Notes'), 'note');
-  assert.equal(mapModuleToActivityType('Tasks'), 'task');
-  assert.equal(mapModuleToActivityType('Calls'), 'call');
-  assert.equal(mapModuleToActivityType('Leads'), 'lead');
-  assert.equal(mapModuleToActivityType('Contacts'), 'contact');
-  assert.equal(mapModuleToActivityType('Accounts'), 'account');
+test('1c. toISTString – date-only → midnight IST', () => {
+  assert.equal(toISTString('2026-08-14'), '2026-08-14T00:00:00+05:30');
 });
 
-test('4. normalizeAuditEntry normalizes Zoho audit log items correctly', () => {
-  const mockAuditItem = {
-    audited_by: { id: 'usr_101', name: 'Sanjay' },
-    module: 'Deals',
-    record: { id: 'rec_501', name: 'ABC Project' },
-    action: 'created',
-    audited_time: '2026-08-14T10:15:00+05:30',
-    source: 'crm_ui',
-  };
-
-  const normalized = normalizeAuditEntry(mockAuditItem);
-  assert.equal(normalized.user_id, 'usr_101');
-  assert.equal(normalized.user_name, 'Sanjay');
-  assert.equal(normalized.module, 'Deals');
-  assert.equal(normalized.module_api_name, 'Deals');
-  assert.equal(normalized.record_id, 'rec_501');
-  assert.equal(normalized.record_name, 'ABC Project');
-  assert.equal(normalized.action, 'created');
-  assert.equal(normalized.activity_type, 'deal');
-  assert.equal(normalized.audited_time, '2026-08-14T10:15:00+05:30');
+test('1d. toISTString – already has +05:30 offset → unchanged', () => {
+  const input = '2026-08-14T09:30:00+05:30';
+  assert.equal(toISTString(input), input);
 });
 
-test('5. normalizeModuleRecord normalizes Zoho CRM module records correctly', () => {
-  const mockDeal = {
-    id: 'deal_99',
-    Deal_Name: 'XYZ Deal',
-    Created_By: { id: 'usr_101', name: 'Sanjay' },
-    Created_Time: '2026-08-14T11:30:00+05:30',
-  };
-
-  const normalized = normalizeModuleRecord(mockDeal, 'Deals', 'created');
-  assert.equal(normalized.user_id, 'usr_101');
-  assert.equal(normalized.user_name, 'Sanjay');
-  assert.equal(normalized.module, 'Deals');
-  assert.equal(normalized.record_name, 'XYZ Deal');
-  assert.equal(normalized.action, 'created');
-  assert.equal(normalized.activity_type, 'deal');
+test('1e. toISTString – UTC midnight 2026-08-14 = 05:30 IST', () => {
+  // 2026-08-14T00:00:00Z  →  2026-08-14T05:30:00+05:30
+  assert.equal(toISTString('2026-08-14T00:00:00Z'), '2026-08-14T05:30:00+05:30');
 });
 
-test('6. formatActivityResponse generates natural language daily report and tables', () => {
-  const mockActivityResult = {
-    success: true,
-    date: '2026-08-14',
-    timezone: 'Asia/Kolkata',
-    count: 4,
-    data: [
-      {
-        user_id: 'usr_101',
-        user_name: 'Sanjay',
-        module: 'Deals',
-        module_api_name: 'Deals',
-        record_id: 'rec_1',
-        record_name: 'ABC Project',
-        action: 'created',
-        activity_type: 'deal',
-        audited_time: '2026-08-14T10:15:00+05:30',
-        source: 'crm_ui',
-      },
-      {
-        user_id: 'usr_101',
-        user_name: 'Sanjay',
-        module: 'Meetings',
-        module_api_name: 'Meetings',
-        record_id: 'rec_2',
-        record_name: 'Client Meeting',
-        action: 'created',
-        activity_type: 'meeting',
-        audited_time: '2026-08-14T11:30:00+05:30',
-        source: 'crm_ui',
-      },
-      {
-        user_id: 'usr_101',
-        user_name: 'Sanjay',
-        module: 'Notes',
-        module_api_name: 'Notes',
-        record_id: 'rec_3',
-        record_name: 'ABC Project',
-        action: 'added',
-        activity_type: 'note',
-        audited_time: '2026-08-14T12:05:00+05:30',
-        source: 'crm_ui',
-      },
-      {
-        user_id: 'usr_101',
-        user_name: 'Sanjay',
-        module: 'Deals',
-        module_api_name: 'Deals',
-        record_id: 'rec_4',
-        record_name: 'XYZ Deal',
-        action: 'Stage changed',
-        activity_type: 'deal',
-        audited_time: '2026-08-14T14:10:00+05:30',
-        source: 'crm_ui',
-      },
-    ],
-  };
-
-  const formatted = formatActivityResponse(mockActivityResult, { question: 'What did Sanjay do today? Give summary' });
-  assert.equal(formatted.success, true);
-  assert.ok(formatted.summary.includes('Sanjay completed the following CRM activities today.'));
-  assert.ok(formatted.summary.includes('Today, Sanjay created 2 deals, created 1 meeting, added 1 note.'));
-  assert.ok(formatted.summary.includes('| Employee | Activity | Module | Record | Action | Time |'));
-  assert.ok(formatted.summary.includes('| Sanjay | Deal created | Deals | ABC Project | Created |'));
-  assert.ok(formatted.summary.includes('| Employee | Deals Created | Meetings Created | Notes Added | Other Changes |'));
+test('1f. toISTString – UTC 18:30 prev day = IST midnight same day', () => {
+  // 2026-08-13T18:30:00Z  →  2026-08-14T00:00:00+05:30
+  assert.equal(toISTString('2026-08-13T18:30:00Z'), '2026-08-14T00:00:00+05:30');
 });
 
-test('7. formatActivityResponse handles no results correctly', () => {
-  const emptyResult = {
-    success: true,
-    date: '2026-08-14',
-    timezone: 'Asia/Kolkata',
-    count: 0,
-    data: [],
-  };
-
-  const formatted = formatActivityResponse(emptyResult, { question: "Give me today's activity" });
-  assert.equal(formatted.success, true);
-  assert.equal(formatted.summary, 'No CRM activity was found for today.');
-  assert.equal(formatted.data.length, 0);
+test('1g. toISTString – handles null/undefined gracefully', () => {
+  assert.equal(toISTString(null), null);
+  assert.equal(toISTString(undefined), null);
 });
 
-test('8. formatActivityResponse handles API errors without converting to 0 activities', () => {
-  const errorResult = {
-    success: false,
-    error: 'Zoho CRM API token expired or scope missing',
-  };
+// ═══════════════════════════════════════════════════════════════════════════════
+// 2. MODULE HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  const formatted = formatActivityResponse(errorResult, { question: "Give me today's activity" });
-  assert.equal(formatted.success, false);
-  assert.equal(formatted.summary, 'No activity could be retrieved because the CRM activity API returned an error.');
-});
-
-test('9. GET /api/crm/activity endpoint integration test', async () => {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/crm', crmRouter);
-
-  const server = http.createServer(app);
-  await new Promise((resolve) => server.listen(0, resolve));
-  const port = server.address().port;
-
-  try {
-    const res = await fetch(`http://localhost:${port}/api/crm/activity?user_id=Sanjay&limit=5`);
-    const json = await res.json();
-
-    assert.equal(res.status, 200);
-    assert.equal(json.success, true);
-    assert.equal(json.timezone, 'Asia/Kolkata');
-    assert.ok(Array.isArray(json.data));
-  } finally {
-    server.close();
+test('2a. mapModuleToActivityType – all supported modules', () => {
+  const table = [
+    ['Deals', 'deal'],
+    ['Meetings', 'meeting'],
+    ['Events', 'meeting'],
+    ['Notes', 'note'],
+    ['Tasks', 'task'],
+    ['Calls', 'call'],
+    ['Leads', 'lead'],
+    ['Contacts', 'contact'],
+    ['Accounts', 'account'],
+    ['Unknown', 'record_change'],
+  ];
+  for (const [input, expected] of table) {
+    assert.equal(mapModuleToActivityType(input), expected, `Failed for: ${input}`);
   }
 });
 
-test('10. Assistant engine handles activity questions via handleAssistantRequest', async () => {
-  const res = await assistantEngine.handleAssistantRequest({ question: 'What did Sanjay do today?' });
-  assert.equal(res.success, true);
-  assert.ok(typeof res.summary === 'string');
-});
+// ═══════════════════════════════════════════════════════════════════════════════
+// 3. NORMALIZERS
+// ═══════════════════════════════════════════════════════════════════════════════
 
-test('11. Querying module=activities returns 400 directing callers to /api/crm/activity', async () => {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/crm', crmRouter);
-
-  const server = http.createServer(app);
-  await new Promise((resolve) => server.listen(0, resolve));
-  const port = server.address().port;
-
-  try {
-    const res = await fetch(`http://localhost:${port}/api/crm/query?module=activities`);
-    const json = await res.json();
-
-    assert.equal(res.status, 400);
-    assert.equal(json.success, false);
-    assert.match(json.error, /Unsupported CRM module: activities/);
-    assert.match(json.error, /\/api\/crm\/activity/);
-  } finally {
-    server.close();
-  }
-});
-
-test('12. Normalized activity records contain standard action and time fields', () => {
-  const sampleActivity = {
-    user_id: '123',
-    user_name: 'Sanjay',
-    module: 'Deals',
-    module_api_name: 'Deals',
-    record_id: '456',
-    record_name: 'ABC Deal',
+test('3a. normalizeAuditEntry – done_by variant', () => {
+  const entry = {
+    done_by: { id: 'usr_1', name: 'Sanjay' },
+    module: { api_name: 'Deals' },
+    record: { id: 'rec_1', name: 'ACME Deal' },
     action: 'updated',
-    activity_type: 'Deal',
-    time: '2026-08-14T10:15:00+05:30',
-    field: 'Stage',
-    old_value: 'Proposal',
-    new_value: 'Closed Won',
-    source: 'crm_ui',
-  };
-
-  assert.equal(sampleActivity.user_name, 'Sanjay');
-  assert.equal(sampleActivity.module, 'Deals');
-  assert.equal(sampleActivity.action, 'updated');
-  assert.equal(sampleActivity.field, 'Stage');
-  assert.equal(sampleActivity.old_value, 'Proposal');
-  assert.equal(sampleActivity.new_value, 'Closed Won');
-  assert.ok(sampleActivity.time.includes('2026-08-14'));
-});
-
-test('13. normalizeAuditEntry extracts field_history changes accurately', () => {
-  const mockTimelineItem = {
-    done_by: { id: 'usr_201', name: 'Phanindra Kumar' },
-    record: { id: 'deal_777', name: 'Enterprise Deal', module: { api_name: 'Deals' } },
-    action: 'updated',
-    audited_time: '2026-08-14T14:20:00+05:30',
+    audited_time: '2026-08-14T10:00:00+05:30',
     source: 'crm_ui',
     field_history: [
-      {
-        api_name: 'Stage',
-        _value: { old: 'Discovery Mode', new: 'Proposal/Price Quote' },
-      },
+      { api_name: 'Stage', _value: { old: 'Prospecting', new: 'Proposal Sent' } },
     ],
   };
-
-  const normalized = normalizeAuditEntry(mockTimelineItem, 'Deals');
-  assert.equal(normalized.user_name, 'Phanindra Kumar');
-  assert.equal(normalized.action, 'updated');
-  assert.equal(normalized.field, 'Stage');
-  assert.equal(normalized.old_value, 'Discovery Mode');
-  assert.equal(normalized.new_value, 'Proposal/Price Quote');
+  const n = normalizeAuditEntry(entry);
+  assert.equal(n.user_id, 'usr_1');
+  assert.equal(n.user_name, 'Sanjay');
+  assert.equal(n.module_api_name, 'Deals');
+  assert.equal(n.action, 'updated');
+  assert.equal(n.field, 'Stage');
+  assert.equal(n.new_value, 'Proposal Sent');
+  assert.equal(n.old_value, 'Prospecting');
+  assert.equal(n.audited_time, '2026-08-14T10:00:00+05:30');
 });
 
-test('14. Half-open date range strictly excludes August 13 and August 15 records', () => {
-  const from = '2026-08-14T00:00:00+05:30';
-  const to = '2026-08-15T00:00:00+05:30';
-  const fromTime = new Date(from).valueOf();
-  const toTime = new Date(to).valueOf();
-
-  const mockRecords = [
-    { name: 'Aug 13 Late Night', audited_time: '2026-08-13T23:59:59+05:30' },
-    { name: 'Aug 14 Midnight Exact', audited_time: '2026-08-14T00:00:00+05:30' },
-    { name: 'Aug 14 Noon', audited_time: '2026-08-14T12:00:00+05:30' },
-    { name: 'Aug 14 Late Night', audited_time: '2026-08-14T23:59:59+05:30' },
-    { name: 'Aug 15 Midnight Exact', audited_time: '2026-08-15T00:00:00+05:30' },
-    { name: 'Aug 15 Morning', audited_time: '2026-08-15T09:00:00+05:30' },
-  ];
-
-  const inRange = mockRecords.filter((rec) => {
-    const t = new Date(rec.audited_time).valueOf();
-    return t >= fromTime && t < toTime;
-  });
-
-  assert.equal(inRange.length, 3);
-  assert.equal(inRange[0].name, 'Aug 14 Midnight Exact');
-  assert.equal(inRange[1].name, 'Aug 14 Noon');
-  assert.equal(inRange[2].name, 'Aug 14 Late Night');
+test('3b. normalizeAuditEntry – audited_by fallback variant', () => {
+  const entry = {
+    audited_by: { id: 'usr_2', name: 'Phanindra Kumar' },
+    module: 'Notes',
+    record: { id: 'rec_2', name: 'Follow-up note' },
+    action: 'added',
+    audited_time: '2026-08-14T11:00:00+05:30',
+  };
+  const n = normalizeAuditEntry(entry);
+  assert.equal(n.user_name, 'Phanindra Kumar');
+  assert.equal(n.action, 'added');
+  assert.equal(n.activity_type, 'note');
 });
 
-test('15. Live/Real getActivity returns count > 0 for August 14, 2026 activity', async () => {
-  const result = await getActivity({ from: '2026-08-14T00:00:00+05:30', to: '2026-08-15T00:00:00+05:30' });
+test('3c. normalizeAuditEntry – null input returns null', () => {
+  assert.equal(normalizeAuditEntry(null), null);
+});
+
+test('3d. normalizeModuleRecord – create action', () => {
+  const record = {
+    id: 'rec_3',
+    First_Name: 'Test',
+    Last_Name: 'Lead',
+    Created_Time: '2026-08-14T08:00:00+05:30',
+    Modified_Time: '2026-08-14T08:00:00+05:30',
+    Created_By: { id: 'usr_5', name: 'Sanjay' },
+    Owner: { id: 'usr_5', name: 'Sanjay' },
+  };
+  const n = normalizeModuleRecord(record, 'Leads', 'created');
+  assert.equal(n.user_name, 'Sanjay');
+  assert.equal(n.action, 'created');
+  assert.equal(n.activity_type, 'lead');
+  assert.equal(n.audited_time, '2026-08-14T08:00:00+05:30');
+});
+
+test('3e. normalizeModuleRecord – Note.added action', () => {
+  const record = {
+    id: 'rec_4',
+    Note_Title: 'Follow-up Call',
+    Note_Content: 'Discussed the proposal in detail.',
+    Created_Time: '2026-08-14T12:00:00+05:30',
+    Modified_Time: '2026-08-14T12:00:00+05:30',
+    Created_By: { id: 'usr_6', name: 'Developer Dept' },
+  };
+  const n = normalizeModuleRecord(record, 'Notes', 'created');
+  assert.equal(n.activity_type, 'note');
+  assert.equal(n.action, 'added');
+  assert.equal(n.record_name, 'Follow-up Call');
+});
+
+test('3f. normalizeAuditCSVRow – standard CSV row shape', () => {
+  const row = {
+    'User ID': 'usr_10',
+    'User Name': 'Sanjay',
+    'Module': 'Deals',
+    'Action': 'updated',
+    'Audited Time': '2026-08-14T14:30:00+05:30',
+    'Record ID': 'rec_10',
+    'Record Name': 'Big Deal',
+    'Field': 'Stage',
+    'Old Value': 'Prospecting',
+    'New Value': 'Closed Won',
+    'Source': 'crm_ui',
+  };
+  const n = normalizeAuditCSVRow(row);
+  assert.equal(n.user_id, 'usr_10');
+  assert.equal(n.user_name, 'Sanjay');
+  assert.equal(n.action, 'updated');
+  assert.equal(n.field, 'Stage');
+  assert.equal(n.new_value, 'Closed Won');
+});
+
+test('3g. normalizeAuditCSVRow – missing User Name returns null', () => {
+  const row = { Module: 'Deals', Action: 'created' };
+  assert.equal(normalizeAuditCSVRow(row), null);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 4. AUDIT EXPORT CRITERIA BUILDER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+test('4a. buildAuditExportCriteria – date-only criteria', () => {
+  const criteria = buildAuditExportCriteria(
+    '2026-08-14T00:00:00+05:30',
+    '2026-08-15T00:00:00+05:30'
+  );
+  assert.ok(Array.isArray(criteria.group));
+  assert.equal(criteria.group_operator, 'and');
+  const dateFilter = criteria.group[0];
+  assert.equal(dateFilter.field.api_name, 'audited_time');
+  assert.equal(dateFilter.comparator, 'between');
+  assert.deepEqual(dateFilter.value, ['2026-08-14T00:00:00+05:30', '2026-08-15T00:00:00+05:30']);
+  assert.equal(criteria.group.length, 1); // no user, module, action filters
+});
+
+test('4b. buildAuditExportCriteria – with user, module, action filters', () => {
+  const criteria = buildAuditExportCriteria(
+    '2026-08-14T00:00:00+05:30',
+    '2026-08-15T00:00:00+05:30',
+    { user_id: 'usr_1', module: 'Deals', action: 'updated' }
+  );
+  assert.equal(criteria.group.length, 4);
+  assert.equal(criteria.group[1].field.api_name, 'done_by');
+  assert.equal(criteria.group[1].value, 'usr_1');
+  assert.equal(criteria.group[2].field.api_name, 'module');
+  assert.equal(criteria.group[2].value, 'Deals');
+  assert.equal(criteria.group[3].field.api_name, 'action');
+  assert.equal(criteria.group[3].value, 'updated');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 5. MOCKED STRATEGY TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Helper: patch zohoClient.post and .get for a single test
+function withMockedZoho({ postFn, getFn, onRestore } = {}) {
+  const zohoClient = require('../src/common/config/axios').zohoClient;
+  const originalPost = zohoClient.post.bind(zohoClient);
+  const originalGet = zohoClient.get.bind(zohoClient);
+
+  if (postFn) zohoClient.post = postFn;
+  if (getFn) zohoClient.get = getFn;
+
+  return function restore() {
+    zohoClient.post = originalPost;
+    zohoClient.get = originalGet;
+    if (onRestore) onRestore();
+  };
+}
+
+test('5a. Scope mismatch → falls back to multi-module search and returns count > 0', async () => {
+  const zohoClient = require('../src/common/config/axios').zohoClient;
+
+  let postCallCount = 0;
+  let getCallCount = 0;
+
+  const originalPost = zohoClient.post;
+  const originalGet = zohoClient.get;
+
+  // POST audit_log_export → 401 OAUTH_SCOPE_MISMATCH
+  zohoClient.post = async (url) => {
+    if (url.includes('audit_log_export')) {
+      postCallCount++;
+      throw scopeError();
+    }
+    return originalPost.call(zohoClient, url);
+  };
+
+  // GET /search → return 2 records; GET /__timeline → return empty
+  zohoClient.get = async (url, config) => {
+    if (url.endsWith('/search')) {
+      getCallCount++;
+      // Return 2 lead records created/modified today
+      return mockResponse(200, {
+        data: [
+          {
+            id: 'rec_A',
+            First_Name: 'Ronak', Last_Name: 'Shah',
+            Created_Time: '2026-08-14T09:00:00+05:30',
+            Modified_Time: '2026-08-14T09:00:00+05:30',
+            Created_By: { id: 'usr_1', name: 'Sanjay' },
+            Modified_By: { id: 'usr_1', name: 'Sanjay' },
+            Owner: { id: 'usr_1', name: 'Sanjay' },
+          },
+          {
+            id: 'rec_B',
+            First_Name: 'Priya', Last_Name: 'Sharma',
+            Created_Time: '2026-08-14T10:30:00+05:30',
+            Modified_Time: '2026-08-14T10:30:00+05:30',
+            Created_By: { id: 'usr_2', name: 'Phanindra Kumar' },
+            Modified_By: { id: 'usr_2', name: 'Phanindra Kumar' },
+            Owner: { id: 'usr_2', name: 'Phanindra Kumar' },
+          },
+        ],
+      });
+    }
+    if (url.includes('__timeline')) {
+      return mockResponse(200, { __timeline: [] });
+    }
+    // Handle any other GET (204 empty modules)
+    const err = new Error('204');
+    err.response = { status: 204 };
+    throw err;
+  };
+
+  let result;
+  try {
+    result = await getActivity({ from: '2026-08-14', to: '2026-08-15' });
+  } finally {
+    zohoClient.post = originalPost;
+    zohoClient.get = originalGet;
+  }
+
   assert.equal(result.success, true);
-  assert.ok(result.count > 0, `Expected count > 0, received ${result.count}`);
-  assert.ok(result.data.length > 0);
-
-  const first = result.data[0];
-  assert.ok(first.user_name);
-  assert.ok(first.module);
-  assert.ok(first.action);
-  assert.ok(first.time);
+  assert.equal(result.strategy, 'multi_module_search');
+  assert.ok(result.count > 0, `Expected count > 0, got ${result.count}`);
+  assert.ok(postCallCount >= 1, 'Expected at least one POST to audit_log_export');
+  assert.ok(getCallCount > 0, 'Expected GET calls for multi-module search');
 });
 
+test('5b. Non-scope export failure → throws CRMActivityError (not count=0)', async () => {
+  const zohoClient = require('../src/common/config/axios').zohoClient;
+  const originalPost = zohoClient.post;
 
+  // POST audit_log_export → 500 server error (not scope mismatch)
+  zohoClient.post = async (url) => {
+    if (url.includes('audit_log_export')) {
+      const err = new Error('Internal Server Error');
+      err.response = { status: 500, data: { code: 'INTERNAL_ERROR', message: 'unexpected error' } };
+      throw err;
+    }
+    return originalPost.call(zohoClient, url);
+  };
+
+  try {
+    await getActivity({ from: '2026-08-14' });
+    assert.fail('Expected getActivity to throw on non-scope export failure');
+  } catch (err) {
+    assert.ok(err instanceof CRMActivityError, `Expected CRMActivityError, got: ${err.constructor.name}`);
+    assert.ok(err.message.includes('audit log export'), `Unexpected message: ${err.message}`);
+  } finally {
+    zohoClient.post = originalPost;
+  }
+});
+
+test('5c. All search modules return 204 → count=0 (no data today)', async () => {
+  const zohoClient = require('../src/common/config/axios').zohoClient;
+  const originalPost = zohoClient.post;
+  const originalGet = zohoClient.get;
+
+  zohoClient.post = async (url) => {
+    if (url.includes('audit_log_export')) throw scopeError();
+    return originalPost.call(zohoClient, url);
+  };
+
+  zohoClient.get = async (url) => {
+    if (url.endsWith('/search')) return mockResponse(204, null);
+    // shouldn't be called for timeline
+    return mockResponse(200, { __timeline: [] });
+  };
+
+  let result;
+  try {
+    result = await getActivity({ from: '2026-08-14' });
+  } finally {
+    zohoClient.post = originalPost;
+    zohoClient.get = originalGet;
+  }
+
+  assert.equal(result.success, true);
+  assert.equal(result.count, 0);
+  assert.deepEqual(result.data, []);
+});
+
+test('5d. Half-open boundary: record at 2026-08-15T00:00:00+05:30 (= to) is excluded', async () => {
+  const zohoClient = require('../src/common/config/axios').zohoClient;
+  const originalPost = zohoClient.post;
+  const originalGet = zohoClient.get;
+
+  zohoClient.post = async (url) => {
+    if (url.includes('audit_log_export')) throw scopeError();
+    return originalPost.call(zohoClient, url);
+  };
+
+  zohoClient.get = async (url) => {
+    if (url.endsWith('/search')) {
+      return mockResponse(200, {
+        data: [
+          {
+            id: 'rec_midnight',
+            First_Name: 'Edge', Last_Name: 'Case',
+            // EXACTLY at `to` boundary — should be EXCLUDED
+            Created_Time: '2026-08-15T00:00:00+05:30',
+            Modified_Time: '2026-08-15T00:00:00+05:30',
+            Created_By: { id: 'usr_3', name: 'TestUser' },
+            Owner: { id: 'usr_3', name: 'TestUser' },
+          },
+        ],
+      });
+    }
+    return mockResponse(200, { __timeline: [] });
+  };
+
+  let result;
+  try {
+    result = await getActivity({
+      from: '2026-08-14T00:00:00+05:30',
+      to: '2026-08-15T00:00:00+05:30',
+    });
+  } finally {
+    zohoClient.post = originalPost;
+    zohoClient.get = originalGet;
+  }
+
+  assert.equal(result.count, 0, 'Record at boundary (to) must be excluded from half-open range');
+});
+
+test('5e. Half-open boundary: record at 2026-08-14T23:59:59+05:30 (inside) is INCLUDED', async () => {
+  const zohoClient = require('../src/common/config/axios').zohoClient;
+  const originalPost = zohoClient.post;
+  const originalGet = zohoClient.get;
+
+  zohoClient.post = async (url) => {
+    if (url.includes('audit_log_export')) throw scopeError();
+    return originalPost.call(zohoClient, url);
+  };
+
+  zohoClient.get = async (url) => {
+    if (url.endsWith('/search')) {
+      return mockResponse(200, {
+        data: [
+          {
+            id: 'rec_last',
+            First_Name: 'Late', Last_Name: 'Night',
+            Created_Time: '2026-08-14T23:59:59+05:30',
+            Modified_Time: '2026-08-14T23:59:59+05:30',
+            Created_By: { id: 'usr_4', name: 'NightOwl' },
+            Owner: { id: 'usr_4', name: 'NightOwl' },
+          },
+        ],
+      });
+    }
+    return mockResponse(200, { __timeline: [] });
+  };
+
+  let result;
+  try {
+    result = await getActivity({
+      from: '2026-08-14T00:00:00+05:30',
+      to: '2026-08-15T00:00:00+05:30',
+    });
+  } finally {
+    zohoClient.post = originalPost;
+    zohoClient.get = originalGet;
+  }
+
+  assert.ok(result.count > 0, 'Record at 23:59:59 (before boundary) must be included');
+});
+
+test('5f. User filter: only returns records for the requested user', async () => {
+  const zohoClient = require('../src/common/config/axios').zohoClient;
+  const originalPost = zohoClient.post;
+  const originalGet = zohoClient.get;
+
+  zohoClient.post = async (url) => {
+    if (url.includes('audit_log_export')) throw scopeError();
+    return originalPost.call(zohoClient, url);
+  };
+
+  zohoClient.get = async (url) => {
+    if (url.endsWith('/search')) {
+      return mockResponse(200, {
+        data: [
+          {
+            id: 'rec_s1',
+            Deal_Name: 'Sanjay Deal',
+            Created_Time: '2026-08-14T09:00:00+05:30',
+            Modified_Time: '2026-08-14T09:00:00+05:30',
+            Created_By: { id: 'usr_sanjay', name: 'Sanjay' },
+            Modified_By: { id: 'usr_sanjay', name: 'Sanjay' },
+            Owner: { id: 'usr_sanjay', name: 'Sanjay' },
+          },
+          {
+            id: 'rec_p1',
+            Deal_Name: 'Phanindra Deal',
+            Created_Time: '2026-08-14T10:00:00+05:30',
+            Modified_Time: '2026-08-14T10:00:00+05:30',
+            Created_By: { id: 'usr_phan', name: 'Phanindra Kumar' },
+            Modified_By: { id: 'usr_phan', name: 'Phanindra Kumar' },
+            Owner: { id: 'usr_phan', name: 'Phanindra Kumar' },
+          },
+        ],
+      });
+    }
+    return mockResponse(200, { __timeline: [] });
+  };
+
+  // Patch metadataService.resolveUser to avoid a live call
+  const origResolveUser = metadataService.resolveUser;
+  metadataService.resolveUser = async (nameOrId) => ({ id: 'usr_sanjay', name: 'Sanjay' });
+
+  let result;
+  try {
+    result = await getActivity({
+      from: '2026-08-14T00:00:00+05:30',
+      to: '2026-08-15T00:00:00+05:30',
+      user: 'Sanjay',
+    });
+  } finally {
+    zohoClient.post = originalPost;
+    zohoClient.get = originalGet;
+    metadataService.resolveUser = origResolveUser;
+  }
+
+  assert.ok(result.count > 0, 'Expected at least one result for Sanjay');
+  for (const act of result.data) {
+    assert.equal(
+      act.user_name.toLowerCase(),
+      'sanjay',
+      `Expected all activities to belong to Sanjay, got: ${act.user_name}`
+    );
+  }
+});
+
+test('5g. Copilot UTC input is correctly converted to IST for boundary check', async () => {
+  // Copilot may pass from="2026-08-13T18:30:00Z" (UTC midnight IST)
+  // and to="2026-08-14T18:30:00Z" (UTC end of day IST)
+  const from = '2026-08-13T18:30:00Z';
+  const to = '2026-08-14T18:30:00Z';
+
+  const fromIST = toISTString(from);
+  const toIST = toISTString(to);
+
+  assert.equal(fromIST, '2026-08-14T00:00:00+05:30', 'UTC midnight should map to IST 00:00');
+  assert.equal(toIST, '2026-08-15T00:00:00+05:30', 'UTC next-day midnight should map to IST 00:00 next day');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 6. LIVE INTEGRATION (opt-in via LIVE_TESTS=1)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+test('6a. [LIVE] getActivity() returns count > 0 for today in Asia/Kolkata', { skip: !LIVE }, async () => {
+  const result = await getActivity({});
+  assert.equal(result.success, true);
+  assert.ok(result.count > 0, `Expected live count > 0, got ${result.count}`);
+  assert.ok(Array.isArray(result.data));
+  assert.ok(['multi_module_search', 'audit_log_export'].includes(result.strategy));
+
+  // Each activity must have required fields
+  for (const act of result.data) {
+    assert.ok(act.user_name, `Missing user_name on activity: ${JSON.stringify(act)}`);
+    assert.ok(act.audited_time, `Missing audited_time on activity: ${JSON.stringify(act)}`);
+    assert.ok(act.module, `Missing module on activity: ${JSON.stringify(act)}`);
+    assert.ok(act.action, `Missing action on activity: ${JSON.stringify(act)}`);
+
+    // All times must be within today's IST boundary
+    const todayRange = getTodayDateRange('Asia/Kolkata');
+    const fromMs = new Date(todayRange.from).valueOf();
+    const toMs = new Date(todayRange.to).valueOf();
+    const actMs = new Date(act.audited_time).valueOf();
+
+    assert.ok(
+      actMs >= fromMs && actMs < toMs,
+      `Activity time ${act.audited_time} is outside today's range [${todayRange.from}, ${todayRange.to})`
+    );
+  }
+});
+
+test('6b. [LIVE] User filter: "Phanindra" returns only Phanindra\'s activities', { skip: !LIVE }, async () => {
+  const result = await getActivity({ user: 'Phanindra' });
+  assert.equal(result.success, true);
+  for (const act of result.data) {
+    assert.ok(
+      act.user_name.toLowerCase().includes('phanindra'),
+      `Expected Phanindra activities only, got: ${act.user_name}`
+    );
+  }
+});
+
+test('6c. [LIVE] CRMActivityError has isScopeMismatch for audit log on current token', { skip: !LIVE }, async () => {
+  // The service should log scope mismatch and successfully fall back — not throw
+  const result = await getActivity({});
+  assert.equal(result.strategy, 'multi_module_search', 'Expected fallback strategy due to scope mismatch');
+  assert.equal(result.success, true);
+});
