@@ -401,9 +401,12 @@ function calculateResult(plan, datasets) {
       calculations.push({ label: 'Closed lost count', type: 'closed_lost_count', value: closedLostCount });
       const openPipelineAmounts = records.filter((record) => isOpenStage(getStage(record))).map(getAmount).filter((value) => value !== null);
       if (openPipelineAmounts.length) {
-        calculations.push({ label: 'Pipeline value', type: 'pipeline', value: openPipelineAmounts.reduce((total, value) => total + value, 0) });
+        const pipelineVal = openPipelineAmounts.reduce((total, value) => total + value, 0);
+        calculations.push({ label: 'Pipeline value', type: 'pipeline', value: pipelineVal });
+        calculations.push({ label: 'Pipeline value', type: 'pipeline_value', value: pipelineVal });
       } else {
         addLimitation('pipeline', 'Open deal amounts are unavailable for pipeline calculation.');
+        addLimitation('pipeline_value', 'Open deal amounts are unavailable for pipeline calculation.');
       }
       if (closedWonCount > 0 && closedLostCount > 0) {
         calculations.push({ label: 'Win rate', type: 'win_rate', value: closedWonCount / (closedWonCount + closedLostCount) });

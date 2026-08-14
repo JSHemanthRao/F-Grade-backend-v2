@@ -205,3 +205,44 @@ test('10. Assistant engine handles activity questions via handleAssistantRequest
   assert.equal(res.success, true);
   assert.ok(typeof res.summary === 'string');
 });
+
+test('11. Querying module=activities returns 400 directing callers to /api/crm/activity', async () => {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/crm', crmRouter);
+
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, resolve));
+  const port = server.address().port;
+
+  try {
+    const res = await fetch(`http://localhost:${port}/api/crm/query?module=activities`);
+    const json = await res.json();
+
+    assert.equal(res.status, 400);
+    assert.equal(json.success, false);
+    assert.match(json.error, /Unsupported CRM module: activities/);
+    assert.match(json.error, /\/api\/crm\/activity/);
+  } finally {
+    server.close();
+  }
+});
+
+test('12. Normalized activity records contain standard action and time fields', () => {
+  const sampleActivity = {
+    user_id: '123',
+    user_name: 'Sanjay',
+    module: 'Deals',
+    record_id: '456',
+    record_name: 'ABC Deal',
+    action: 'Created',
+    activity_type: 'Deal',
+    time: '2026-08-14T10:15:00+05:30',
+  };
+
+  assert.equal(sampleActivity.user_name, 'Sanjay');
+  assert.equal(sampleActivity.module, 'Deals');
+  assert.equal(sampleActivity.action, 'Created');
+  assert.ok(sampleActivity.time.includes('2026-08-14'));
+});
+

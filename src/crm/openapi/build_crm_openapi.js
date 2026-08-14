@@ -42,6 +42,7 @@ const spec = {
         description: [
           'ALWAYS call this tool for count/how-many questions before answering.',
           'Use when the user asks: how many, count, total, number of records, or any filtered count.',
+          'Do NOT use this tool for activity reports; use getCRMActivityReport instead.',
           'MONTH CONVERSION (required): "leads created in June" → from=2026-06-01, to=2026-07-01. The from is inclusive, to is exclusive.',
           'Infer the date field from context: "created in June" → date_field=Created_Time. "modified in June" → date_field=Modified_Time. "closed in June" → date_field=Closing_Date.',
           'Return the exact count the tool provides. Do not invent or estimate a count.',
@@ -54,7 +55,7 @@ const spec = {
             in: 'query',
             required: true,
             type: 'string',
-            description: 'Canonical or natural-language module name. Examples: Leads, Contacts, Accounts, Deals.',
+            description: 'Canonical or natural-language module name. Examples: Leads, Contacts, Accounts, Deals. Do NOT pass "Activities" here.',
           },
           {
             name: 'operation',
@@ -170,6 +171,7 @@ const spec = {
         description: [
           'ALWAYS call this tool for any list/view/show/retrieve/find request before answering.',
           'Never default to retrieving the complete module.',
+          'CRITICAL ROUTING RULE: Do NOT use this tool for "today\'s activity" or employee action reports. Never pass module="Activities". For "Give me today\'s activity" or "What did Sanjay do today?", use getCRMActivityReport (/api/crm/activity) instead.',
           'MONTH CONVERSION (required): "leads created in June" → from=2026-06-01, to=2026-07-01. "July leads" → from=2026-07-01, to=2026-08-01. The from is inclusive (>=), the to is exclusive (<).',
           'Infer the date field: "created" → date_field=Created_Time. "modified" → date_field=Modified_Time. "closed" → date_field=Closing_Date.',
           'Pass the user-requested limit directly: "give me 10 leads" → limit=10. Do not ask the user for technical parameters.',
@@ -185,7 +187,7 @@ const spec = {
             in: 'query',
             required: true,
             type: 'string',
-            description: 'Canonical or natural-language module name. Examples: Leads, Contacts, Accounts, Deals.',
+            description: 'Canonical or natural-language module name. Examples: Leads, Contacts, Accounts, Deals. Do NOT pass "Activities" here; use getCRMActivityReport for activity reports.',
           },
           {
             name: 'operation',
@@ -346,7 +348,7 @@ const spec = {
         operationId: 'getCRMActivityReport',
         tags: ['CRM'],
         summary: "Get today's CRM activity and daily audit report",
-        description: "Use this operation whenever the user asks for today's CRM activity, what an employee did today, show activity for all employees, or daily changes. Pass user_id for specific user activity or leave empty for all employees. Dates default to today in Asia/Kolkata timezone.",
+        description: "Use this operation whenever the user asks for \"today's CRM activity\", \"What did Sanjay do today?\", \"Show me today's activity for all employees\", or daily changes. Retrieves activity from Zoho Audit Log, Tasks, Meetings, Calls, and Notes. Never use queryCRMRecords with module=\"Activities\" for this purpose. Pass user_id for a specific employee or leave empty for all employees. Dates default to today in Asia/Kolkata timezone.",
         parameters: [
           {
             name: 'module',

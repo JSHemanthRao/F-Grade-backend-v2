@@ -116,9 +116,42 @@ function resolveModuleLabel(moduleEndpointOrKey) {
   return found ? found.label : moduleEndpointOrKey;
 }
 
+let cachedOrg = null;
+let lastOrgFetch = 0;
+
+async function fetchOrgMetadata(options = {}) {
+  const now = Date.now();
+  if (cachedOrg && (now - lastOrgFetch < USER_CACHE_TTL_MS) && !options.forceRefresh) {
+    return cachedOrg;
+  }
+
+  try {
+    const response = await zohoClient.get('/crm/v8/org', {
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+
+    const orgData = Array.isArray(response.data?.org) ? response.data.org[0] : (response.data?.org || response.data?.data?.[0] || {});
+    cachedOrg = {
+      currency_symbol: orgData.currency_symbol || '\u20B9',
+      currency_locale: orgData.currency_locale || 'en_IN',
+      currency: orgData.currency || orgData.iso_code || 'INR',
+      name: orgData.company_name || 'F-Grade',
+    };
+    lastOrgFetch = now;
+    return cachedOrg;
+  } catch (error) {
+    logger.warn('CRM Metadata Service', {
+      event: 'fetch_org_failed',
+      error: error.message,
+    });
+    return cachedOrg || { currency_symbol: '\u20B9', currency_locale: 'en_IN', currency: 'INR' };
+  }
+}
+
 module.exports = {
   fetchZohoUsers,
   resolveUser,
   resolveModuleApiName,
   resolveModuleLabel,
+  fetchOrgMetadata,
 };

@@ -28,7 +28,7 @@ const { detectTimeRange } = require('./assistant/date-detector.service');
 
 const ACTIVITY_QUESTION_PATTERN = /(today'?s?\s+(?:crm\s+)?activity|crm\s+activity|what\s+did\s+.*\s+do\s+today|what\s+changes\s+did\s+.*\s+make\s+today|activity\s+for\s+all\s+employees|daily\s+activity|activity\s+report)/i;
 
-const DASHBOARD_QUESTION_PATTERN = /\b(?:create|build|generate|show|view)?\s*(?:a\s+)?(?:sales|management|performance|comparison|employee|analytics)?\s*dashboard\b|\b(?:compare\s+[a-z0-9]+\s+(?:with|and|versus|vs)\s+[a-z0-9]+)\b|\b(?:deal-stage\s+donut|donut\s+chart|sales\s+performance\s+by\s+employee|revenue\s+by\s+employee|change\s+(?:the\s+)?(?:this\s+)?dashboard\s+to\s+(?:dark|light)\s+mode)\b/i;
+const DASHBOARD_QUESTION_PATTERN = /\b(?:create|build|generate|show|view)?\s*(?:a\s+)?(?:sales|management|performance|comparison|employee|analytics)?\s*dashboard\b|\b(?:compare\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|q[1-4]|this\s+month|last\s+month|this\s+quarter|last\s+quarter|this\s+year|last\s+year)\s+(?:with|and|versus|vs)\s+[a-z0-9\s]+)\b|\b(?:deal-stage\s+donut|donut\s+chart|sales\s+performance\s+by\s+employee|revenue\s+by\s+employee|change\s+(?:the\s+)?(?:this\s+)?dashboard\s+to\s+(?:dark|light)\s+mode)\b/i;
 
 function extractActivityUser(question) {
   const matchDid = question.match(/what\s+did\s+([A-Za-z\s.'-]+?)\s+do\s+today/i);

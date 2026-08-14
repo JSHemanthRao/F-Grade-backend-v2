@@ -9,7 +9,7 @@ const SUPPORTED_METRICS_BY_STEP = {
     'owner_distribution', 'top_owners', 'top_sales_representatives',
     'stage_distribution', 'top_stages', 'customer_ranking', 'top_customers',
     'product_ranking', 'top_products', 'lead_source_distribution', 'top_lead_sources',
-    'closed_won_value', 'closed_lost_count', 'pipeline', 'win_rate',
+    'closed_won_value', 'closed_lost_count', 'pipeline', 'pipeline_value', 'win_rate',
     'month_wise_metrics', 'quarter_wise_metrics', 'year_wise_metrics',
     'month_over_month_growth', 'quarter_over_quarter_growth', 'year_over_year_growth',
   ],

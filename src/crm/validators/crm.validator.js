@@ -124,6 +124,11 @@ function validateCRMQueryRequest(req, res, next) {
     const moduleDefinition = getModuleDefinition(moduleKey);
 
     if (!moduleDefinition) {
+      if (['activities', 'activity'].includes(moduleKey)) {
+        throw new CRMValidationError(
+          `Unsupported CRM module: ${moduleKey}. 'Activities' is not a queryable CRM table. For today's activity and employee action reports, use GET /api/crm/activity.`
+        );
+      }
       throw new CRMValidationError(`Unsupported CRM module: ${moduleKey}`);
     }
 
@@ -153,6 +158,11 @@ function validateCRMCountRequest(req, res, next) {
     const moduleDefinition = getModuleDefinition(moduleKey);
 
     if (!moduleDefinition) {
+      if (['activities', 'activity'].includes(moduleKey)) {
+        throw new CRMValidationError(
+          `Unsupported CRM module: ${moduleKey}. 'Activities' is not a queryable CRM table. For today's activity and employee action reports, use GET /api/crm/activity.`
+        );
+      }
       throw new CRMValidationError(`Unsupported CRM module: ${moduleKey}`);
     }
 

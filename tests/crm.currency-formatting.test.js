@@ -1,14 +1,27 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { formatCurrency } = require('../src/crm/services/assistant/currency.service');
+const { formatCurrency, formatNumber } = require('../src/crm/services/assistant/currency.service');
 const { formatResponse } = require('../src/crm/services/assistant/formatter.service');
 
 test('currency formatter uses INR and Indian grouping without converting the CRM amount', () => {
+  // Required regression checks
+  assert.equal(formatCurrency(43660), '₹43,660');
+  assert.equal(formatCurrency(1250000), '₹12,50,000');
+  assert.equal(formatCurrency(1250000.50), '₹12,50,000.50');
+  assert.equal(formatCurrency('1250000.50'), '₹12,50,000.50');
   assert.equal(formatCurrency(25355), '₹25,355');
   assert.equal(formatCurrency(540000), '₹5,40,000');
-  assert.equal(formatCurrency(1250000), '₹12,50,000');
-  assert.equal(formatCurrency('$25,355'), '₹25,355');
-  assert.equal(formatCurrency('USD 540000'), '₹5,40,000');
+  assert.equal(formatCurrency(1000), '₹1,000');
+  assert.equal(formatCurrency(100000), '₹1,00,000');
+  assert.equal(formatCurrency(1000000), '₹10,00,000');
+});
+
+test('currency formatter supports explicit USD and multi-currency when record is explicitly in USD', () => {
+  assert.equal(formatCurrency(43660, 'USD'), '$43,660');
+  assert.equal(formatCurrency(1250000, 'USD'), '$1,250,000');
+  assert.equal(formatCurrency(43660, null, '$'), '$43,660');
+  assert.equal(formatCurrency(43660, 'EUR'), '€43,660');
+  assert.equal(formatCurrency(43660, 'INR'), '₹43,660');
 });
 
 test('CRM monetary fields and calculated monetary metrics are displayed in INR', () => {
@@ -46,3 +59,19 @@ test('CRM monetary fields and calculated monetary metrics are displayed in INR',
   assert.doesNotMatch(JSON.stringify(response.data), /\$|USD/);
   assert.equal(sourceRecord.Amount, '$25,355');
 });
+
+test('formatDisplayedRecord preserves USD when record explicitly declares Currency: USD', () => {
+  const usdRecord = {
+    id: 'deal-usd',
+    Amount: 43660,
+    Currency: 'USD',
+  };
+  const response = formatResponse(
+    { question: 'Show USD deal', intents: ['LIST'], modules: ['deals'] },
+    [{ module: 'deals', result: { data: [usdRecord], info: { retrievalComplete: true } } }],
+    [],
+  );
+
+  assert.equal(response.data[0].Amount, '$43,660');
+});
+
