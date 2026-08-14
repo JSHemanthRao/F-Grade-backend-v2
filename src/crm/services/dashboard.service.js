@@ -200,7 +200,10 @@ function computeDealFunnel(deals = []) {
 // ---------------------------------------------------------------------------
 async function buildSalesDashboard(options = {}) {
   const theme = resolveTheme(options.theme);
-  const dateRange = resolveDateRange(options.dateRange, options.question || options.title || options.prompt);
+  const dateRange = resolveDateRange(
+    options.dateRange || (options.from && options.to ? { from: options.from, to: options.to } : {}),
+    options.question || options.title || options.prompt,
+  );
 
   let deals = [];
   let leads = [];
@@ -217,31 +220,109 @@ async function buildSalesDashboard(options = {}) {
   }
   dateField = dateField || 'Closing_Date';
 
+  logger.info('[DASHBOARD REQUEST]', {
+    request: options.question || options.title || '(none)',
+    from: dateRange.from,
+    to: dateRange.to,
+    date_field: dateField,
+    employee: options.employee || null,
+    type: options.type || 'sales',
+  });
+
   // 1. Check if pre-fetched CRM data was provided directly from CRM connector or previous tool step
   const providedDeals = options.data || options.records || options.deals;
   if (Array.isArray(providedDeals) && providedDeals.length > 0) {
     deals = providedDeals;
+    logger.info('[DASHBOARD CRM RESPONSE]', {
+      source: 'provided_data',
+      count: deals.length,
+    });
   } else {
+    const crmParams = {
+      from: dateRange.from,
+      to: dateRange.to,
+      date_field: dateField,
+      retrieval_mode: 'all',
+      limit: options.limit || 2000,
+    };
+    logger.info('[DASHBOARD CRM REQUEST]', {
+      endpoint: 'Deals',
+      module: 'deals',
+      criteria: `${dateField} >= ${String(dateRange.from).slice(0, 10)} AND ${dateField} < ${String(dateRange.to).slice(0, 10)}`,
+      retrieval_mode: crmParams.retrieval_mode,
+      limit: crmParams.limit,
+    });
     try {
       const dealsResult = await recordsService.getRecords('deals', {
-        from: dateRange.from,
-        to: dateRange.to,
-        date_field: dateField,
-        retrieval_mode: 'all',
-        limit: options.limit || 2000,
+        ...crmParams,
         signal: options.signal,
       });
       deals = dealsResult?.data || [];
+      logger.info('[DASHBOARD CRM RESPONSE]', {
+        endpoint: 'Deals',
+        status: 'success',
+        count: deals.length,
+      });
     } catch (err) {
       dealsError = err.message;
-      logger.warn('Dashboard Service', { event: 'deals_fetch_failed', error: err.message });
+      const statusCode = err.response?.status || err.status || 'unknown';
+      const crmBody = err.response?.data || {};
+      logger.error('[DASHBOARD ERROR]', {
+        endpoint: 'Deals',
+        status: statusCode,
+        message: err.message,
+        crmCode: crmBody.code || null,
+        crmMessage: crmBody.message || null,
+      });
     }
   }
 
-  // 2. Leads data
+  // 2. If deals fetch failed with a CRM API error, return immediately with a failure result.
+  // We never return fake zero-value KPIs when we could not contact the CRM.
+  if (dealsError) {
+    const errorSummary = `The dashboard could not be generated: CRM API returned an error. Please try again or check the CRM connection. (${dealsError})`;
+    logger.error('[DASHBOARD ERROR]', {
+      event: 'dashboard_aborted_due_to_crm_error',
+      message: dealsError,
+    });
+    return {
+      crmError: true,
+      errorMessage: dealsError,
+      dashboard: {
+        title: options.title || 'Sales Performance Dashboard',
+        type: 'sales',
+        theme,
+        dateRange,
+        summary: errorSummary,
+        metrics: null,
+        data: [],
+        records: [],
+        tables: [],
+        widgets: [
+          {
+            id: 'crm-error-widget',
+            type: 'error',
+            title: 'CRM Data Unavailable',
+            status: 'error',
+            message: errorSummary,
+          },
+        ],
+      },
+      data: [],
+      records: [],
+      tables: [],
+    };
+  }
+
+  // 3. Leads data (non-critical — failure does not abort the dashboard)
   if (Array.isArray(options.leads) && options.leads.length > 0) {
     leads = options.leads;
-  } else if (!dealsError) {
+  } else {
+    logger.info('[DASHBOARD CRM REQUEST]', {
+      endpoint: 'Leads',
+      module: 'leads',
+      criteria: `Created_Time >= ${String(dateRange.from).slice(0, 10)} AND Created_Time < ${String(dateRange.to).slice(0, 10)}`,
+    });
     try {
       const leadsResult = await recordsService.getRecords('leads', {
         from: dateRange.from,
@@ -252,9 +333,18 @@ async function buildSalesDashboard(options = {}) {
         signal: options.signal,
       });
       leads = leadsResult?.data || [];
+      logger.info('[DASHBOARD CRM RESPONSE]', {
+        endpoint: 'Leads',
+        status: 'success',
+        count: leads.length,
+      });
     } catch (err) {
       leadsError = err.message;
-      logger.warn('Dashboard Service', { event: 'leads_fetch_failed', error: err.message });
+      logger.warn('[DASHBOARD ERROR]', {
+        endpoint: 'Leads',
+        status: err.response?.status || 'unknown',
+        message: err.message,
+      });
     }
   }
 
@@ -559,9 +649,7 @@ async function buildSalesDashboard(options = {}) {
 
   const summary = deals.length > 0
     ? `Total pipeline value is ${formatCurrency(totalRevenue)} across ${deals.length} deals with a ${formatNumber(winRate)}% win rate (${closedWonDeals.length} won). ${topPerformer} generated the highest revenue.`
-    : dealsError
-      ? 'No dashboard could be generated because the CRM API returned an error.'
-      : 'No matching CRM deals were found for the selected period.';
+    : 'No matching CRM deals were found for the selected period.';
 
   const dashboardObj = {
     title: options.title || 'Sales Performance Dashboard',

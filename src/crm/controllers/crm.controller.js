@@ -325,6 +325,17 @@ async function getDashboardData(req, res, next) {
 
     const fromVal = requestSource?.from || requestSource?.date_from || requestSource?.dateRange?.from || requestSource?.startDate;
     const toVal = requestSource?.to || requestSource?.date_to || requestSource?.dateRange?.to || requestSource?.endDate;
+    const question = requestSource?.request || requestSource?.question || requestSource?.prompt;
+
+    logger.info('[DASHBOARD REQUEST]', {
+      request: question || '(none)',
+      from: fromVal || null,
+      to: toVal || null,
+      date_field: requestSource?.date_field || requestSource?.dateField || null,
+      type: requestSource?.type || null,
+      employee: requestSource?.employee || requestSource?.user_id || null,
+      hasProvidedData: Array.isArray(inputData) && inputData.length > 0,
+    });
 
     const options = {
       title: requestSource?.title,
@@ -343,7 +354,7 @@ async function getDashboardData(req, res, next) {
       groupings: requestSource?.groupings,
       employee: requestSource?.employee || requestSource?.user_id,
       user_id: requestSource?.user_id || requestSource?.employee,
-      question: requestSource?.request || requestSource?.question || requestSource?.prompt,
+      question,
       signal: requestContext.signal,
     };
 
@@ -359,8 +370,27 @@ async function getDashboardData(req, res, next) {
       title: result.dashboard?.title,
       widgetCount: result.dashboard?.widgets?.length,
       recordsCount: result.data?.length || result.dashboard?.data?.length || 0,
+      crmError: result.crmError || false,
       executionTime: formatExecutionTime(startTime),
     });
+
+    // CRM API failure: return success=false with a clear error — never fake zero metrics
+    if (result.crmError) {
+      logger.error('[DASHBOARD ERROR]', {
+        event: 'returning_crm_failure_to_client',
+        message: result.errorMessage,
+      });
+      return res.status(502).json({
+        success: false,
+        error: {
+          code: 'CRM_API_ERROR',
+          message: result.errorMessage || 'The CRM API returned an error. The dashboard could not be generated.',
+        },
+        dashboard: result.dashboard,
+        executionTime: formatExecutionTime(startTime),
+        source: 'Zoho CRM',
+      });
+    }
 
     const rawRecords = result.data || result.records || result.dashboard?.data || [];
     const dataJsonStr = JSON.stringify(rawRecords);

@@ -112,9 +112,60 @@ function selectedNamedPeriods(namedMonths) {
 function detectTimeRange(question) {
   const normalizedQuestion = String(question || '').trim().toLowerCase();
   const now = new Date();
+
+  // --- Specific single-day: "July 26, 2026" / "26 July 2026" / "26th july 2026" ---
+  // Only when the question is NOT a multi-date custom range (from...to / between...and)
+  const isCustomRangeQuery = /\b(?:from|between)\b.+\b(?:to|and)\b/i.test(normalizedQuestion);
+  if (!isCustomRangeQuery) {
+    const specificDayPatterns = [
+      // "Month DD, YYYY" or "Month DD YYYY"
+      new RegExp(`\\b${MONTH_PATTERN}\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})\\b`, 'i'),
+      // "DD Month YYYY" or "DDth Month YYYY"
+      new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+${MONTH_PATTERN}\\s+(\\d{4})\\b`, 'i'),
+    ];
+    for (const pattern of specificDayPatterns) {
+      const m = normalizedQuestion.match(pattern);
+      if (m) {
+        let monthStr, dayStr, yearStr;
+        // First pattern: Month DD YYYY
+        if (MONTHS.indexOf(m[1].toLowerCase()) >= 0) {
+          monthStr = m[1]; dayStr = m[2]; yearStr = m[3];
+        } else {
+          // Second pattern: DD Month YYYY
+          dayStr = m[1]; monthStr = m[2]; yearStr = m[3];
+        }
+        const monthIdx = MONTHS.indexOf(monthStr.toLowerCase());
+        if (monthIdx >= 0) {
+          const year = Number(yearStr);
+          const day = Number(dayStr);
+          if (year > 2000 && day >= 1 && day <= 31) {
+            const start = new Date(Date.UTC(year, monthIdx, day));
+            const end = new Date(Date.UTC(year, monthIdx, day + 1));
+            const startIso = iso(start);
+            const endIso = iso(end);
+            const result = {
+              label: `${monthStr} ${day}, ${year}`,
+              range: 'specific_day',
+              includesCurrentMonth: isCurrentMonth({ start }, now),
+              historicalOnly: !isCurrentMonth({ start }, now),
+              startDate: startIso,
+              endDate: endIso,
+              year,
+              periods: [{ label: `${monthStr} ${day}, ${year}`, startDate: startIso, endDate: endIso, isCurrentMonth: isCurrentMonth({ start }, now) }],
+            };
+            if (DEBUG_ASSISTANT) logger.info('Date Detector', { originalQuestion: question, mode: 'specific_day', result });
+            return result;
+          }
+        }
+      }
+    }
+  }
+
+
   const rollingMonths = normalizedQuestion.match(/last\s+(\d+)\s+months?/i);
   const namedMonths = [...normalizedQuestion.matchAll(new RegExp(`\\b${MONTH_PATTERN}(?:\\s+(\\d{4}))?\\b`, 'gi'))]
     .map((match) => ({ month: match[1].toLowerCase(), year: match[2] ? Number(match[2]) : now.getUTCFullYear() }));
+
   const customRange = parseCustomRange(normalizedQuestion, now);
   const detectedKeywords = [];
   const relativeTerms = ['today', 'yesterday', 'tomorrow', 'this week', 'last week', 'this month', 'last month', 'this quarter', 'last quarter', 'this year', 'last year', 'last 30 days'];

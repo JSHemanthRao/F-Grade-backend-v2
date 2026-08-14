@@ -678,27 +678,45 @@ test('19. June 2026 dashboard works without code changes — verifies no hardcod
   }
 });
 
-test('20. CRM API failure produces a clear error — not fake zeros', async () => {
+test('20. CRM API failure: service returns crmError=true with error widget — not fake zeros', async () => {
   const originalGetRecords = recordsService.getRecords;
   try {
     recordsService.getRecords = async () => {
-      throw new Error('CRM_TOKEN_EXPIRED');
+      const err = new Error('CRM_TOKEN_EXPIRED');
+      err.response = { status: 401, data: { code: 'INVALID_TOKEN', message: 'Authentication required' } };
+      throw err;
     };
 
     const res = await dashboardService.buildSalesDashboard({
       dateRange: { from: '2026-07-01T00:00:00+05:30', to: '2026-08-01T00:00:00+05:30' },
     });
 
-    assert.ok(res.dashboard);
-    // Summary must indicate an error, not silently show zero
+    // Must set crmError flag — not success silently
+    assert.ok(res.crmError, 'crmError must be true on API failure');
+    assert.ok(res.errorMessage, 'errorMessage must be present');
+    assert.ok(res.dashboard, 'dashboard object must still exist');
+
+    // Summary must indicate an error — not zero results
     assert.ok(
-      res.dashboard.summary.includes('error') || res.dashboard.summary.includes('No matching'),
-      `Summary should indicate error or empty state, got: ${res.dashboard.summary}`
+      res.dashboard.summary.includes('could not be generated') || res.dashboard.summary.includes('error'),
+      `Summary should indicate error, got: ${res.dashboard.summary}`
     );
+
+    // metrics must be null — not silently zeroed
+    assert.equal(res.dashboard.metrics, null, 'metrics must be null on CRM failure, not fake zeros');
+
+    // data must be empty array (nothing to show)
+    assert.ok(Array.isArray(res.data) && res.data.length === 0, 'data must be empty on CRM failure');
+
+    // widgets: only the error widget, no fake KPI cards
+    assert.equal(res.dashboard.widgets.length, 1, 'Only one error widget should be present');
+    assert.equal(res.dashboard.widgets[0].id, 'crm-error-widget');
+    assert.equal(res.dashboard.widgets[0].status, 'error');
   } finally {
     recordsService.getRecords = originalGetRecords;
   }
 });
+
 
 test('21. Daily revenue trend is computed correctly from deal dates', async () => {
   const originalGetRecords = recordsService.getRecords;
@@ -845,7 +863,7 @@ test('26. Empty CRM result for a valid query produces proper empty state message
 test('27. Dashboard error distinguishes API failure from zero-results', async () => {
   const originalGetRecords = recordsService.getRecords;
   try {
-    // API failure case
+    // API failure case — must return crmError=true and error widget only
     recordsService.getRecords = async () => {
       throw new Error('INVALID_TOKEN');
     };
@@ -853,21 +871,28 @@ test('27. Dashboard error distinguishes API failure from zero-results', async ()
     const errorResult = await dashboardService.buildSalesDashboard({
       dateRange: { from: '2026-07-01T00:00:00+05:30', to: '2026-08-01T00:00:00+05:30' },
     });
-    assert.ok(errorResult.dashboard.summary.includes('error'), 'API failure summary must mention error');
+    assert.ok(errorResult.crmError, 'API failure must set crmError=true');
+    assert.ok(errorResult.dashboard.summary.includes('could not be generated') || errorResult.dashboard.summary.includes('error'), 'API failure summary must mention error');
+    assert.equal(errorResult.dashboard.metrics, null, 'metrics must be null on failure');
+    assert.equal(errorResult.dashboard.widgets.length, 1, 'Only error widget on failure');
 
-    // Zero-results case (not an error)
+    // Zero-results case (not an error) — must return success with empty-state message
     recordsService.getRecords = async () => ({ data: [], info: { count: 0 } });
 
     const emptyResult = await dashboardService.buildSalesDashboard({
       dateRange: { from: '2026-07-01T00:00:00+05:30', to: '2026-08-01T00:00:00+05:30' },
     });
+    // No crmError on successful zero-results
+    assert.ok(!emptyResult.crmError, 'Zero-results must NOT set crmError');
     assert.ok(emptyResult.dashboard.summary.includes('No matching CRM deals'), 'Zero-results summary must say no matching deals');
+    assert.ok(emptyResult.dashboard.metrics !== null, 'Zero-results metrics should be present (all zeros)');
     // These should be different messages
     assert.notEqual(errorResult.dashboard.summary, emptyResult.dashboard.summary);
   } finally {
     recordsService.getRecords = originalGetRecords;
   }
 });
+
 
 test('28. Exact Live CRM Target: 8 Closed Won deals totaling ₹354,653 calculates accurately and reconciles', async () => {
   const MOCK_JULY_8_DEALS = [
@@ -1063,3 +1088,116 @@ test('31. Date field selection: created vs closed vs modified deals', async () =
   }
 });
 
+
+test('32. HTTP 502 returned for CRM API failure (not 200 with fake zeros)', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async () => {
+      const err = new Error('CRM_TOKEN_EXPIRED');
+      err.response = { status: 401, data: { code: 'INVALID_TOKEN', message: 'Auth failed' } };
+      throw err;
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api/crm', crmRouter);
+
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+
+    try {
+      const res = await fetch(`http://localhost:${port}/api/crm/dashboard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request: 'Create a sales dashboard for July 2026', from: '2026-07-01', to: '2026-08-01' }),
+      });
+
+      const json = await res.json();
+
+      // Must return HTTP 502 (not 200) on CRM failure
+      assert.equal(res.status, 502, `Expected HTTP 502 on CRM failure, got ${res.status}`);
+
+      // success must be false
+      assert.equal(json.success, false, 'success must be false on CRM API failure');
+
+      // Must have error object with code and message
+      assert.ok(json.error, 'error object must be present');
+      assert.equal(json.error.code, 'CRM_API_ERROR');
+      assert.ok(json.error.message, 'error.message must be present');
+
+      // Must NOT have metrics with zero values
+      assert.ok(!json.metrics || json.metrics === null || json.dashboard?.metrics === null,
+        'metrics must be null/absent on CRM failure — not fake zeros');
+    } finally {
+      server.close();
+    }
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('33. Specific single-day date: "July 26, 2026" resolves to single-day window', () => {
+  const { detectTimeRange } = require('../src/crm/services/assistant/date-detector.service');
+
+  const result = detectTimeRange('Give me the Closed Won deal details for July 26, 2026.');
+  assert.ok(result, 'Must detect a date range');
+  assert.ok(result.startDate, 'Must have a startDate');
+  assert.ok(result.endDate, 'Must have an endDate');
+  assert.ok(result.startDate.startsWith('2026-07-26'), `startDate must be 2026-07-26, got: ${result.startDate}`);
+  assert.ok(result.endDate.startsWith('2026-07-27'), `endDate must be 2026-07-27 (exclusive), got: ${result.endDate}`);
+  assert.equal(result.range, 'specific_day');
+});
+
+test('34. Specific single-day date (ordinal format): "26th July 2026" resolves to single-day window', () => {
+  const { detectTimeRange } = require('../src/crm/services/assistant/date-detector.service');
+
+  const result = detectTimeRange('Show me deals closed on 26th July 2026.');
+  assert.ok(result, 'Must detect a date range');
+  assert.ok(result.startDate?.startsWith('2026-07-26'), `startDate must be 2026-07-26, got: ${result.startDate}`);
+  assert.ok(result.endDate?.startsWith('2026-07-27'), `endDate must be 2026-07-27 (exclusive), got: ${result.endDate}`);
+  assert.equal(result.range, 'specific_day');
+});
+
+test('35. Dashboard fromVal and toVal passed directly to service populate dateRange correctly', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  let capturedOpts = null;
+  try {
+    recordsService.getRecords = async (module, opts) => {
+      if (module === 'deals') { capturedOpts = opts; }
+      return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api/crm', crmRouter);
+
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+
+    try {
+      const res = await fetch(`http://localhost:${port}/api/crm/dashboard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          request: 'Create a sales dashboard for July 2026',
+          from: '2026-07-01',
+          to: '2026-08-01',
+        }),
+      });
+
+      const json = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(json.success, true);
+      assert.ok(capturedOpts, 'getRecords must have been called for deals');
+      assert.ok(capturedOpts.from.includes('2026-07-01'), `from must include 2026-07-01, got: ${capturedOpts.from}`);
+      assert.ok(capturedOpts.to.includes('2026-08-01'), `to must include 2026-08-01, got: ${capturedOpts.to}`);
+      assert.equal(capturedOpts.date_field, 'Closing_Date');
+    } finally {
+      server.close();
+    }
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
