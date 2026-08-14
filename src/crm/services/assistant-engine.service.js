@@ -22,9 +22,13 @@ const {
 } = require('./assistant/display-batching.service');
 const logger = require('../../common/logging/logger');
 const activityService = require('./activity.service');
+const dashboardService = require('./dashboard.service');
 const { formatActivityResponse } = require('./assistant/activity-formatter.service');
+const { detectTimeRange } = require('./assistant/date-detector.service');
 
 const ACTIVITY_QUESTION_PATTERN = /(today'?s?\s+(?:crm\s+)?activity|crm\s+activity|what\s+did\s+.*\s+do\s+today|what\s+changes\s+did\s+.*\s+make\s+today|activity\s+for\s+all\s+employees|daily\s+activity|activity\s+report)/i;
+
+const DASHBOARD_QUESTION_PATTERN = /\b(?:create|build|generate|show|view)?\s*(?:a\s+)?(?:sales|management|performance|comparison|employee|analytics)?\s*dashboard\b|\b(?:compare\s+[a-z0-9]+\s+(?:with|and|versus|vs)\s+[a-z0-9]+)\b|\b(?:deal-stage\s+donut|donut\s+chart|sales\s+performance\s+by\s+employee|revenue\s+by\s+employee|change\s+(?:the\s+)?(?:this\s+)?dashboard\s+to\s+(?:dark|light)\s+mode)\b/i;
 
 function extractActivityUser(question) {
   const matchDid = question.match(/what\s+did\s+([A-Za-z\s.'-]+?)\s+do\s+today/i);
@@ -34,6 +38,35 @@ function extractActivityUser(question) {
   const matchFor = question.match(/activity\s+(?:of|for)\s+([A-Za-z\s.'-]+?)(?:\s+today)?$/i);
   if (matchFor && !/all\s+employees|all/i.test(matchFor[1])) return matchFor[1].trim();
   return null;
+}
+
+function extractDashboardParams(question) {
+  const isDarkMode = /\bdark\s*(?:mode|theme)?\b/i.test(question);
+  const isLightMode = /\blight\s*(?:mode|theme)?\b/i.test(question);
+  const theme = isDarkMode ? { mode: 'dark' } : isLightMode ? { mode: 'light' } : undefined;
+
+  let employee = null;
+  const matchExplicit = question.match(/(?:show\s+only|filter\s+by|employee\s+is|rep\s+is)\s+([A-Za-z]+)/i);
+  if (matchExplicit && !/dashboard|month|week|year|sales|july|june|august|employee/i.test(matchExplicit[1])) {
+    employee = matchExplicit[1].trim();
+  } else {
+    const matchBy = question.match(/(?:for|by)\s+([A-Za-z]+)(?:\s+only)?$/i);
+    if (matchBy && !/dashboard|month|week|year|sales|july|june|august|employee/i.test(matchBy[1])) {
+      employee = matchBy[1].trim();
+    }
+  }
+
+  let type = 'sales';
+  if (/activity/i.test(question)) type = 'activity';
+  else if (/compare|versus|vs/i.test(question)) type = 'comparison';
+  else if (/management/i.test(question)) type = 'sales';
+
+  const timeRange = detectTimeRange(question);
+  const dateRange = timeRange?.startDate && timeRange?.endDate
+    ? { from: timeRange.startDate, to: timeRange.endDate }
+    : undefined;
+
+  return { theme, employee, type, dateRange };
 }
 
 let lastDisplayContext = null;
@@ -107,6 +140,40 @@ async function handleAssistantRequest(payload = {}) {
       return {
         success: false,
         summary: 'No activity could be retrieved because the CRM activity API returned an error.',
+        error: error.message,
+      };
+    }
+  }
+
+  if (DASHBOARD_QUESTION_PATTERN.test(question)) {
+    const params = extractDashboardParams(question);
+    try {
+      const dashboardResult = await dashboardService.getDashboard({
+        question,
+        type: params.type,
+        theme: params.theme,
+        dateRange: params.dateRange,
+        employee: params.employee,
+        signal: payload.signal,
+      });
+
+      const dashboardObj = dashboardResult.dashboard;
+      const summary = dashboardObj.summary
+        ? `Here’s the ${dashboardObj.title}. ${dashboardObj.summary}`
+        : `Here’s the ${dashboardObj.title}.`;
+
+      return {
+        success: true,
+        summary,
+        dashboard: dashboardObj,
+        data: dashboardObj.widgets,
+        tables: [],
+      };
+    } catch (error) {
+      logger.error('Assistant Engine Dashboard', { error: error.message });
+      return {
+        success: false,
+        summary: 'No dashboard could be generated because the CRM API returned an error.',
         error: error.message,
       };
     }

@@ -542,6 +542,223 @@
           }
         }
       }
+    },
+    "/api/crm/dashboard": {
+      "post": {
+        "operationId": "generateCRMDashboard",
+        "tags": [
+          "CRM"
+        ],
+        "summary": "Generate an enterprise CRM analytics dashboard",
+        "description": "Use this operation when the user asks for a dashboard (e.g. sales dashboard, management dashboard, activity dashboard, period comparison). Returns structured Dashboard JSON with KPI metrics, stage distributions, employee performance, and trends.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": false,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "description": "Dashboard title, e.g. July Sales Dashboard"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "sales",
+                    "management",
+                    "activity",
+                    "comparison"
+                  ],
+                  "description": "Dashboard type"
+                },
+                "date_from": {
+                  "type": "string",
+                  "description": "Start date or ISO datetime"
+                },
+                "date_to": {
+                  "type": "string",
+                  "description": "End date or ISO datetime"
+                },
+                "employee": {
+                  "type": "string",
+                  "description": "Employee name or ID to filter by"
+                },
+                "theme": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "light",
+                        "dark"
+                      ]
+                    },
+                    "primaryColor": {
+                      "type": "string"
+                    },
+                    "accentColor": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful CRM dashboard response",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "dashboard": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "widgets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or invalid OAuth token",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error or Zoho API error",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "getCRMDashboard",
+        "tags": [
+          "CRM"
+        ],
+        "summary": "Get enterprise CRM analytics dashboard",
+        "description": "Get structured CRM dashboard via query parameters.",
+        "parameters": [
+          {
+            "name": "title",
+            "in": "query",
+            "type": "string",
+            "required": false,
+            "description": "Dashboard title"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "type": "string",
+            "required": false,
+            "enum": [
+              "sales",
+              "management",
+              "activity",
+              "comparison"
+            ],
+            "description": "Dashboard type"
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "type": "string",
+            "required": false,
+            "description": "Start date"
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "type": "string",
+            "required": false,
+            "description": "End date"
+          },
+          {
+            "name": "employee",
+            "in": "query",
+            "type": "string",
+            "required": false,
+            "description": "Employee name or ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful CRM dashboard response",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "dashboard": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Authentication required or invalid OAuth token"
+          },
+          "500": {
+            "description": "Server error or Zoho API error"
+          }
+        }
+      }
     }
   }
 }

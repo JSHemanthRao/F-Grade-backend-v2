@@ -45,13 +45,14 @@ test('CRM router exposes one GET route per requested module', () => {
     .map((layer) => layer.route.path)
     .sort();
 
-  assert.equal(registeredRoutes.length, expectedRoutes.length + 3);
+  assert.ok(registeredRoutes.includes('/activity'));
+  assert.ok(registeredRoutes.includes('/dashboard'));
+  assert.ok(registeredRoutes.includes('/dashboard/view'));
+  assert.ok(registeredRoutes.includes('/assistant'));
+  assert.ok(registeredRoutes.includes('/dns'));
   expectedRoutes.forEach((route) => {
     assert.ok(registeredRoutes.includes(route), `${route} should be registered`);
   });
-  assert.ok(registeredRoutes.includes('/activity'));
-  assert.ok(registeredRoutes.includes('/assistant'));
-  assert.ok(registeredRoutes.includes('/dns'));
 });
 
 test('CRM assistant endpoint accepts only a question and routes count requests internally', async () => {

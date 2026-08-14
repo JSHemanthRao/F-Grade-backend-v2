@@ -1,16 +1,32 @@
 const express = require('express');
-const { getCRMActivity, getModuleCount, getModuleQuery, handleAssistantRequest } = require('../controllers/crm.controller');
+const {
+  getCRMActivity,
+  getDashboardData,
+  getModuleCount,
+  getModuleQuery,
+  handleAssistantRequest,
+  renderDashboardView,
+} = require('../controllers/crm.controller');
 const { handleDnsRequest } = require('../controllers/dns.controller');
 const { getSupportedModuleKeys } = require('../services/module-definition.service');
-const { validateCRMActivityRequest, validateCRMCountRequest, validateCRMQueryRequest } = require('../validators/crm.validator');
+const {
+  validateCRMActivityRequest,
+  validateCRMCountRequest,
+  validateCRMDashboardRequest,
+  validateCRMQueryRequest,
+} = require('../validators/crm.validator');
 const { requestLogger } = require('../middleware/request-logger');
 const { crmErrorHandler } = require('../middleware/error-handler');
 
 const router = express.Router();
 router.use(requestLogger);
 
-// Activity endpoint
+// Activity & Dashboard endpoints
 router.get('/activity', validateCRMActivityRequest, getCRMActivity);
+router.post('/dashboard', validateCRMDashboardRequest, getDashboardData);
+router.get('/dashboard/view', validateCRMDashboardRequest, renderDashboardView);
+router.get('/dashboard', validateCRMDashboardRequest, getDashboardData);
+
 
 const supportedModules = getSupportedModuleKeys();
 

@@ -1,9 +1,10 @@
 const { DEBUG_ASSISTANT } = require('../../../common/config/env');
 const logger = require('../../../common/logging/logger');
 
-const INTENT_ORDER = ['ACTIVITY', 'CONVERSION', 'COUNT', 'LIST', 'SEARCH', 'FILTER', 'COMPARE', 'SUMMARY', 'ANALYTICS', 'AGGREGATION', 'EXPLAIN'];
+const INTENT_ORDER = ['DASHBOARD', 'ACTIVITY', 'CONVERSION', 'COUNT', 'LIST', 'SEARCH', 'FILTER', 'COMPARE', 'SUMMARY', 'ANALYTICS', 'AGGREGATION', 'EXPLAIN'];
 
 const INTENT_PATTERNS = {
+  DASHBOARD: [/(dashboard|sales\s+dashboard|management\s+dashboard|performance\s+dashboard|build\s+(?:a\s+)?dashboard|create\s+(?:a\s+)?dashboard|show\s+dashboard|analytics\s+dashboard|deal-stage\s+donut|donut\s+chart|revenue\s+by\s+employee|sales\s+performance\s+by\s+employee)/i],
   ACTIVITY: [/(today'?s?\s+(?:crm\s+)?activity|crm\s+activity|what\s+did\s+.*\s+do\s+today|what\s+changes\s+did\s+.*\s+make\s+today|activity\s+for\s+all\s+employees|daily\s+activity|activity\s+report)/i],
   CONVERSION: [/(converted|conversion|converted\s+into|converted\s+to|lead\s+conversion|qualified|became\s+a\s+deal)/i],
   COUNT: [/(how many|number of|count|total)/i],

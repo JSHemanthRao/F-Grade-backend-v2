@@ -308,10 +308,97 @@ async function getCRMActivity(req, res, next) {
   }
 }
 
+async function getDashboardData(req, res, next) {
+  try {
+    const startTime = process.hrtime.bigint();
+    const requestSource = req.method === 'POST' ? req.body : req.query;
+    const requestContext = createRequestAbortSignal(req, res);
+    const dashboardService = require('../services/dashboard.service');
+
+    const options = {
+      title: requestSource?.title,
+      type: requestSource?.type,
+      theme: requestSource?.theme,
+      dateRange: requestSource?.dateRange || {
+        from: requestSource?.from || requestSource?.date_from,
+        to: requestSource?.to || requestSource?.date_to,
+      },
+      modules: requestSource?.modules,
+      metrics: requestSource?.metrics,
+      groupings: requestSource?.groupings,
+      employee: requestSource?.employee || requestSource?.user_id,
+      user_id: requestSource?.user_id || requestSource?.employee,
+      question: requestSource?.question || requestSource?.prompt,
+      signal: requestContext.signal,
+    };
+
+    let result;
+    try {
+      result = await dashboardService.getDashboard(options);
+    } finally {
+      requestContext.cleanup();
+    }
+
+    logger.info('CRM Controller', {
+      event: 'dashboard_response_constructed',
+      title: result.dashboard?.title,
+      widgetCount: result.dashboard?.widgets?.length,
+      executionTime: formatExecutionTime(startTime),
+    });
+
+    return res.json({
+      success: true,
+      ...result,
+      executionTime: formatExecutionTime(startTime),
+      source: 'Zoho CRM',
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function renderDashboardView(req, res, next) {
+  try {
+    const requestSource = req.method === 'POST' ? req.body : req.query;
+    const requestContext = createRequestAbortSignal(req, res);
+    const dashboardService = require('../services/dashboard.service');
+    const { generateDashboardHtml } = require('../dashboard/dashboard-renderer');
+
+    const options = {
+      title: requestSource?.title,
+      type: requestSource?.type,
+      theme: requestSource?.theme,
+      dateRange: requestSource?.dateRange || {
+        from: requestSource?.from || requestSource?.date_from,
+        to: requestSource?.to || requestSource?.date_to,
+      },
+      employee: requestSource?.employee || requestSource?.user_id,
+      question: requestSource?.question || requestSource?.prompt,
+      signal: requestContext.signal,
+    };
+
+    let result;
+    try {
+      result = await dashboardService.getDashboard(options);
+    } finally {
+      requestContext.cleanup();
+    }
+
+    const html = generateDashboardHtml(result);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getCRMActivity,
+  getDashboardData,
   getModuleCount,
   getModuleQuery,
   getModuleRecords: getModuleQuery,
   handleAssistantRequest,
+  renderDashboardView,
 };
+

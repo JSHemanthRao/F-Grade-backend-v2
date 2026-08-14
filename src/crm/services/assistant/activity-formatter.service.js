@@ -27,6 +27,7 @@ function formatActivityResponse(activityResult, { question = '' } = {}) {
       error: activityResult?.error || 'CRM_ACTIVITY_API_ERROR',
       data: [],
       tables: [],
+      dashboard: null,
     };
   }
 
@@ -38,18 +39,18 @@ function formatActivityResponse(activityResult, { question = '' } = {}) {
       summary: 'No CRM activity was found for today.',
       data: [],
       tables: [],
+      dashboard: null,
     };
   }
 
   const users = [...new Set(data.map((item) => item.user_name).filter(Boolean))];
   const isSingleUser = users.length === 1;
 
-  // Intro phrase
+  // SECTION 1: Detailed activity table
   const intro = isSingleUser
     ? `${users[0]} completed the following CRM activities today.`
     : 'The following CRM activities were completed today.';
 
-  // Build detail table rows
   const detailHeaders = ['Employee', 'Activity', 'Module', 'Record', 'Action', 'Time'];
   const detailRows = data.map((item) => {
     const activityText = `${capitalize(item.activity_type || item.module)} ${item.action || 'created'}`;
@@ -66,7 +67,7 @@ function formatActivityResponse(activityResult, { question = '' } = {}) {
     ];
   });
 
-  // Calculate user-level summary stats
+  // Calculate stats for Summary and Dashboard
   const userStatsMap = new Map();
   users.forEach((userName) => {
     userStatsMap.set(userName, {
@@ -77,6 +78,9 @@ function formatActivityResponse(activityResult, { question = '' } = {}) {
     });
   });
 
+  const modMap = {};
+  const actMap = {};
+
   data.forEach((item) => {
     const user = item.user_name || 'Unknown';
     if (!userStatsMap.has(user)) {
@@ -84,6 +88,11 @@ function formatActivityResponse(activityResult, { question = '' } = {}) {
     }
     const stats = userStatsMap.get(user);
     const type = String(item.activity_type || '').toLowerCase();
+    const action = String(item.action || '').toLowerCase();
+    const mod = item.module || 'Deals';
+
+    modMap[mod] = (modMap[mod] || 0) + 1;
+    actMap[action] = (actMap[action] || 0) + 1;
 
     if (type === 'deal') {
       stats.dealsCreated += 1;
@@ -96,7 +105,6 @@ function formatActivityResponse(activityResult, { question = '' } = {}) {
     }
   });
 
-  // Construct natural language summary sentences
   const summarySentences = [];
   userStatsMap.forEach((stats, user) => {
     const parts = [];
@@ -110,17 +118,19 @@ function formatActivityResponse(activityResult, { question = '' } = {}) {
     }
   });
 
-  // Check if user specifically requested a summary table
-  const wantsSummaryTable = /summary|overview|breakdown|aggregate/i.test(question);
+  const totalDeals = Array.from(userStatsMap.values()).reduce((sum, s) => sum + s.dealsCreated, 0);
+  const totalMeetings = Array.from(userStatsMap.values()).reduce((sum, s) => sum + s.meetingsCreated, 0);
+  const totalNotes = Array.from(userStatsMap.values()).reduce((sum, s) => sum + s.notesAdded, 0);
+  const totalOther = Array.from(userStatsMap.values()).reduce((sum, s) => sum + s.otherChanges, 0);
 
-  // Build markdown representation
+  // Markdown representation
   const markdownLines = [];
-  markdownLines.push("Today's CRM Activity");
+  markdownLines.push("### Today's CRM Activity");
   markdownLines.push('');
   markdownLines.push(intro);
   markdownLines.push('');
 
-  // Primary Detail Table
+  // Section 1: Detailed Table
   markdownLines.push(`| ${detailHeaders.join(' | ')} |`);
   markdownLines.push(`| ${detailHeaders.map(() => '---').join(' | ')} |`);
   detailRows.forEach((row) => {
@@ -132,10 +142,20 @@ function formatActivityResponse(activityResult, { question = '' } = {}) {
     markdownLines.push(summarySentences.join('\n'));
   }
 
-  // Summary Table if requested
+  // Section 2: Aggregated Activity Dashboard Summary
+  markdownLines.push('');
+  markdownLines.push('### Activity Dashboard');
+  markdownLines.push('');
+  markdownLines.push(`- **Total Activities Logged**: ${data.length}`);
+  markdownLines.push(`- **Deals Actioned**: ${totalDeals}`);
+  markdownLines.push(`- **Meetings Logged**: ${totalMeetings}`);
+  markdownLines.push(`- **Notes Added**: ${totalNotes}`);
+  if (totalOther > 0) {
+    markdownLines.push(`- **Other Changes**: ${totalOther}`);
+  }
+
   const summaryHeaders = ['Employee', 'Deals Created', 'Meetings Created', 'Notes Added', 'Other Changes'];
   const summaryRows = [];
-
   userStatsMap.forEach((stats, user) => {
     summaryRows.push([
       user,
@@ -146,14 +166,73 @@ function formatActivityResponse(activityResult, { question = '' } = {}) {
     ]);
   });
 
-  if (wantsSummaryTable && summaryRows.length > 0) {
-    markdownLines.push('');
-    markdownLines.push(`| ${summaryHeaders.join(' | ')} |`);
-    markdownLines.push('|---|---:|---:|---:|---:|');
-    summaryRows.forEach((row) => {
-      markdownLines.push(`| ${row.join(' | ')} |`);
-    });
-  }
+  markdownLines.push('');
+  markdownLines.push(`| ${summaryHeaders.join(' | ')} |`);
+  markdownLines.push('|---|---:|---:|---:|---:|');
+  summaryRows.forEach((row) => {
+    markdownLines.push(`| ${row.join(' | ')} |`);
+  });
+
+  // Section 2 Dashboard Object
+  const dashboard = {
+    title: isSingleUser ? `${users[0]}'s Activity Dashboard` : "Today's CRM Activity Dashboard",
+    type: 'activity',
+    theme: { mode: 'light', primaryColor: '#2563EB', accentColor: '#14B8A6' },
+    dateRange: { from: activityResult.date, to: activityResult.date },
+    widgets: [
+      {
+        id: 'total-activities-kpi',
+        type: 'kpi',
+        title: 'Total Activities',
+        value: data.length,
+        formattedValue: String(data.length),
+        subtitle: "Today's actions",
+        icon: 'activity',
+      },
+      {
+        id: 'deals-kpi',
+        type: 'kpi',
+        title: 'Deals Created/Updated',
+        value: totalDeals,
+        formattedValue: String(totalDeals),
+        subtitle: 'Deal actions',
+        icon: 'dollar',
+      },
+      {
+        id: 'meetings-kpi',
+        type: 'kpi',
+        title: 'Meetings Logged',
+        value: totalMeetings,
+        formattedValue: String(totalMeetings),
+        subtitle: 'Client meetings',
+        icon: 'calendar',
+      },
+      {
+        id: 'notes-kpi',
+        type: 'kpi',
+        title: 'Notes Added',
+        value: totalNotes,
+        formattedValue: String(totalNotes),
+        subtitle: 'Notes on records',
+        icon: 'file-text',
+      },
+      {
+        id: 'activities-by-employee-bar',
+        type: 'bar',
+        title: 'Activities by Employee',
+        data: summaryRows.map(([emp, d, m, n, o]) => ({
+          label: emp,
+          value: Number(d) + Number(m) + Number(n) + Number(o),
+        })),
+      },
+      {
+        id: 'activities-by-module-donut',
+        type: 'donut',
+        title: 'Activities by Module',
+        data: Object.keys(modMap).map((k) => ({ label: k, value: modMap[k] })),
+      },
+    ],
+  };
 
   const formattedText = markdownLines.join('\n');
 
@@ -163,8 +242,9 @@ function formatActivityResponse(activityResult, { question = '' } = {}) {
     data,
     tables: [
       { title: "Today's CRM Activity", headers: detailHeaders, rows: detailRows },
-      ...(wantsSummaryTable ? [{ title: 'Activity Summary', headers: summaryHeaders, rows: summaryRows }] : []),
+      { title: 'Activity Summary', headers: summaryHeaders, rows: summaryRows },
     ],
+    dashboard,
   };
 }
 

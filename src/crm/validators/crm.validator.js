@@ -192,11 +192,34 @@ function validateCRMActivityRequest(req, res, next) {
   }
 }
 
+function validateCRMDashboardRequest(req, res, next) {
+  try {
+    const requestSource = req.method === 'POST' ? req.body : req.query;
+
+    const from = requestSource?.from || requestSource?.dateRange?.from || requestSource?.date_from;
+    const to = requestSource?.to || requestSource?.dateRange?.to || requestSource?.date_to;
+
+    if (from && Number.isNaN(new Date(from).valueOf())) {
+      throw new CRMValidationError('from must be a valid date or ISO datetime string.');
+    }
+
+    if (to && Number.isNaN(new Date(to).valueOf())) {
+      throw new CRMValidationError('to must be a valid date or ISO datetime string.');
+    }
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   CRMValidationError,
   resolveRequestedModule,
   validateCRMActivityRequest,
   validateCRMCountRequest,
+  validateCRMDashboardRequest,
   validateCRMQueryRequest,
 };
+
 
