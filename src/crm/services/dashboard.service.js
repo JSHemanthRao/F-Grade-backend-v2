@@ -33,7 +33,7 @@ function resolveTheme(themeInput = {}) {
   };
 }
 
-function resolveDateRange(dateRangeInput = {}, question = '') {
+function resolveDateRange(dateRangeInput = {}, text = '') {
   const from = dateRangeInput.from || dateRangeInput.startDate || dateRangeInput.start;
   const to = dateRangeInput.to || dateRangeInput.endDate || dateRangeInput.end;
 
@@ -41,9 +41,9 @@ function resolveDateRange(dateRangeInput = {}, question = '') {
     return { from, to };
   }
 
-  // Check if dates can be inferred from question
-  if (question) {
-    const timeRange = detectTimeRange(question);
+  // Check if dates can be inferred from text/question/title/prompt
+  if (text) {
+    const timeRange = detectTimeRange(text);
     if (timeRange?.startDate && timeRange?.endDate) {
       return { from: timeRange.startDate, to: timeRange.endDate };
     }
@@ -68,6 +68,11 @@ function formatPercentage(num) {
   return `${sign}${Number(num).toFixed(1)}%`;
 }
 
+function isClosedWonStage(stage) {
+  const normalized = String(stage || '').trim().toLowerCase();
+  return normalized === 'closed won' || normalized === 'closed-won' || normalized === 'won';
+}
+
 function computeStageDistribution(deals = []) {
   const counts = {};
   const values = {};
@@ -84,46 +89,43 @@ function computeStageDistribution(deals = []) {
     count: counts[stage],
     value: counts[stage],
     totalAmount: values[stage],
-    formattedValue: formatCurrency(values[stage]),
+    formattedValue: `${counts[stage]} (${formatCurrency(values[stage])})`,
   }));
 }
 
-function computeEmployeeRevenue(deals = []) {
+function computeEmployeeRevenue(closedWonDeals = []) {
   const userRevenue = {};
-  const userDeals = {};
   const userWon = {};
 
-  deals.forEach((deal) => {
-    const ownerName = deal.Owner?.name || deal.Owner || deal.Created_By?.name || 'Unassigned';
+  closedWonDeals.forEach((deal) => {
+    const ownerName = deal.Owner?.name || (typeof deal.Owner === 'string' ? deal.Owner : null) || deal.Created_By?.name || 'Unassigned';
     const amount = numericValue(deal.Amount || deal.amount || 0) || 0;
-    const isWon = /closed\s*won|\bwon\b/i.test(deal.Stage || deal.stage || '');
 
     userRevenue[ownerName] = (userRevenue[ownerName] || 0) + amount;
-    userDeals[ownerName] = (userDeals[ownerName] || 0) + 1;
-    if (isWon) {
-      userWon[ownerName] = (userWon[ownerName] || 0) + 1;
-    }
+    userWon[ownerName] = (userWon[ownerName] || 0) + 1;
   });
 
   return Object.keys(userRevenue)
     .map((employee) => ({
       employee,
       name: employee,
+      label: employee,
       revenue: userRevenue[employee],
+      value: userRevenue[employee],
       formattedRevenue: formatCurrency(userRevenue[employee]),
       formattedValue: formatCurrency(userRevenue[employee]),
-      dealCount: userDeals[employee],
       wonCount: userWon[employee] || 0,
-      subtitle: `${userDeals[employee]} deals (${userWon[employee] || 0} won)`,
+      dealCount: userWon[employee] || 0,
+      subtitle: `${userWon[employee] || 0} won deals`,
     }))
     .sort((a, b) => b.revenue - a.revenue);
 }
 
-function computeRevenueTrend(deals = []) {
+function computeRevenueTrend(closedWonDeals = []) {
   const dailyRevenue = {};
 
-  deals.forEach((deal) => {
-    const rawDate = deal.Closing_Date || deal.Created_Time || deal.Modified_Time;
+  closedWonDeals.forEach((deal) => {
+    const rawDate = deal.Closing_Date || deal.closing_date || deal.Created_Time;
     if (!rawDate) return;
     const dateKey = String(rawDate).slice(0, 10);
     const amount = numericValue(deal.Amount || deal.amount || 0) || 0;
@@ -198,7 +200,7 @@ function computeDealFunnel(deals = []) {
 // ---------------------------------------------------------------------------
 async function buildSalesDashboard(options = {}) {
   const theme = resolveTheme(options.theme);
-  const dateRange = resolveDateRange(options.dateRange, options.question);
+  const dateRange = resolveDateRange(options.dateRange, options.question || options.title || options.prompt);
 
   let deals = [];
   let leads = [];
@@ -216,7 +218,7 @@ async function buildSalesDashboard(options = {}) {
         to: dateRange.to,
         date_field: options.date_field || 'Closing_Date',
         retrieval_mode: 'all',
-        limit: options.limit || 200,
+        limit: options.limit || 2000,
         signal: options.signal,
       });
       deals = dealsResult?.data || [];
@@ -236,7 +238,7 @@ async function buildSalesDashboard(options = {}) {
         to: dateRange.to,
         date_field: 'Created_Time',
         retrieval_mode: 'all',
-        limit: options.limit || 200,
+        limit: options.limit || 2000,
         signal: options.signal,
       });
       leads = leadsResult?.data || [];
@@ -249,14 +251,29 @@ async function buildSalesDashboard(options = {}) {
   // Normalize deal fields for downstream analytics and Code Executor compatibility
   deals = deals.map((d) => ({
     ...d,
+    id: d.id || d.ID,
     Deal_Name: d.Deal_Name || d.Deal || d.deal_name || 'Untitled Deal',
-    Account_Name: d.Account_Name || d.Account || { name: 'Direct Customer' },
+    Account_Name: typeof d.Account_Name === 'object' ? d.Account_Name : (d.Account_Name ? { name: d.Account_Name } : { name: 'Direct Customer' }),
     Owner: typeof d.Owner === 'object' ? d.Owner : { name: d.Owner || d.Owner_Name || 'Unassigned' },
     Stage: d.Stage || d.stage || 'Open',
     Amount: numericValue(d.Amount || d.amount || 0) || 0,
     Closing_Date: d.Closing_Date || d.closing_date || (d.Created_Time ? String(d.Created_Time).slice(0, 10) : dateRange.from.slice(0, 10)),
     Created_Time: d.Created_Time || d.created_time || dateRange.from,
   }));
+
+  // Strict date filtering on deals: Closing_Date must be within half-open dateRange [start, end)
+  const startIso = String(dateRange.from).slice(0, 10);
+  const endIso = String(dateRange.to).slice(0, 10);
+  const targetDateField = options.date_field || 'Closing_Date';
+
+  const hasExplicitDateContext = Boolean(options.dateRange?.from || detectTimeRange(options.question || options.title || options.prompt));
+  if (hasExplicitDateContext || !providedDeals) {
+    deals = deals.filter((d) => {
+      const dealDate = String(d[targetDateField] || d.Closing_Date || d.closing_date || d.Created_Time || '').slice(0, 10);
+      if (!dealDate) return false;
+      return dealDate >= startIso && dealDate < endIso;
+    });
+  }
 
   // Filter by employee if requested
   if (options.employee || options.user_id) {
@@ -273,22 +290,53 @@ async function buildSalesDashboard(options = {}) {
   }
 
   const totalRevenue = deals.reduce((sum, d) => sum + (numericValue(d.Amount || d.amount || 0) || 0), 0);
-  const closedWonDeals = deals.filter((d) => /closed\s*won|\bwon\b/i.test(d.Stage || d.stage || ''));
+  const closedWonDeals = deals.filter((d) => isClosedWonStage(d.Stage || d.stage));
   const closedWonRevenue = closedWonDeals.reduce((sum, d) => sum + (numericValue(d.Amount || d.amount || 0) || 0), 0);
   const winRate = deals.length > 0 ? (closedWonDeals.length / deals.length) * 100 : 0;
   const avgDealSize = deals.length > 0 ? totalRevenue / deals.length : 0;
 
+  // Deterministic validation logging as required
+  logger.info('[SALES DASHBOARD VALIDATION]', {
+    date_from: startIso,
+    date_to: endIso,
+    stage_filter: 'Closed Won',
+    matching_records: closedWonDeals.length,
+    total_amount: closedWonRevenue,
+    total_deals: deals.length,
+    total_revenue: totalRevenue,
+  });
+
   const stageDistribution = computeStageDistribution(deals);
-  const employeeRevenue = computeEmployeeRevenue(deals);
-  const revenueTrend = computeRevenueTrend(deals);
+  const employeeRevenue = computeEmployeeRevenue(closedWonDeals);
+  const revenueTrend = computeRevenueTrend(closedWonDeals);
   const dealFunnel = computeDealFunnel(deals);
   const leadSources = computeLeadSourceDistribution(leads);
   const topPerformer = employeeRevenue[0]?.employee || 'Team';
+
+  // Reconciliation checks
+  const reconciledEmpRevenue = employeeRevenue.reduce((sum, e) => sum + (e.revenue || 0), 0);
+  const stageWonObj = stageDistribution.find((s) => isClosedWonStage(s.label));
+  const reconciledStageWonCount = stageWonObj ? stageWonObj.count : 0;
+
+  if (reconciledEmpRevenue !== closedWonRevenue) {
+    logger.warn('Dashboard Reconciliation Mismatch: Employee Revenue Sum != Closed Won Revenue', {
+      reconciledEmpRevenue,
+      closedWonRevenue,
+    });
+  }
+
+  if (reconciledStageWonCount !== closedWonDeals.length) {
+    logger.warn('Dashboard Reconciliation Mismatch: Stage Closed Won Count != Closed Won Deals Count', {
+      reconciledStageWonCount,
+      closedWonCount: closedWonDeals.length,
+    });
+  }
 
   const metrics = {
     totalRevenue,
     formattedTotalRevenue: formatCurrency(totalRevenue),
     dealCount: deals.length,
+    totalDeals: deals.length,
     closedWonCount: closedWonDeals.length,
     closedWonRevenue,
     formattedClosedWonRevenue: formatCurrency(closedWonRevenue),
@@ -306,7 +354,46 @@ async function buildSalesDashboard(options = {}) {
 
   const widgets = [];
 
-  // 1. Revenue KPI
+  // 1. Total Deals KPI
+  widgets.push({
+    id: 'total-deals-kpi',
+    type: 'kpi',
+    title: 'Total Deals',
+    value: deals.length,
+    formattedValue: String(deals.length),
+    subtitle: `Opportunities in pipeline`,
+    icon: '📊',
+    accent: theme.primaryColor,
+    status: dealsError ? 'error' : 'success',
+  });
+
+  // 2. Closed Won Deals KPI
+  widgets.push({
+    id: 'closed-won-deals-kpi',
+    type: 'kpi',
+    title: 'Closed-Won Deals',
+    value: closedWonDeals.length,
+    formattedValue: `${closedWonDeals.length} Deals`,
+    subtitle: `Successfully closed deals`,
+    icon: '🏆',
+    accent: '#10B981',
+    status: dealsError ? 'error' : 'success',
+  });
+
+  // 3. Closed Won Revenue KPI
+  widgets.push({
+    id: 'closed-won-kpi',
+    type: 'kpi',
+    title: 'Closed-Won Revenue',
+    value: closedWonRevenue,
+    formattedValue: formatCurrency(closedWonRevenue),
+    subtitle: `${closedWonDeals.length} won opportunities`,
+    icon: '💰',
+    accent: '#10B981',
+    status: dealsError ? 'error' : 'success',
+  });
+
+  // 4. Total Revenue KPI
   widgets.push({
     id: 'total-revenue-kpi',
     type: 'kpi',
@@ -317,26 +404,13 @@ async function buildSalesDashboard(options = {}) {
     comparisonText: '+8.4% vs last period',
     trend: 'up',
     subtitle: `${deals.length} total deals`,
-    icon: '💰',
+    icon: '💼',
     accent: theme.primaryColor,
     status: dealsError ? 'error' : 'success',
     error: dealsError ? 'Could not retrieve Deals from CRM' : null,
   });
 
-  // 2. Closed Won Revenue KPI
-  widgets.push({
-    id: 'closed-won-kpi',
-    type: 'kpi',
-    title: 'Closed Won Revenue',
-    value: closedWonRevenue,
-    formattedValue: formatCurrency(closedWonRevenue),
-    subtitle: `${closedWonDeals.length} won opportunities`,
-    icon: '🏆',
-    accent: '#10B981',
-    status: dealsError ? 'error' : 'success',
-  });
-
-  // 3. Win Rate KPI
+  // 5. Win Rate KPI
   widgets.push({
     id: 'win-rate-kpi',
     type: 'kpi',
@@ -349,7 +423,7 @@ async function buildSalesDashboard(options = {}) {
     status: dealsError ? 'error' : 'success',
   });
 
-  // 4. Leads Count KPI
+  // 6. Leads Count KPI
   widgets.push({
     id: 'lead-count-kpi',
     type: 'kpi',

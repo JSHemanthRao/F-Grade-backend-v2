@@ -753,7 +753,7 @@ test('22. Deal stage distribution is accurate for known stages', async () => {
   }
 });
 
-test('23. Revenue by employee aggregation is correct', async () => {
+test('23. Revenue by employee aggregation is correct and reconciles with closed-won revenue', async () => {
   const originalGetRecords = recordsService.getRecords;
   try {
     recordsService.getRecords = async (module) => {
@@ -767,19 +767,19 @@ test('23. Revenue by employee aggregation is correct', async () => {
 
     const empBar = res.dashboard.widgets.find((w) => w.id === 'revenue-by-employee-bar');
     assert.ok(empBar);
-    assert.ok(empBar.data.length >= 3, 'Must show at least 3 employees: Sanjay, Ravi, Priya');
-    // Sanjay: 500000 + 250000 = 750000
+    assert.ok(empBar.data.length >= 2, 'Must show reps with closed won revenue: Sanjay and Ravi');
+    // Sanjay won: 500000 (Cloud Migration)
     const sanjay = empBar.data.find((d) => d.label === 'Sanjay');
     assert.ok(sanjay);
-    assert.equal(sanjay.value, 750000);
-    // Ravi: 750000
+    assert.equal(sanjay.value, 500000);
+    // Ravi won: 750000 (ERP Implementation)
     const ravi = empBar.data.find((d) => d.label === 'Ravi');
     assert.ok(ravi);
     assert.equal(ravi.value, 750000);
-    // Priya: 150000
-    const priya = empBar.data.find((d) => d.label === 'Priya');
-    assert.ok(priya);
-    assert.equal(priya.value, 150000);
+    // Total employee revenue must match closed won revenue (1250000)
+    const totalEmpRev = empBar.data.reduce((sum, d) => sum + d.value, 0);
+    assert.equal(totalEmpRev, 1250000);
+    assert.equal(totalEmpRev, res.metrics.closedWonRevenue);
   } finally {
     recordsService.getRecords = originalGetRecords;
   }
@@ -792,6 +792,7 @@ test('24. INR formatting edge cases', () => {
   assert.equal(formatCurrency(100000), '₹1,00,000');
   assert.equal(formatCurrency(9999999), '₹99,99,999');
   assert.equal(formatCurrency(100000000), '₹10,00,00,000');
+  assert.equal(formatCurrency(354653), '₹3,54,653');
 });
 
 test('25. Pre-filtered connector data passed as records produces correct dashboard without re-fetching', async () => {
@@ -812,6 +813,7 @@ test('25. Pre-filtered connector data passed as records produces correct dashboa
   assert.equal(res.metrics.formattedTotalRevenue, '₹10,00,000');
   assert.equal(res.metrics.dealCount, 2);
   assert.equal(res.metrics.closedWonCount, 1);
+  assert.equal(res.metrics.closedWonRevenue, 800000);
 });
 
 test('26. Empty CRM result for a valid query produces proper empty state message', async () => {
@@ -865,4 +867,111 @@ test('27. Dashboard error distinguishes API failure from zero-results', async ()
   } finally {
     recordsService.getRecords = originalGetRecords;
   }
+});
+
+test('28. Exact Live CRM Target: 8 Closed Won deals totaling ₹354,653 calculates accurately and reconciles', async () => {
+  const MOCK_JULY_8_DEALS = [
+    { id: 'd1', Deal_Name: 'Cloud Deal 1', Amount: 50000, Stage: 'Closed Won', Owner: { name: 'Sanjay' }, Closing_Date: '2026-07-02' },
+    { id: 'd2', Deal_Name: 'Security Deal 2', Amount: 35000, Stage: 'Closed Won', Owner: { name: 'Sanjay' }, Closing_Date: '2026-07-05' },
+    { id: 'd3', Deal_Name: 'ERP Deal 3', Amount: 80000, Stage: 'Closed Won', Owner: { name: 'Ravi' }, Closing_Date: '2026-07-10' },
+    { id: 'd4', Deal_Name: 'DevOps Deal 4', Amount: 45000, Stage: 'Closed Won', Owner: { name: 'Ravi' }, Closing_Date: '2026-07-14' },
+    { id: 'd5', Deal_Name: 'Consulting Deal 5', Amount: 22000, Stage: 'Closed Won', Owner: { name: 'Priya' }, Closing_Date: '2026-07-18' },
+    { id: 'd6', Deal_Name: 'Support Deal 6', Amount: 32653, Stage: 'Closed Won', Owner: { name: 'Priya' }, Closing_Date: '2026-07-22' },
+    { id: 'd7', Deal_Name: 'Audit Deal 7', Amount: 40000, Stage: 'Closed Won', Owner: { name: 'Anand' }, Closing_Date: '2026-07-25' },
+    { id: 'd8', Deal_Name: 'Training Deal 8', Amount: 50000, Stage: 'Closed Won', Owner: { name: 'Anand' }, Closing_Date: '2026-07-29' },
+    // Open deals in July that should NOT be counted in Closed-Won
+    { id: 'd9', Deal_Name: 'Pipeline Deal 9', Amount: 100000, Stage: 'Proposal/Price Quote', Owner: { name: 'Sanjay' }, Closing_Date: '2026-07-30' },
+    { id: 'd10', Deal_Name: 'Pipeline Deal 10', Amount: 150000, Stage: 'Negotiation/Review', Owner: { name: 'Ravi' }, Closing_Date: '2026-07-31' },
+  ];
+
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async (module) => {
+      if (module === 'deals') return { data: MOCK_JULY_8_DEALS, info: { count: MOCK_JULY_8_DEALS.length } };
+      return { data: [], info: { count: 0 } };
+    };
+
+    const res = await assistantEngine.handleAssistantRequest({
+      question: 'Create a sales dashboard for July 2026 showing total revenue, total deals, closed-won deals, deal stages, revenue by employee, and a monthly trend.',
+    });
+
+    assert.equal(res.success, true);
+    assert.ok(res.metrics);
+
+    // Validate exact Closed-Won count = 8 and revenue = 354653
+    assert.equal(res.metrics.closedWonCount, 8);
+    assert.equal(res.metrics.closedWonRevenue, 354653);
+    assert.equal(res.metrics.formattedClosedWonRevenue, '₹3,54,653');
+
+    // Total deals = 10 (8 won + 2 pipeline)
+    assert.equal(res.metrics.dealCount, 10);
+    assert.equal(res.metrics.totalRevenue, 604653);
+
+    // Validate Closed-Won Deals KPI card
+    const wonDealsKpi = res.dashboard.widgets.find((w) => w.id === 'closed-won-deals-kpi');
+    assert.ok(wonDealsKpi);
+    assert.equal(wonDealsKpi.value, 8);
+
+    // Validate Closed-Won Revenue KPI card
+    const wonRevKpi = res.dashboard.widgets.find((w) => w.id === 'closed-won-kpi');
+    assert.ok(wonRevKpi);
+    assert.equal(wonRevKpi.value, 354653);
+    assert.equal(wonRevKpi.formattedValue, '₹3,54,653');
+
+    // Validate Total Deals KPI card
+    const totalDealsKpi = res.dashboard.widgets.find((w) => w.id === 'total-deals-kpi');
+    assert.ok(totalDealsKpi);
+    assert.equal(totalDealsKpi.value, 10);
+
+    // Validate stage distribution reconciles Closed Won = 8
+    const donut = res.dashboard.widgets.find((w) => w.id === 'deal-stage-donut');
+    assert.ok(donut);
+    const wonSlice = donut.data.find((d) => d.label === 'Closed Won');
+    assert.ok(wonSlice);
+    assert.equal(wonSlice.value, 8);
+
+    // Validate revenue by employee sums EXACTLY to ₹354,653
+    const empBar = res.dashboard.widgets.find((w) => w.id === 'revenue-by-employee-bar');
+    assert.ok(empBar);
+    const empSum = empBar.data.reduce((sum, d) => sum + d.value, 0);
+    assert.equal(empSum, 354653);
+
+    // Validate daily trend contains only July dates
+    const trend = res.dashboard.widgets.find((w) => w.id === 'revenue-trend-line');
+    assert.ok(trend);
+    for (const pt of trend.data) {
+      assert.ok(pt.date.startsWith('2026-07-'), `Trend date must be in July, got: ${pt.date}`);
+    }
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('29. No August or June records leak into July metrics when provided raw mixed dataset', async () => {
+  const MIXED_PERIOD_DEALS = [
+    // June deal
+    { id: 'j1', Deal_Name: 'June Won', Amount: 500000, Stage: 'Closed Won', Owner: { name: 'Sanjay' }, Closing_Date: '2026-06-30' },
+    // July deals
+    { id: 'jl1', Deal_Name: 'July Won 1', Amount: 200000, Stage: 'Closed Won', Owner: { name: 'Sanjay' }, Closing_Date: '2026-07-01' },
+    { id: 'jl2', Deal_Name: 'July Won 2', Amount: 300000, Stage: 'Closed Won', Owner: { name: 'Ravi' }, Closing_Date: '2026-07-31' },
+    // August deals
+    { id: 'au1', Deal_Name: 'August Won 1', Amount: 900000, Stage: 'Closed Won', Owner: { name: 'Priya' }, Closing_Date: '2026-08-01' },
+    { id: 'au2', Deal_Name: 'August Won 2', Amount: 400000, Stage: 'Closed Won', Owner: { name: 'Priya' }, Closing_Date: '2026-08-15' },
+  ];
+
+  const res = await assistantEngine.handleAssistantRequest({
+    question: 'Create a sales dashboard for July 2026',
+    records: MIXED_PERIOD_DEALS,
+  });
+
+  assert.equal(res.success, true);
+  // Only July deals should be retained: 200000 + 300000 = 500000 across 2 deals
+  assert.equal(res.metrics.dealCount, 2);
+  assert.equal(res.metrics.closedWonCount, 2);
+  assert.equal(res.metrics.closedWonRevenue, 500000);
+  assert.equal(res.metrics.totalRevenue, 500000);
+
+  // Priya had only August deals, so Priya should NOT be in the employee revenue list for July
+  const empList = res.metrics.employeeRevenue.map((e) => e.employee);
+  assert.ok(!empList.includes('Priya'), 'Priya should not appear in July employee revenue');
 });

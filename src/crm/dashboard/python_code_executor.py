@@ -273,18 +273,25 @@ class PromptExecutor(ExecutorInterface):
             # Step 4: Compute deterministic metrics
             total_deals = len(df_filtered)
             total_revenue = float(df_filtered["Amount_Numeric"].sum())
-            closed_won_df = df_filtered[df_filtered["Stage"].str.lower().str.contains(r"closed\s*won|\bwon\b", regex=True)]
+            closed_won_df = df_filtered[df_filtered["Stage"].str.strip().str.lower().isin(["closed won", "closed-won", "won"])]
             closed_won_count = len(closed_won_df)
             closed_won_revenue = float(closed_won_df["Amount_Numeric"].sum())
             win_rate = (closed_won_count / total_deals * 100.0) if total_deals > 0 else 0.0
             avg_deal_size = (total_revenue / total_deals) if total_deals > 0 else 0.0
 
+            logger.info(f"[SALES DASHBOARD VALIDATION] date_from={start_date.strftime('%Y-%m-%d')} date_to={end_date.strftime('%Y-%m-%d')} stage_filter=Closed Won matching_records={closed_won_count} total_amount={closed_won_revenue}")
+
             stage_counts = df_filtered["Stage"].value_counts().to_dict()
-            revenue_by_employee = df_filtered.groupby("Owner")["Amount_Numeric"].sum().sort_values(ascending=False).to_dict()
+            # Revenue by employee sums ONLY Closed-Won deals
+            revenue_by_employee = closed_won_df.groupby("Owner")["Amount_Numeric"].sum().sort_values(ascending=False).to_dict() if not closed_won_df.empty else {}
             
-            # Trend by date
-            df_filtered["Date_Only"] = df_filtered["Target_Date"].dt.date
-            daily_trend = df_filtered.groupby("Date_Only")["Amount_Numeric"].sum().sort_index().to_dict()
+            # Trend by date sums ONLY Closed-Won deals within requested period
+            if not closed_won_df.empty:
+                closed_won_df_copy = closed_won_df.copy()
+                closed_won_df_copy["Date_Only"] = closed_won_df_copy["Target_Date"].dt.date
+                daily_trend = closed_won_df_copy.groupby("Date_Only")["Amount_Numeric"].sum().sort_index().to_dict()
+            else:
+                daily_trend = {}
 
             # Step 5: Font handling
             _set_cjk_font()
@@ -386,8 +393,10 @@ class PromptExecutor(ExecutorInterface):
 
 | Metric | Value | Details |
 |---|---|---|
-| **Total Pipeline Value** | **{format_inr(total_revenue)}** | Across {total_deals} total deal(s) |
-| **Closed-Won Revenue** | **{format_inr(closed_won_revenue)}** | {closed_won_count} won opportunity(ies) |
+| **Total Deals** | **{total_deals}** | Opportunities in pipeline |
+| **Closed-Won Deals** | **{closed_won_count}** | Successfully won deals |
+| **Closed-Won Revenue** | **{format_inr(closed_won_revenue)}** | Total closed revenue |
+| **Total Pipeline Value** | **{format_inr(total_revenue)}** | Total value across all stages |
 | **Win Rate** | **{win_rate:.1f}%** | Closed-won conversion rate |
 | **Average Deal Size** | **{format_inr(avg_deal_size)}** | Value per opportunity |
 
