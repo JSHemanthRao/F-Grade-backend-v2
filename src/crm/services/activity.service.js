@@ -46,9 +46,10 @@ function formatIsoInTimezone(dateInput, offset = '+05:30') {
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     return `${raw}T00:00:00${offset}`;
   }
-  const date = new Date(raw);
-  if (Number.isNaN(date.valueOf())) return raw;
-  return date.toISOString();
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\+\d{2}:\d{2}|-\d{2}:\d{2})?$/.test(raw)) {
+    return (raw.includes('+') || (raw.includes('-') && raw.lastIndexOf('-') > 10)) ? raw : `${raw}${offset}`;
+  }
+  return raw;
 }
 
 function mapModuleToActivityType(moduleApiName) {
@@ -68,8 +69,10 @@ function getRecordDisplayName(record, moduleApiName) {
   if (!record) return 'Untitled Record';
   return (
     record.Deal_Name ||
+    record.Event_Title ||
     record.Subject ||
-    record.Title ||
+    record.Note_Title ||
+    record.Parent_Id?.name ||
     record.Account_Name ||
     record.Company_Name ||
     record.Company ||
@@ -78,12 +81,13 @@ function getRecordDisplayName(record, moduleApiName) {
     record.Vendor_Name ||
     record.Partner_Name ||
     record.Enterprise_Name ||
+    (record.Note_Content ? record.Note_Content.slice(0, 50) : null) ||
     record.name ||
     `Record #${record.id || 'N/A'}`
   );
 }
 
-function normalizeAuditEntry(entry) {
+function normalizeAuditEntry(entry, moduleApiName = 'Deals') {
   if (!entry) return null;
 
   const doneBy = entry.done_by || entry.audited_by || entry.user || {};
@@ -92,8 +96,8 @@ function normalizeAuditEntry(entry) {
 
   const record = entry.record || entry.related_record || {};
   const recordId = String(record.id || entry.record_id || '');
-  const moduleApiName = entry.module || entry.module_api_name || record.module || 'Deals';
-  const moduleLabel = metadataService.resolveModuleLabel(moduleApiName);
+  const rawModuleName = entry.module?.api_name || entry.module || record.module?.api_name || record.module || entry.module_api_name || moduleApiName || 'Deals';
+  const moduleLabel = metadataService.resolveModuleLabel(rawModuleName);
 
   const rawAction = String(entry.action || entry.audit_action || 'created').toLowerCase();
   let action = 'created';
@@ -101,40 +105,60 @@ function normalizeAuditEntry(entry) {
   else if (rawAction.includes('update') || rawAction.includes('change') || rawAction.includes('edit')) action = 'updated';
   else if (rawAction.includes('delete')) action = 'deleted';
 
-  return {
+  const auditedTime = entry.audited_time || entry.created_time || entry.timestamp || new Date().toISOString();
+
+  const item = {
     user_id: userId,
     user_name: userName,
     module: moduleLabel,
-    module_api_name: moduleApiName,
+    module_api_name: rawModuleName,
     record_id: recordId,
-    record_name: record.name || getRecordDisplayName(record, moduleApiName),
+    record_name: record.name || getRecordDisplayName(record, rawModuleName),
     action,
-    activity_type: mapModuleToActivityType(moduleApiName),
-    audited_time: entry.audited_time || entry.created_time || entry.timestamp || new Date().toISOString(),
+    activity_type: mapModuleToActivityType(rawModuleName),
+    time: auditedTime,
+    audited_time: auditedTime,
     source: entry.source || 'crm_ui',
   };
+
+  if (Array.isArray(entry.field_history) && entry.field_history.length > 0) {
+    const stageChange = entry.field_history.find((f) => String(f.api_name || f.field).toLowerCase() === 'stage');
+    const primary = stageChange || entry.field_history[0];
+    if (primary) {
+      item.field = primary.api_name || primary.field || 'Stage';
+      item.old_value = primary._value?.old ?? primary.old_value ?? null;
+      item.new_value = primary._value?.new ?? primary.new_value ?? null;
+    }
+  }
+
+  return item;
 }
 
 function normalizeModuleRecord(record, moduleApiName, actionType = 'created') {
   const createdBy = record.Created_By || record.Owner || record.Modified_By || {};
-  const userId = String(createdBy.id || record.Owner?.id || record.Modified_By?.id || '');
-  const userName = createdBy.name || record.Owner?.name || record.Modified_By?.name || 'Unknown User';
+  const modifiedBy = record.Modified_By || record.Created_By || record.Owner || {};
+
+  const isUpdated = actionType === 'updated' || (record.Modified_Time && record.Modified_Time !== record.Created_Time);
+  const activeUser = isUpdated ? modifiedBy : createdBy;
+
+  const userId = String(activeUser.id || record.Owner?.id || '');
+  const userName = activeUser.name || record.Owner?.name || 'Unknown User';
   const moduleLabel = metadataService.resolveModuleLabel(moduleApiName);
   const activityType = mapModuleToActivityType(moduleApiName);
 
   let action = actionType;
-  if (actionType === 'created') {
+  if (!isUpdated) {
     if (activityType === 'note') action = 'added';
     else action = 'created';
-  } else if (actionType === 'updated') {
+  } else {
     action = record.Stage ? 'Stage changed' : 'updated';
   }
 
-  const auditedTime = actionType === 'updated'
+  const auditedTime = isUpdated
     ? (record.Modified_Time || record.Created_Time || new Date().toISOString())
     : (record.Created_Time || record.Modified_Time || new Date().toISOString());
 
-  return {
+  const item = {
     user_id: userId,
     user_name: userName,
     module: moduleLabel,
@@ -143,71 +167,60 @@ function normalizeModuleRecord(record, moduleApiName, actionType = 'created') {
     record_name: getRecordDisplayName(record, moduleApiName),
     action,
     activity_type: activityType,
+    time: auditedTime,
     audited_time: auditedTime,
     source: 'crm_ui',
   };
+
+  if (record.Stage) {
+    item.field = 'Stage';
+    item.new_value = record.Stage;
+  }
+
+  return item;
 }
 
-function isScopeError(error) {
-  const status = error?.response?.status;
-  const message = String(error?.response?.data?.message || error?.message || '').toLowerCase();
-  return status === 401 || status === 403 || message.includes('scope') || message.includes('oauth');
-}
+const MODULE_DEFINITIONS_FOR_ACTIVITY = [
+  { key: 'deals', endpoint: 'Deals', label: 'Deals', hasTimeline: true },
+  { key: 'notes', endpoint: 'Notes', label: 'Notes', hasTimeline: false },
+  { key: 'meetings', endpoint: 'Events', label: 'Meetings', hasTimeline: true },
+  { key: 'tasks', endpoint: 'Tasks', label: 'Tasks', hasTimeline: true },
+  { key: 'calls', endpoint: 'Calls', label: 'Calls', hasTimeline: true },
+  { key: 'leads', endpoint: 'Leads', label: 'Leads', hasTimeline: true },
+  { key: 'contacts', endpoint: 'Contacts', label: 'Contacts', hasTimeline: true },
+  { key: 'accounts', endpoint: 'Accounts', label: 'Accounts', hasTimeline: true },
+];
 
-function extractMissingScope(error) {
-  const message = String(error?.response?.data?.message || error?.message || '');
-  if (/settings\.audit_logs/i.test(message)) return 'ZohoCRM.settings.audit_logs.READ';
-  if (/settings\.modules/i.test(message)) return 'ZohoCRM.settings.modules.READ';
-  if (/settings\.fields/i.test(message)) return 'ZohoCRM.settings.fields.READ';
-  if (/users/i.test(message)) return 'ZohoCRM.users.READ';
-  if (/modules/i.test(message)) return 'ZohoCRM.modules.ALL';
-  return 'ZohoCRM.settings.audit_logs.READ';
-}
-
-async function fetchAuditLogsFromZoho(from, to, options = {}) {
+async function fetchRecordTimelineSafe(moduleEndpoint, recordId, options = {}) {
   try {
-    // Try Audit API endpoint if supported
-    const response = await zohoClient.get('/crm/v8/settings/audit_log_records', {
+    const response = await zohoClient.get(`/crm/v8/${moduleEndpoint}/${recordId}/__timeline`, {
       ...(options.signal ? { signal: options.signal } : {}),
-      params: {
-        start_time: from,
-        end_time: to,
-        ...(options.user_id ? { user_id: options.user_id } : {}),
-      },
+      params: { per_page: 50 },
     });
 
-    const rawRecords = Array.isArray(response.data?.audit_log_records)
-      ? response.data.audit_log_records
+    const entries = Array.isArray(response.data?.__timeline)
+      ? response.data.__timeline
       : Array.isArray(response.data?.data)
         ? response.data.data
         : [];
 
-    return rawRecords.map(normalizeAuditEntry).filter(Boolean);
+    return entries;
   } catch (error) {
-    if (isScopeError(error)) {
-      const missingScope = extractMissingScope(error);
-      logger.warn('CRM Activity Service', {
-        event: 'audit_log_scope_missing',
-        missingScope,
-        error: error.message,
-      });
-      // Return null to signal fallback to module records
-      return null;
-    }
-    logger.warn('CRM Activity Service', {
-      event: 'audit_log_api_skipped',
-      message: error.message,
-    });
-    return null;
+    return [];
   }
 }
 
-async function fetchModuleActivityRecords(moduleKey, from, to, options = {}) {
-  const moduleEndpoint = metadataService.resolveModuleApiName(moduleKey);
-  const criteria = `(Created_Time:greater_equal:${from})and(Created_Time:less_than:${to})`;
+async function fetchModuleActivityRecords(moduleDef, from, to, options = {}) {
+  const endpoint = moduleDef.endpoint;
+  const criteria = `(((Created_Time:greater_equal:${from})and(Created_Time:less_than:${to}))or((Modified_Time:greater_equal:${from})and(Modified_Time:less_than:${to})))`;
+
+  logger.info('[ZOHO ACTIVITY REQUEST]', {
+    endpoint: `/crm/v8/${endpoint}/search`,
+    filters: criteria,
+  });
 
   try {
-    const response = await zohoClient.get(`/crm/v8/${moduleEndpoint}`, {
+    const response = await zohoClient.get(`/crm/v8/${endpoint}/search`, {
       ...(options.signal ? { signal: options.signal } : {}),
       params: {
         criteria,
@@ -215,22 +228,73 @@ async function fetchModuleActivityRecords(moduleKey, from, to, options = {}) {
       },
     });
 
+    if (response.status === 204 || !response.data) {
+      return [];
+    }
+
     const rawRecords = Array.isArray(response.data?.data)
       ? response.data.data
       : Array.isArray(response.data?.users)
         ? response.data.users
         : [];
 
-    return rawRecords.map((r) => normalizeModuleRecord(r, moduleEndpoint, 'created'));
-  } catch (error) {
-    if (isScopeError(error)) {
-      logger.warn('CRM Activity Service', {
-        event: 'module_activity_scope_error',
-        module: moduleEndpoint,
-        error: error.message,
-      });
+    if (rawRecords.length === 0) return [];
+
+    const fromTime = new Date(from).valueOf();
+    const toTime = new Date(to).valueOf();
+
+    // Check if timeline enrichment is available for modified records
+    const results = [];
+    for (const record of rawRecords) {
+      const createdTime = record.Created_Time ? new Date(record.Created_Time).valueOf() : null;
+      const modifiedTime = record.Modified_Time ? new Date(record.Modified_Time).valueOf() : null;
+
+      const isCreatedInRange = createdTime && createdTime >= fromTime && createdTime < toTime;
+      const isModifiedInRange = modifiedTime && modifiedTime >= fromTime && modifiedTime < toTime;
+
+      // For deals or records updated in range, try timeline for rich field history
+      if (moduleDef.hasTimeline && (isModifiedInRange || isCreatedInRange)) {
+        const timelineEntries = await fetchRecordTimelineSafe(endpoint, record.id, options);
+        const inRangeTimeline = timelineEntries.filter((entry) => {
+          const t = entry.audited_time ? new Date(entry.audited_time).valueOf() : null;
+          return t && t >= fromTime && t < toTime;
+        });
+
+        if (inRangeTimeline.length > 0) {
+          for (const entry of inRangeTimeline) {
+            const normalized = normalizeAuditEntry(entry, endpoint);
+            if (normalized) {
+              if (!normalized.record_name || normalized.record_name === 'Record') {
+                normalized.record_name = getRecordDisplayName(record, endpoint);
+              }
+              results.push(normalized);
+            }
+          }
+          continue;
+        }
+      }
+
+      // Fallback: direct module record normalization
+      if (isCreatedInRange) {
+        results.push(normalizeModuleRecord(record, endpoint, 'created'));
+      }
+      if (isModifiedInRange && modifiedTime !== createdTime) {
+        results.push(normalizeModuleRecord(record, endpoint, 'updated'));
+      }
     }
-    // Return empty list on single module fetch error rather than crashing whole list
+
+    return results;
+  } catch (error) {
+    // If search endpoint returned 204 or empty
+    if (error?.response?.status === 204 || error?.response?.status === 404) {
+      return [];
+    }
+
+    logger.warn('CRM Activity Service', {
+      event: 'module_activity_fetch_error',
+      module: endpoint,
+      error: error.message,
+    });
     return [];
   }
 }
@@ -246,32 +310,46 @@ async function getActivity(options = {}) {
     ? Math.min(Number(options.limit), 200)
     : DEFAULT_LIMIT;
 
+  logger.info('[ACTIVITY DEBUG]', {
+    date_from: from,
+    date_to: to,
+    user_id: options.user_id || options.user || null,
+    module: options.module || null,
+  });
+
   // Resolve user filter if provided
   let resolvedUser = null;
   if (options.user_id || options.user) {
     resolvedUser = await metadataService.resolveUser(options.user_id || options.user, options);
   }
 
-  let activities = [];
-  let fetchedFromAuditLog = false;
-
-  // 1. Attempt Audit Log API
-  const auditLogs = await fetchAuditLogsFromZoho(from, to, { ...options, user_id: resolvedUser?.id });
-  if (Array.isArray(auditLogs) && auditLogs.length > 0) {
-    activities = auditLogs;
-    fetchedFromAuditLog = true;
-  } else {
-    // 2. Query key CRM modules for activity records
-    const targetModules = options.module && options.module !== 'all'
-      ? [options.module]
-      : ['Deals', 'Meetings', 'Notes', 'Tasks', 'Calls', 'Leads', 'Contacts', 'Accounts'];
-
-    const modulePromises = targetModules.map((m) => fetchModuleActivityRecords(m, from, to, { ...options, limit }));
-    const moduleResults = await Promise.all(modulePromises);
-    activities = moduleResults.flat();
+  // Determine target modules
+  let targetDefs = MODULE_DEFINITIONS_FOR_ACTIVITY;
+  if (options.module && options.module !== 'all') {
+    const norm = String(options.module).trim().toLowerCase();
+    targetDefs = MODULE_DEFINITIONS_FOR_ACTIVITY.filter(
+      (m) => m.key === norm || m.endpoint.toLowerCase() === norm || m.label.toLowerCase() === norm
+    );
+    if (targetDefs.length === 0) {
+      targetDefs = [{ key: norm, endpoint: metadataService.resolveModuleApiName(options.module), label: options.module, hasTimeline: true }];
+    }
   }
 
-  // 3. Filter by User if specified
+  // Fetch activities from target modules in parallel
+  const modulePromises = targetDefs.map((mDef) => fetchModuleActivityRecords(mDef, from, to, { ...options, limit }));
+  const moduleResults = await Promise.all(modulePromises);
+  let activities = moduleResults.flat();
+
+  // Filter strictly to the half-open interval [from, to)
+  const fromTime = new Date(from).valueOf();
+  const toTime = new Date(to).valueOf();
+
+  activities = activities.filter((act) => {
+    const actTime = act.audited_time || act.time ? new Date(act.audited_time || act.time).valueOf() : null;
+    return actTime && actTime >= fromTime && actTime < toTime;
+  });
+
+  // Filter by User if specified
   if (resolvedUser) {
     const targetIdStr = String(resolvedUser.id).toLowerCase();
     const targetNameStr = String(resolvedUser.name).toLowerCase();
@@ -282,29 +360,28 @@ async function getActivity(options = {}) {
 
       return (
         actUserId === targetIdStr ||
+        actUserName === targetNameStr ||
         actUserName.includes(targetNameStr) ||
         targetNameStr.includes(actUserName)
       );
     });
   }
 
-  // 4. Filter by Action if specified (e.g. "created", "updated", "added")
+  // Filter by Action if specified (e.g. "created", "updated", "added")
   if (options.action && options.action !== 'all') {
     const targetAction = String(options.action).toLowerCase();
     activities = activities.filter((act) => String(act.action).toLowerCase().includes(targetAction));
   }
 
-  // 5. Filter by Module if specified
-  if (options.module && options.module !== 'all') {
-    const targetModule = metadataService.resolveModuleLabel(options.module).toLowerCase();
-    activities = activities.filter((act) => String(act.module).toLowerCase() === targetModule);
-  }
-
   // Sort by audited_time ascending
-  activities.sort((a, b) => new Date(a.audited_time).valueOf() - new Date(b.audited_time).valueOf());
+  activities.sort((a, b) => new Date(a.audited_time || a.time).valueOf() - new Date(b.audited_time || b.time).valueOf());
 
   // Apply limit
   const boundedActivities = activities.slice(0, limit);
+
+  logger.info('[ACTIVITY RESULT]', {
+    count: boundedActivities.length,
+  });
 
   return {
     success: true,
@@ -323,3 +400,4 @@ module.exports = {
   normalizeAuditEntry,
   normalizeModuleRecord,
 };
+

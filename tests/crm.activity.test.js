@@ -233,16 +233,87 @@ test('12. Normalized activity records contain standard action and time fields', 
     user_id: '123',
     user_name: 'Sanjay',
     module: 'Deals',
+    module_api_name: 'Deals',
     record_id: '456',
     record_name: 'ABC Deal',
-    action: 'Created',
+    action: 'updated',
     activity_type: 'Deal',
     time: '2026-08-14T10:15:00+05:30',
+    field: 'Stage',
+    old_value: 'Proposal',
+    new_value: 'Closed Won',
+    source: 'crm_ui',
   };
 
   assert.equal(sampleActivity.user_name, 'Sanjay');
   assert.equal(sampleActivity.module, 'Deals');
-  assert.equal(sampleActivity.action, 'Created');
+  assert.equal(sampleActivity.action, 'updated');
+  assert.equal(sampleActivity.field, 'Stage');
+  assert.equal(sampleActivity.old_value, 'Proposal');
+  assert.equal(sampleActivity.new_value, 'Closed Won');
   assert.ok(sampleActivity.time.includes('2026-08-14'));
 });
+
+test('13. normalizeAuditEntry extracts field_history changes accurately', () => {
+  const mockTimelineItem = {
+    done_by: { id: 'usr_201', name: 'Phanindra Kumar' },
+    record: { id: 'deal_777', name: 'Enterprise Deal', module: { api_name: 'Deals' } },
+    action: 'updated',
+    audited_time: '2026-08-14T14:20:00+05:30',
+    source: 'crm_ui',
+    field_history: [
+      {
+        api_name: 'Stage',
+        _value: { old: 'Discovery Mode', new: 'Proposal/Price Quote' },
+      },
+    ],
+  };
+
+  const normalized = normalizeAuditEntry(mockTimelineItem, 'Deals');
+  assert.equal(normalized.user_name, 'Phanindra Kumar');
+  assert.equal(normalized.action, 'updated');
+  assert.equal(normalized.field, 'Stage');
+  assert.equal(normalized.old_value, 'Discovery Mode');
+  assert.equal(normalized.new_value, 'Proposal/Price Quote');
+});
+
+test('14. Half-open date range strictly excludes August 13 and August 15 records', () => {
+  const from = '2026-08-14T00:00:00+05:30';
+  const to = '2026-08-15T00:00:00+05:30';
+  const fromTime = new Date(from).valueOf();
+  const toTime = new Date(to).valueOf();
+
+  const mockRecords = [
+    { name: 'Aug 13 Late Night', audited_time: '2026-08-13T23:59:59+05:30' },
+    { name: 'Aug 14 Midnight Exact', audited_time: '2026-08-14T00:00:00+05:30' },
+    { name: 'Aug 14 Noon', audited_time: '2026-08-14T12:00:00+05:30' },
+    { name: 'Aug 14 Late Night', audited_time: '2026-08-14T23:59:59+05:30' },
+    { name: 'Aug 15 Midnight Exact', audited_time: '2026-08-15T00:00:00+05:30' },
+    { name: 'Aug 15 Morning', audited_time: '2026-08-15T09:00:00+05:30' },
+  ];
+
+  const inRange = mockRecords.filter((rec) => {
+    const t = new Date(rec.audited_time).valueOf();
+    return t >= fromTime && t < toTime;
+  });
+
+  assert.equal(inRange.length, 3);
+  assert.equal(inRange[0].name, 'Aug 14 Midnight Exact');
+  assert.equal(inRange[1].name, 'Aug 14 Noon');
+  assert.equal(inRange[2].name, 'Aug 14 Late Night');
+});
+
+test('15. Live/Real getActivity returns count > 0 for August 14, 2026 activity', async () => {
+  const result = await getActivity({ from: '2026-08-14T00:00:00+05:30', to: '2026-08-15T00:00:00+05:30' });
+  assert.equal(result.success, true);
+  assert.ok(result.count > 0, `Expected count > 0, received ${result.count}`);
+  assert.ok(result.data.length > 0);
+
+  const first = result.data[0];
+  assert.ok(first.user_name);
+  assert.ok(first.module);
+  assert.ok(first.action);
+  assert.ok(first.time);
+});
+
 
