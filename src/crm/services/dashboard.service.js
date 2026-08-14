@@ -475,7 +475,9 @@ async function buildSalesDashboard(options = {}) {
 
   const summary = deals.length > 0
     ? `Total pipeline value is ${formatCurrency(totalRevenue)} across ${deals.length} deals with a ${formatNumber(winRate)}% win rate (${closedWonDeals.length} won). ${topPerformer} generated the highest revenue.`
-    : 'No CRM deals or records were found for the selected period.';
+    : dealsError
+      ? 'No dashboard could be generated because the CRM API returned an error.'
+      : 'No matching CRM deals were found for the selected period.';
 
   const dashboardObj = {
     title: options.title || 'Sales Performance Dashboard',

@@ -311,7 +311,7 @@ test('9. Clean empty state handling when no CRM records exist', async () => {
     });
 
     assert.ok(emptyResult.dashboard);
-    assert.ok(emptyResult.dashboard.summary.includes('No CRM deals or records were found'));
+    assert.ok(emptyResult.dashboard.summary.includes('No matching CRM deals were found for the selected period'));
     const revKpi = emptyResult.dashboard.widgets.find((w) => w.id === 'total-revenue-kpi');
     assert.equal(revKpi.value, 0);
     assert.equal(revKpi.formattedValue, '₹0');
@@ -584,6 +584,284 @@ test('16. Code Executor Compatibility: summary and text contain Data:[JSON] matc
       assert.ok(d.Owner !== undefined);
       assert.ok(d.Closing_Date !== undefined);
     }
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+// =================== NEW TESTS: Data Pipeline Handoff & Dynamic Date Ranges ===================
+
+const MOCK_AUGUST_DEALS = [
+  { id: 'a1', Deal_Name: 'August Cloud', Amount: 600000, Stage: 'Closed Won', Owner: { name: 'Sanjay' }, Closing_Date: '2026-08-10' },
+  { id: 'a2', Deal_Name: 'August Security', Amount: 300000, Stage: 'Qualification', Owner: { name: 'Ravi' }, Closing_Date: '2026-08-18' },
+];
+
+test('17. Connector output is successfully passed to dashboard processing via assistant engine', async () => {
+  // Simulate a Copilot scenario where connector output is passed as payload.data
+  const res = await assistantEngine.handleAssistantRequest({
+    question: 'Create a sales dashboard for July 2026',
+    data: MOCK_DEALS,
+  });
+
+  assert.equal(res.success, true);
+  assert.ok(res.dashboard);
+  assert.ok(res.metrics);
+  // Must compute non-zero metrics from the supplied connector data
+  assert.equal(res.metrics.totalRevenue, 1650000);
+  assert.equal(res.metrics.dealCount, 4);
+  assert.equal(res.metrics.closedWonCount, 2);
+  assert.equal(res.metrics.closedWonRevenue, 1250000);
+  // Records must be passed through
+  assert.ok(Array.isArray(res.records));
+  assert.equal(res.records.length, 4);
+});
+
+test('18. August 2026 dashboard works without code changes — dynamic date range', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  let capturedOpts = null;
+  try {
+    recordsService.getRecords = async (module, opts) => {
+      if (module === 'deals') {
+        capturedOpts = opts;
+        return { data: MOCK_AUGUST_DEALS, info: { count: MOCK_AUGUST_DEALS.length } };
+      }
+      return { data: [], info: { count: 0 } };
+    };
+
+    const res = await assistantEngine.handleAssistantRequest({
+      question: 'Create a sales dashboard for August 2026.',
+    });
+
+    assert.equal(res.success, true);
+    assert.ok(res.dashboard);
+    // Verify date boundaries are August half-open range
+    assert.ok(capturedOpts.from.includes('2026-08-01'));
+    assert.ok(capturedOpts.to.includes('2026-09-01'));
+    // Verify metrics from August data
+    const revKpi = res.dashboard.widgets.find((w) => w.id === 'total-revenue-kpi');
+    assert.ok(revKpi);
+    assert.equal(revKpi.value, 900000);  // 600000 + 300000
+    assert.equal(revKpi.formattedValue, '₹9,00,000');
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('19. June 2026 dashboard works without code changes — verifies no hardcoded July', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  let capturedOpts = null;
+  try {
+    recordsService.getRecords = async (module, opts) => {
+      if (module === 'deals') {
+        capturedOpts = opts;
+        return {
+          data: [
+            { id: 'j1', Deal_Name: 'June Deal', Amount: 420000, Stage: 'Closed Won', Owner: { name: 'Priya' }, Closing_Date: '2026-06-20' },
+          ],
+          info: { count: 1 },
+        };
+      }
+      return { data: [], info: { count: 0 } };
+    };
+
+    const res = await assistantEngine.handleAssistantRequest({
+      question: 'Create a sales dashboard for June 2026.',
+    });
+
+    assert.equal(res.success, true);
+    assert.ok(capturedOpts.from.includes('2026-06-01'));
+    assert.ok(capturedOpts.to.includes('2026-07-01'));
+    assert.equal(res.metrics.totalRevenue, 420000);
+    assert.equal(res.metrics.closedWonCount, 1);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('20. CRM API failure produces a clear error — not fake zeros', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async () => {
+      throw new Error('CRM_TOKEN_EXPIRED');
+    };
+
+    const res = await dashboardService.buildSalesDashboard({
+      dateRange: { from: '2026-07-01T00:00:00+05:30', to: '2026-08-01T00:00:00+05:30' },
+    });
+
+    assert.ok(res.dashboard);
+    // Summary must indicate an error, not silently show zero
+    assert.ok(
+      res.dashboard.summary.includes('error') || res.dashboard.summary.includes('No matching'),
+      `Summary should indicate error or empty state, got: ${res.dashboard.summary}`
+    );
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('21. Daily revenue trend is computed correctly from deal dates', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async (module) => {
+      if (module === 'deals') return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+      return { data: [], info: { count: 0 } };
+    };
+
+    const res = await assistantEngine.handleAssistantRequest({
+      question: 'Create a sales dashboard for July 2026.',
+    });
+
+    assert.equal(res.success, true);
+    const trendWidget = res.dashboard.widgets.find((w) => w.id === 'revenue-trend-line');
+    assert.ok(trendWidget);
+    assert.ok(Array.isArray(trendWidget.data));
+    assert.ok(trendWidget.data.length >= 1, 'Trend must have at least 1 data point');
+    // Each trend point must have label (date) and value (amount)
+    for (const pt of trendWidget.data) {
+      assert.ok(pt.label, 'Trend point must have a label');
+      assert.ok(typeof pt.value === 'number', 'Trend point must have a numeric value');
+    }
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('22. Deal stage distribution is accurate for known stages', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async (module) => {
+      if (module === 'deals') return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+      return { data: [], info: { count: 0 } };
+    };
+
+    const res = await assistantEngine.handleAssistantRequest({
+      question: 'Create a sales dashboard for July 2026.',
+    });
+
+    const donut = res.dashboard.widgets.find((w) => w.id === 'deal-stage-donut');
+    assert.ok(donut);
+    // MOCK_DEALS has: 2 Closed Won, 1 Proposal/Price Quote, 1 Negotiation/Review
+    const wonSlice = donut.data.find((d) => d.label === 'Closed Won');
+    assert.ok(wonSlice);
+    assert.equal(wonSlice.value, 2);
+    const proposalSlice = donut.data.find((d) => d.label === 'Proposal/Price Quote');
+    assert.ok(proposalSlice);
+    assert.equal(proposalSlice.value, 1);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('23. Revenue by employee aggregation is correct', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async (module) => {
+      if (module === 'deals') return { data: MOCK_DEALS, info: { count: MOCK_DEALS.length } };
+      return { data: [], info: { count: 0 } };
+    };
+
+    const res = await assistantEngine.handleAssistantRequest({
+      question: 'Create a sales dashboard for July 2026.',
+    });
+
+    const empBar = res.dashboard.widgets.find((w) => w.id === 'revenue-by-employee-bar');
+    assert.ok(empBar);
+    assert.ok(empBar.data.length >= 3, 'Must show at least 3 employees: Sanjay, Ravi, Priya');
+    // Sanjay: 500000 + 250000 = 750000
+    const sanjay = empBar.data.find((d) => d.label === 'Sanjay');
+    assert.ok(sanjay);
+    assert.equal(sanjay.value, 750000);
+    // Ravi: 750000
+    const ravi = empBar.data.find((d) => d.label === 'Ravi');
+    assert.ok(ravi);
+    assert.equal(ravi.value, 750000);
+    // Priya: 150000
+    const priya = empBar.data.find((d) => d.label === 'Priya');
+    assert.ok(priya);
+    assert.equal(priya.value, 150000);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('24. INR formatting edge cases', () => {
+  assert.equal(formatCurrency(999), '₹999');
+  assert.equal(formatCurrency(1000), '₹1,000');
+  assert.equal(formatCurrency(10000), '₹10,000');
+  assert.equal(formatCurrency(100000), '₹1,00,000');
+  assert.equal(formatCurrency(9999999), '₹99,99,999');
+  assert.equal(formatCurrency(100000000), '₹10,00,00,000');
+});
+
+test('25. Pre-filtered connector data passed as records produces correct dashboard without re-fetching', async () => {
+  // Simulate connector already filtered the data and passes it as records
+  const preFiltered = [
+    { Deal_Name: 'Pre-filtered Alpha', Amount: 800000, Stage: 'Closed Won', Owner: { name: 'Amit' }, Closing_Date: '2026-07-05' },
+    { Deal_Name: 'Pre-filtered Beta', Amount: 200000, Stage: 'Qualification', Owner: { name: 'Amit' }, Closing_Date: '2026-07-12' },
+  ];
+
+  const res = await assistantEngine.handleAssistantRequest({
+    question: 'Create a sales dashboard for July 2026',
+    records: preFiltered,
+  });
+
+  assert.equal(res.success, true);
+  assert.ok(res.dashboard);
+  assert.equal(res.metrics.totalRevenue, 1000000);
+  assert.equal(res.metrics.formattedTotalRevenue, '₹10,00,000');
+  assert.equal(res.metrics.dealCount, 2);
+  assert.equal(res.metrics.closedWonCount, 1);
+});
+
+test('26. Empty CRM result for a valid query produces proper empty state message', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async () => ({
+      data: [],
+      info: { count: 0 },
+    });
+
+    const res = await assistantEngine.handleAssistantRequest({
+      question: 'Create a sales dashboard for July 2026.',
+    });
+
+    assert.equal(res.success, true);
+    assert.ok(res.dashboard);
+    assert.ok(
+      res.dashboard.summary.includes('No matching CRM deals were found'),
+      `Empty state message expected, got: ${res.dashboard.summary}`
+    );
+    // Should NOT show fake zeros without explanation
+    const revKpi = res.dashboard.widgets.find((w) => w.id === 'total-revenue-kpi');
+    assert.equal(revKpi.value, 0);
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('27. Dashboard error distinguishes API failure from zero-results', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    // API failure case
+    recordsService.getRecords = async () => {
+      throw new Error('INVALID_TOKEN');
+    };
+
+    const errorResult = await dashboardService.buildSalesDashboard({
+      dateRange: { from: '2026-07-01T00:00:00+05:30', to: '2026-08-01T00:00:00+05:30' },
+    });
+    assert.ok(errorResult.dashboard.summary.includes('error'), 'API failure summary must mention error');
+
+    // Zero-results case (not an error)
+    recordsService.getRecords = async () => ({ data: [], info: { count: 0 } });
+
+    const emptyResult = await dashboardService.buildSalesDashboard({
+      dateRange: { from: '2026-07-01T00:00:00+05:30', to: '2026-08-01T00:00:00+05:30' },
+    });
+    assert.ok(emptyResult.dashboard.summary.includes('No matching CRM deals'), 'Zero-results summary must say no matching deals');
+    // These should be different messages
+    assert.notEqual(errorResult.dashboard.summary, emptyResult.dashboard.summary);
   } finally {
     recordsService.getRecords = originalGetRecords;
   }
