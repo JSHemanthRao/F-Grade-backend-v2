@@ -266,7 +266,50 @@ async function handleAssistantRequest(req, res, next) {
   }
 }
 
+async function getCRMActivity(req, res, next) {
+  try {
+    const startTime = process.hrtime.bigint();
+    const requestSource = req.method === 'POST' ? req.body : req.query;
+    const requestContext = createRequestAbortSignal(req, res);
+
+    const activityService = require('../services/activity.service');
+
+    const options = {
+      module: requestSource?.module,
+      user_id: requestSource?.user_id ?? requestSource?.userId ?? requestSource?.user,
+      from: requestSource?.from,
+      to: requestSource?.to,
+      action: requestSource?.action,
+      limit: requestSource?.limit,
+      timezone: requestSource?.timezone,
+      signal: requestContext.signal,
+    };
+
+    let result;
+    try {
+      result = await activityService.getActivity(options);
+    } finally {
+      requestContext.cleanup();
+    }
+
+    logger.info('CRM Controller', {
+      event: 'activity_response_constructed',
+      count: result.count,
+      executionTime: formatExecutionTime(startTime),
+    });
+
+    return res.json({
+      ...result,
+      executionTime: formatExecutionTime(startTime),
+      source: 'Zoho CRM',
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
+  getCRMActivity,
   getModuleCount,
   getModuleQuery,
   getModuleRecords: getModuleQuery,

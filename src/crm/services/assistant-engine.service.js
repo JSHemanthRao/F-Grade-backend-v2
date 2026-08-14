@@ -21,6 +21,20 @@ const {
   isDisplayContinuation,
 } = require('./assistant/display-batching.service');
 const logger = require('../../common/logging/logger');
+const activityService = require('./activity.service');
+const { formatActivityResponse } = require('./assistant/activity-formatter.service');
+
+const ACTIVITY_QUESTION_PATTERN = /(today'?s?\s+(?:crm\s+)?activity|crm\s+activity|what\s+did\s+.*\s+do\s+today|what\s+changes\s+did\s+.*\s+make\s+today|activity\s+for\s+all\s+employees|daily\s+activity|activity\s+report)/i;
+
+function extractActivityUser(question) {
+  const matchDid = question.match(/what\s+did\s+([A-Za-z\s.'-]+?)\s+do\s+today/i);
+  if (matchDid) return matchDid[1].trim();
+  const matchChanges = question.match(/what\s+changes\s+did\s+([A-Za-z\s.'-]+?)\s+make\s+today/i);
+  if (matchChanges) return matchChanges[1].trim();
+  const matchFor = question.match(/activity\s+(?:of|for)\s+([A-Za-z\s.'-]+?)(?:\s+today)?$/i);
+  if (matchFor && !/all\s+employees|all/i.test(matchFor[1])) return matchFor[1].trim();
+  return null;
+}
 
 let lastDisplayContext = null;
 
@@ -78,6 +92,24 @@ async function handleAssistantRequest(payload = {}) {
       filteredRecords,
       requestedRecords: dnsRequest.requestedRecords,
     });
+  }
+
+  if (ACTIVITY_QUESTION_PATTERN.test(question)) {
+    const targetUser = extractActivityUser(question);
+    try {
+      const activityResult = await activityService.getActivity({
+        user_id: targetUser,
+        signal: payload.signal,
+      });
+      return formatActivityResponse(activityResult, { question });
+    } catch (error) {
+      logger.error('Assistant Engine Activity', { error: error.message });
+      return {
+        success: false,
+        summary: 'No activity could be retrieved because the CRM activity API returned an error.',
+        error: error.message,
+      };
+    }
   }
 
   const suppliedContext = payload?.context || payload?.conversationContext || {};

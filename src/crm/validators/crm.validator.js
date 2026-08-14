@@ -173,9 +173,30 @@ function validateCRMCountRequest(req, res, next) {
   }
 }
 
+function validateCRMActivityRequest(req, res, next) {
+  try {
+    const requestSource = req.method === 'POST' ? req.body : req.query;
+    validatePositiveInteger(requestSource?.limit, 'limit');
+
+    if (requestSource?.from && Number.isNaN(new Date(requestSource.from).valueOf())) {
+      throw new CRMValidationError('from must be a valid date or ISO datetime string.');
+    }
+
+    if (requestSource?.to && Number.isNaN(new Date(requestSource.to).valueOf())) {
+      throw new CRMValidationError('to must be a valid date or ISO datetime string.');
+    }
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   CRMValidationError,
   resolveRequestedModule,
+  validateCRMActivityRequest,
   validateCRMCountRequest,
   validateCRMQueryRequest,
 };
+

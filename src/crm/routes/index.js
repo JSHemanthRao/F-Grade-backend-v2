@@ -1,13 +1,16 @@
 const express = require('express');
-const { getModuleCount, getModuleQuery, handleAssistantRequest } = require('../controllers/crm.controller');
+const { getCRMActivity, getModuleCount, getModuleQuery, handleAssistantRequest } = require('../controllers/crm.controller');
 const { handleDnsRequest } = require('../controllers/dns.controller');
 const { getSupportedModuleKeys } = require('../services/module-definition.service');
-const { validateCRMCountRequest, validateCRMQueryRequest } = require('../validators/crm.validator');
+const { validateCRMActivityRequest, validateCRMCountRequest, validateCRMQueryRequest } = require('../validators/crm.validator');
 const { requestLogger } = require('../middleware/request-logger');
 const { crmErrorHandler } = require('../middleware/error-handler');
 
 const router = express.Router();
 router.use(requestLogger);
+
+// Activity endpoint
+router.get('/activity', validateCRMActivityRequest, getCRMActivity);
 
 const supportedModules = getSupportedModuleKeys();
 
@@ -30,3 +33,4 @@ router.get('/', validateCRMQueryRequest, getModuleQuery);
 router.use(crmErrorHandler);
 
 module.exports = router;
+

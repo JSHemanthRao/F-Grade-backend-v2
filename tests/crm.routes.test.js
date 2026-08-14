@@ -45,10 +45,11 @@ test('CRM router exposes one GET route per requested module', () => {
     .map((layer) => layer.route.path)
     .sort();
 
-  assert.equal(registeredRoutes.length, expectedRoutes.length + 2);
+  assert.equal(registeredRoutes.length, expectedRoutes.length + 3);
   expectedRoutes.forEach((route) => {
     assert.ok(registeredRoutes.includes(route), `${route} should be registered`);
   });
+  assert.ok(registeredRoutes.includes('/activity'));
   assert.ok(registeredRoutes.includes('/assistant'));
   assert.ok(registeredRoutes.includes('/dns'));
 });

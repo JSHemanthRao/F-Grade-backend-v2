@@ -376,6 +376,172 @@
           }
         }
       }
+    },
+    "/api/crm/activity": {
+      "get": {
+        "operationId": "getCRMActivityReport",
+        "tags": [
+          "CRM"
+        ],
+        "summary": "Get today's CRM activity and daily audit report",
+        "description": "Use this operation whenever the user asks for today's CRM activity, what an employee did today, show activity for all employees, or daily changes. Pass user_id for specific user activity or leave empty for all employees. Dates default to today in Asia/Kolkata timezone.",
+        "parameters": [
+          {
+            "name": "module",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Optional CRM module API name to filter activity by (e.g. Deals, Meetings, Notes)."
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Optional Zoho CRM user ID or user name to filter activity by (e.g. Sanjay)."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Optional start ISO datetime or YYYY-MM-DD string. Defaults to today 00:00:00+05:30."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Optional end ISO datetime or YYYY-MM-DD string. Defaults to tomorrow 00:00:00+05:30."
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Optional action filter such as created, updated, or added."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1,
+            "maximum": 200,
+            "description": "Maximum number of activity objects to return. Default is 100."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful CRM activity report response",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "date": {
+                  "type": "string"
+                },
+                "timezone": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "executionTime": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "data": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "user_id": {
+                        "type": "string"
+                      },
+                      "user_name": {
+                        "type": "string"
+                      },
+                      "module": {
+                        "type": "string"
+                      },
+                      "module_api_name": {
+                        "type": "string"
+                      },
+                      "record_id": {
+                        "type": "string"
+                      },
+                      "record_name": {
+                        "type": "string"
+                      },
+                      "action": {
+                        "type": "string"
+                      },
+                      "activity_type": {
+                        "type": "string"
+                      },
+                      "audited_time": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required or invalid OAuth token",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error or Zoho API error",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
