@@ -72,7 +72,30 @@ test('incomplete CRM retrieval is a reconciliation failure, not partial success'
     });
     const result = await dashboardService.getDashboard({ question: 'Create a sales dashboard for August 2026.' });
     assert.equal(result.crmError, true);
-    assert.equal(result.errorCode, 'CRM_DATA_RECONCILIATION_ERROR');
+    assert.equal(result.errorCode, 'CRM_DATA_RETRIEVAL_ERROR');
+  } finally {
+    recordsService.getRecords = originalGetRecords;
+  }
+});
+
+test('August dashboard uses the complete deduplicated CRM dataset for Closed Won metrics', async () => {
+  const originalGetRecords = recordsService.getRecords;
+  try {
+    recordsService.getRecords = async (module) => ({
+      data: module === 'deals' ? [
+        ...AUGUST_DEALS,
+        { ...AUGUST_DEALS[0], id: '1' },
+      ] : [],
+      info: { count: module === 'deals' ? 11 : 0, pagesFetched: 2, retrievalComplete: true, more_records: false },
+    });
+    const result = await dashboardService.getDashboard({ question: 'Create a sales dashboard for August 2026.' });
+    assert.equal(result.metrics.closedWonCount, 8);
+    assert.equal(result.metrics.closedWonRevenue, 666334.97);
+    assert.equal(result.reconciliation.sourceRecordCount, 11);
+    assert.equal(result.reconciliation.uniqueRecordCount, 10);
+    assert.equal(result.reconciliation.pagesRetrieved, 2);
+    assert.equal(result.reconciliation.employeeRevenueTotal, 666334.97);
+    assert.equal(result.reconciliation.reconciled, true);
   } finally {
     recordsService.getRecords = originalGetRecords;
   }

@@ -2,6 +2,7 @@ const recordsService = require('./retrieval-engine.service');
 const activityService = require('./activity.service');
 const metadataService = require('./crm-metadata.service');
 const closedWonDateService = require('./closed-won-date-service');
+const dealsService = require('./deals.service');
 const { formatCurrency, formatNumber, numericValue } = require('./assistant/currency.service');
 const { detectTimeRange } = require('./assistant/date-detector.service');
 const logger = require('../../common/logging/logger');
@@ -243,8 +244,10 @@ async function buildSalesDashboard(options = {}) {
   let deals = [];
   let leads = [];
   let dealsError = null;
+  let dealsErrorCode = 'CRM_API_ERROR';
   let leadsError = null;
   let dealsRetrievalInfo = null;
+  let dealsRetrievalMetadata = null;
 
   // Determine the appropriate date field based on the question
   let dateField = options.date_field;
@@ -264,6 +267,7 @@ async function buildSalesDashboard(options = {}) {
   const isClosedStatusQuery = options.question && /\bclosed\s+won\b|\bclosed\s+lost\b/i.test(options.question);
   const isExplicitCurrentStatus = options.question && /\balready\b|\bcurrently\b|\bnow\b/i.test(options.question);
   const hasPeriod = options.question && /this\s+month|last\s+month|january|february|march|april|may|june|july|august|september|october|november|december/i.test(options.question);
+  const hasExplicitDateContext = Boolean(options.dateRange?.from || detectTimeRange(options.question || options.title || options.prompt)?.startDate);
   
   if (!dateField && isClosedStatusQuery && isExplicitCurrentStatus) {
     // "already closed won" or "currently closed won" = no date filter
@@ -288,55 +292,42 @@ async function buildSalesDashboard(options = {}) {
     type: options.type || 'sales',
   });
 
-  // 1. Check if pre-fetched CRM data was provided directly from CRM connector or previous tool step
-  const providedDeals = options.data || options.records || options.deals;
-  if (Array.isArray(providedDeals) && providedDeals.length > 0) {
-    deals = providedDeals;
+  // Deals always come through the same complete retrieval and normalization path
+  // used by CRM record queries. Display batches are never accepted as a metric source.
+  try {
+    const dealsResult = await dealsService.getAllDeals({
+      records: options.data || options.records || options.deals,
+      info: options.info,
+      from: hasExplicitDateContext ? dateRange.from : undefined,
+      to: hasExplicitDateContext ? dateRange.to : undefined,
+      date_field: hasExplicitDateContext ? (dateField || 'Closing_Date') : undefined,
+      question: options.question,
+      signal: options.signal,
+    });
+    deals = dealsResult.data;
+    dealsRetrievalInfo = dealsResult.info;
+    dealsRetrievalMetadata = dealsResult.metadata;
     logger.info('[DASHBOARD CRM RESPONSE]', {
-      source: 'provided_data',
-      count: deals.length,
-    });
-  } else {
-    const crmParams = {
-      from: dateRange.from,
-      to: dateRange.to,
-      date_field: dateField,
-      retrieval_mode: 'all',
-      limit: options.limit || 2000,
-    };
-    logger.info('[DASHBOARD CRM REQUEST]', {
       endpoint: 'Deals',
-      module: 'deals',
-      criteria: `${dateField} >= ${String(dateRange.from).slice(0, 10)} AND ${dateField} < ${String(dateRange.to).slice(0, 10)}`,
-      retrieval_mode: crmParams.retrieval_mode,
-      limit: crmParams.limit,
+      status: 'success',
+      sourceRecordCount: dealsRetrievalMetadata.sourceRecordCount,
+      uniqueRecordCount: dealsRetrievalMetadata.uniqueRecordCount,
+      pagesRetrieved: dealsRetrievalMetadata.pagesRetrieved,
     });
-    try {
-      const dealsResult = await recordsService.getRecords('deals', {
-        ...crmParams,
-        signal: options.signal,
-      });
-      deals = dealsResult?.data || [];
-      dealsRetrievalInfo = dealsResult?.info || null;
-      logger.info('[DASHBOARD CRM RESPONSE]', {
-        endpoint: 'Deals',
-        status: 'success',
-        count: deals.length,
-      });
-    } catch (err) {
-      const statusCode = err.response?.status || err.status || 'unknown';
-      const crmBody = err.response?.data || {};
-      dealsError = crmBody.message
-        ? `Zoho CRM error (${crmBody.code || statusCode}): ${crmBody.message}`
-        : (crmBody.code ? `Zoho CRM error: ${crmBody.code}` : err.message);
-      logger.error('[DASHBOARD ERROR]', {
-        endpoint: 'Deals',
-        status: statusCode,
-        message: err.message,
-        crmCode: crmBody.code || null,
-        crmMessage: crmBody.message || null,
-      });
-    }
+  } catch (err) {
+    const statusCode = err.response?.status || err.status || 'unknown';
+    const crmBody = err.response?.data || {};
+    dealsError = crmBody.message
+      ? `Zoho CRM error (${crmBody.code || statusCode}): ${crmBody.message}`
+      : (crmBody.code ? `Zoho CRM error: ${crmBody.code}` : err.message);
+    if (err.code === 'CRM_DEALS_RETRIEVAL_INCOMPLETE') dealsErrorCode = 'CRM_DATA_RETRIEVAL_ERROR';
+    logger.error('[DASHBOARD ERROR]', {
+      endpoint: 'Deals',
+      status: statusCode,
+      message: err.message,
+      crmCode: crmBody.code || null,
+      crmMessage: crmBody.message || null,
+    });
   }
 
   // 2. If deals fetch failed with a CRM API error, return immediately with a failure result.
@@ -349,6 +340,7 @@ async function buildSalesDashboard(options = {}) {
     });
     return {
       crmError: true,
+      errorCode: dealsErrorCode,
       errorMessage: dealsError,
       dashboard: {
         title: options.title || 'Sales Performance Dashboard',
@@ -410,25 +402,11 @@ async function buildSalesDashboard(options = {}) {
     }
   }
 
-  // Normalize deal fields for downstream analytics and Code Executor compatibility
-  deals = deals.map((d) => ({
-    ...d,
-    id: d.id || d.ID,
-    Deal_Name: d.Deal_Name || d.Deal || d.deal_name || 'Untitled Deal',
-    Account_Name: typeof d.Account_Name === 'object' ? d.Account_Name : (d.Account_Name ? { name: d.Account_Name } : { name: 'Direct Customer' }),
-    Owner: typeof d.Owner === 'object' ? d.Owner : { name: d.Owner || d.Owner_Name || 'Unassigned' },
-    Stage: d.Stage || d.stage || 'Open',
-    Amount: numericValue(d.Amount || d.amount || 0) || 0,
-    Closing_Date: d.Closing_Date || d.closing_date || (d.Created_Time ? String(d.Created_Time).slice(0, 10) : dateRange.from.slice(0, 10)),
-    Created_Time: d.Created_Time || d.created_time || dateRange.from,
-  }));
-
   // Strict date filtering on deals: Closing_Date must be within half-open dateRange [start, end)
   const startIso = String(dateRange.from).slice(0, 10);
   const endIso = String(dateRange.to).slice(0, 10);
   const targetDateField = options.date_field || 'Closing_Date';
 
-  const hasExplicitDateContext = Boolean(options.dateRange?.from || detectTimeRange(options.question || options.title || options.prompt)?.startDate);
   if (hasExplicitDateContext) {
     deals = deals.filter((d) => {
       const dealDate = String(d[targetDateField] || d.Closing_Date || d.closing_date || d.Created_Time || '').slice(0, 10);
@@ -582,6 +560,19 @@ async function buildSalesDashboard(options = {}) {
     revenueTrend,
     dealFunnel,
     leadSources,
+  };
+
+  const reconciliation = {
+    sourceRecordCount: dealsRetrievalMetadata?.sourceRecordCount ?? deals.length,
+    uniqueRecordCount: dealsRetrievalMetadata?.uniqueRecordCount ?? deals.length,
+    pagesRetrieved: dealsRetrievalMetadata?.pagesRetrieved ?? Number(dealsRetrievalInfo?.pagesFetched || 1),
+    dateRange: { from: startIso, to: endIso },
+    dateField: targetDateField,
+    stageFilter: 'Closed Won',
+    closedWonCount: closedWonDeals.length,
+    closedWonRevenue,
+    employeeRevenueTotal: reconciledEmpRevenue,
+    reconciled: true,
   };
 
   const widgets = [];
@@ -794,6 +785,7 @@ async function buildSalesDashboard(options = {}) {
     ],
     summary,
     metrics,
+    reconciliation,
     data: deals,
     records: deals,
     tables,
@@ -803,6 +795,7 @@ async function buildSalesDashboard(options = {}) {
   return {
     dashboard: dashboardObj,
     metrics,
+    reconciliation,
     data: deals,
     records: deals,
     tables,
