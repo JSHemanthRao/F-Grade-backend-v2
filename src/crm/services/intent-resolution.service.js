@@ -210,10 +210,18 @@ function resolveDealDateMeaning(question, context = {}) {
 
   if (expectedClose) return { dateMeaning: 'expected_closing_date', requiresStageHistory: false, ambiguous: false };
   if (EXPLICIT_CLOSING_DATE_PATTERN.test(text)) return { dateMeaning: 'closing_date', requiresStageHistory: false, ambiguous: false };
-  if (closedWon && (detectStageHistory(text) || hasPeriod)) {
+  if (closedWon && detectStageHistory(text)) {
     return { dateMeaning: 'actual_closed_won_date', requiresStageHistory: true, ambiguous: false };
   }
+  if (closedWon && hasPeriod) {
+    return { dateMeaning: 'closing_date', requiresStageHistory: false, ambiguous: false };
+  }
   if (closedWon) return { dateMeaning: 'current_status', requiresStageHistory: false, ambiguous: false };
+  // For deals queries with explicit "created" or "modified", let the resolveBusinessRequest
+  // date field selection logic handle it based on keywords, not dateMeaning
+  if (/\bcreated|creation|added|newly\s+created\b/i.test(text)) return { dateMeaning: null, requiresStageHistory: false, ambiguous: false };
+  if (/\bmodified|updated|changed\b/i.test(text)) return { dateMeaning: null, requiresStageHistory: false, ambiguous: false };
+  // Default: period queries that aren't about Closed Won or explicit fields use Closing_Date
   return { dateMeaning: hasPeriod ? 'closing_date' : null, requiresStageHistory: false, ambiguous: false };
 }
 
@@ -291,8 +299,11 @@ function resolveBusinessRequest(question, context = {}) {
   // Step 6: Detect status/category
   const status = detectStatus(correctedQuestion);
 
-  // Step 7: Detect stage history requirement
-  const dealDateMeaning = resolveDealDateMeaning(correctedQuestion, context);
+  // Step 7: Detect stage history requirement (deals module only)
+  let dealDateMeaning = { dateMeaning: null, requiresStageHistory: false, ambiguous: false };
+  if (module === 'deals') {
+    dealDateMeaning = resolveDealDateMeaning(correctedQuestion, context);
+  }
   const requiresStageHistory = dealDateMeaning.requiresStageHistory || detectStageHistory(correctedQuestion);
 
   // Step 8: Resolve date range
