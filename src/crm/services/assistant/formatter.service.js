@@ -231,9 +231,9 @@ function metricSummary(calculations, dataLength) {
     const periods = Object.entries(comparison.value).filter(([key]) => key !== 'difference');
     return `comparison: ${periods.map(([period, value]) => `${period} ${formatCurrency(value)}`).join('; ')}; difference ${formatCurrency(comparison.value.difference)}.`;
   }
-  if (average) return `Average deal value: ${formatCurrency(average.value)}.`;
   if (sum) return `Total value: ${formatCurrency(sum.value)}.`;
   if (totalRevenue) return `Total revenue: ${formatCurrency(totalRevenue.value)}.`;
+  if (average) return `Average deal value: ${formatCurrency(average.value)}.`;
   if (closedWon) return `Closed Won value: ${formatCurrency(closedWon.value)}.`;
   if (counts) return `Record counts: ${Object.entries(counts.value).map(([module, value]) => `${module} ${formatNumber(value)}`).join(', ')}.`;
   if (count) return `${formatNumber(count.value)} matching ${Number(count.value) === 1 ? 'record' : 'records'}.`;

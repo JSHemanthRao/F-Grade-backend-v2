@@ -1,5 +1,6 @@
 const { DEBUG_ASSISTANT } = require('../../../common/config/env');
 const recordsService = require('../retrieval-engine.service');
+const dealsService = require('../deals.service');
 const logger = require('../../../common/logging/logger');
 
 function isTimeoutOrCancellation(error) {
@@ -198,7 +199,18 @@ async function executePlan({ plan, question, moduleCandidates, context = {}, con
         }
 
         if (DEBUG_ASSISTANT) logger.info('Execution Engine', { module: moduleKey, period, type: step.type });
-        const execute = (options) => recordsService.getRecords(moduleKey, options);
+        const execute = async (options) => {
+          if (moduleKey !== 'deals') return recordsService.getRecords(moduleKey, options);
+          const dealsResult = await dealsService.getAllDeals(options);
+          return {
+            data: dealsResult.data,
+            info: {
+              ...dealsResult.info,
+              count: dealsResult.metadata.uniqueRecordCount,
+            },
+            metadata: dealsResult.metadata,
+          };
+        };
         if (DEBUG_ASSISTANT) logger.info('Execution Engine', {
           module: moduleKey,
           period,

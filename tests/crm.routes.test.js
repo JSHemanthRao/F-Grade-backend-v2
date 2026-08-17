@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const router = require('../src/crm/routes');
 const controller = require('../src/crm/controllers/crm.controller');
 const recordsService = require('../src/crm/services/records.service');
+const dealsService = require('../src/crm/services/deals.service');
 const { zohoClient } = require('../src/common/config/axios');
 const openapiSpec = require('../src/crm/openapi/crm.openapi.json');
 
@@ -143,12 +144,16 @@ test('CRM controller resolves the requested module from the matched route path',
   recordsService.getRecords = originalGetRecords;
 });
 
-test('CRM query tool does not treat Copilot 1/25 defaults as complete retrieval', async () => {
-  const originalGetRecords = recordsService.getRecords;
+test('CRM Deals query ignores incidental 1/25 pagination and retrieves the complete unique dataset', async () => {
+  const originalGetAllDeals = dealsService.getAllDeals;
   let receivedOptions;
-  recordsService.getRecords = async (_moduleName, options) => {
+  dealsService.getAllDeals = async (options) => {
     receivedOptions = options;
-    return { data: [{ id: '1' }], info: { count: 26, retrievalComplete: true } };
+    return {
+      data: [{ id: '1' }, { id: '2' }],
+      info: { count: 2, retrievalComplete: true, pagesFetched: 2 },
+      metadata: { uniqueRecordCount: 2 },
+    };
   };
 
   try {
@@ -162,13 +167,17 @@ test('CRM query tool does not treat Copilot 1/25 defaults as complete retrieval'
 
     await controller.getModuleQuery(req, res, () => {});
 
-    assert.equal(receivedOptions.retrieval_mode, undefined);
+    assert.equal(receivedOptions.retrieval_mode, 'all');
+    assert.equal(receivedOptions.page, undefined);
+    assert.equal(receivedOptions.per_page, undefined);
+    assert.equal(receivedOptions.limit, undefined);
     assert.equal(receivedOptions.criteria, undefined);
     assert.equal(receivedOptions.filter, '(Stage:equals:Closed Won)');
     assert.equal(receivedOptions.force_coql, false);
-    assert.equal(res.payload.count, 26);
+    assert.equal(res.payload.count, 2);
+    assert.deepEqual(res.payload.data, [{ id: '1' }, { id: '2' }]);
   } finally {
-    recordsService.getRecords = originalGetRecords;
+    dealsService.getAllDeals = originalGetAllDeals;
   }
 });
 
@@ -437,7 +446,7 @@ test('CRM query endpoint interprets "give me the closed deals of last month" as 
 
   zohoClient.get = async (url, config) => {
     requests.push({ url, config });
-    const matchingRecords = url === '/crm/v8/Deals' && config.params.criteria === expectedCriteria
+    const matchingRecords = config.params.criteria === expectedCriteria
       ? mockZohoRecords.filter((record) => new Date(record.Closing_Date) >= new Date('2026-07-01T00:00:00+05:30') && new Date(record.Closing_Date) < new Date('2026-08-01T00:00:00+05:30'))
       : mockZohoRecords;
 
@@ -464,12 +473,13 @@ test('CRM query endpoint interprets "give me the closed deals of last month" as 
     await controller.getModuleQuery(req, res, () => {});
 
     assert.equal(requests.length, 1);
-    assert.equal(requests[0].url, '/crm/v8/Deals');
+    assert.equal(requests[0].url, '/crm/v8/Deals/search');
+    assert.equal(requests[0].config.params.per_page, 200);
     assert.equal(requests[0].config.params.criteria, expectedCriteria);
     assert.ok(requests[0].config.params.criteria.includes("Stage:equals:Closed Won"));
     assert.ok(requests[0].config.params.criteria.includes("Closing_Date:greater_equal:2026-07-01T00:00:00Z"));
     assert.ok(requests[0].config.params.criteria.includes("Closing_Date:less_than:2026-08-01T00:00:00Z"));
-    assert.deepEqual(res.payload.data, [julyDeal]);
+    assert.deepEqual(res.payload.data.map((record) => record.id), ['deal-july']);
     assert.equal(res.payload.data.every((record) => record.Stage === 'Closed Won' && new Date(record.Closing_Date) >= new Date('2026-07-01T00:00:00+05:30') && new Date(record.Closing_Date) < new Date('2026-08-01T00:00:00+05:30')), true);
   } finally {
     zohoClient.get = originalGet;

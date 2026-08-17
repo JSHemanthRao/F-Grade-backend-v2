@@ -362,18 +362,18 @@ test('assistant keeps first-N list requests bounded to the requested CRM page', 
   }
 });
 
-test('assistant uses CRM-side aggregation for total Closed Won value', async () => {
+test('assistant calculates total Closed Won value from the complete Deal dataset', async () => {
   const originalGetRecords = recordsService.getRecords;
   const calls = [];
   recordsService.getRecords = async (_module, options) => {
     calls.push(options);
     return {
-      data: [],
+      data: [
+        { id: 'june-1', Stage: 'Closed Won', Amount: 100000, Closing_Date: '2026-06-05' },
+        { id: 'june-2', Stage: 'Closed Won', Amount: 25000, Closing_Date: '2026-06-12' },
+      ],
       info: {
-        count: 4,
-        aggregateValues: { sum: 125000 },
-        aggregateValue: 125000,
-        retrievalStrategy: 'aggregate',
+        count: 2,
         retrievalComplete: true,
         more_records: false,
       },
@@ -383,7 +383,7 @@ test('assistant uses CRM-side aggregation for total Closed Won value', async () 
   try {
     const response = await assistantEngine.handleAssistantRequest({ question: 'What was the total Closed Won value in June 2026?' });
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].retrieval_mode, 'aggregate');
+    assert.equal(calls[0].retrieval_mode, 'all');
     assert.match(calls[0].criteria, /Stage:equals:Closed Won/);
     assert.match(calls[0].criteria, /Closing_Date:greater_equal:2026-06-01/);
     assert.match(response.summary, /₹1,25,000/);
@@ -456,19 +456,23 @@ test('assistant filters July data to existing customers only after complete retr
   }
 });
 
-test('assistant compares named periods with one CRM-side aggregate per period', async () => {
+test('assistant compares named periods from complete Deal datasets', async () => {
   const originalGetRecords = recordsService.getRecords;
   const calls = [];
   recordsService.getRecords = async (_module, options) => {
     calls.push(options);
     const sum = calls.length === 2 ? 225000 : 125000;
     return {
-      data: [],
+      data: [
+        {
+          id: `period-${calls.length}`,
+          Stage: 'Closed Won',
+          Amount: sum,
+          Closing_Date: calls.length === 2 ? '2026-07-15' : '2026-06-15',
+        },
+      ],
       info: {
-        count: 2,
-        aggregateValues: { sum },
-        aggregateValue: sum,
-        retrievalStrategy: 'aggregate',
+        count: 1,
         retrievalComplete: true,
         more_records: false,
       },
@@ -478,9 +482,9 @@ test('assistant compares named periods with one CRM-side aggregate per period', 
   try {
     const response = await assistantEngine.handleAssistantRequest({ question: 'Compare Closed Won value for June 2026 and July 2026' });
     assert.equal(calls.length, 2);
-    assert.equal(calls.every((options) => options.retrieval_mode === 'aggregate'), true);
-    assert.equal(calls.some((options) => /june\s+2026/i.test(options.request_text || '')), true);
-    assert.equal(calls.some((options) => /july\s+2026/i.test(options.request_text || '')), true);
+    assert.equal(calls.every((options) => options.retrieval_mode === 'all'), true);
+    assert.equal(calls.some((options) => String(options.queryPlan?.startDate || '').startsWith('2026-06-01')), true);
+    assert.equal(calls.some((options) => String(options.queryPlan?.startDate || '').startsWith('2026-07-01')), true);
     const comparison = response.calculations.find((item) => item.type === 'comparison');
     assert.equal(comparison.value['june 2026'], 125000);
     assert.equal(comparison.value['july 2026'], 225000);

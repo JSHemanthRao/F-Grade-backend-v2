@@ -1,5 +1,6 @@
 const { DEBUG_ASSISTANT } = require('../../common/config/env');
 const recordsService = require('../services/retrieval-engine.service');
+const dealsService = require('../services/deals.service');
 const { resolveRequestedModule } = require('../validators/crm.validator');
 const { getModuleDefinition } = require('../services/module-definition.service');
 const assistantEngine = require('../services/assistant-engine.service');
@@ -155,11 +156,37 @@ async function getModuleQuery(req, res, next) {
 
     let result;
     try {
-      result = await (isCountOperation ? recordsService.getCount : recordsService.getRecords)(moduleKey, {
-        ...options,
-        ...(isCountOperation ? { retrieval_mode: 'count' } : {}),
-        ...(requestContext.signal ? { signal: requestContext.signal } : {}),
-      });
+      if (moduleKey === 'deals') {
+        const dealsResult = await dealsService.getAllDeals({
+          ...options,
+          page: undefined,
+          per_page: undefined,
+          limit: undefined,
+          retrieval_mode: 'all',
+          ...(requestContext.signal ? { signal: requestContext.signal } : {}),
+        });
+        result = isCountOperation
+          ? {
+            data: [],
+            info: {
+              ...dealsResult.info,
+              count: dealsResult.metadata.uniqueRecordCount,
+            },
+          }
+          : {
+            data: dealsResult.data,
+            info: {
+              ...dealsResult.info,
+              count: dealsResult.metadata.uniqueRecordCount,
+            },
+          };
+      } else {
+        result = await (isCountOperation ? recordsService.getCount : recordsService.getRecords)(moduleKey, {
+          ...options,
+          ...(isCountOperation ? { retrieval_mode: 'count' } : {}),
+          ...(requestContext.signal ? { signal: requestContext.signal } : {}),
+        });
+      }
     } finally {
       requestContext.cleanup();
     }
@@ -204,10 +231,25 @@ async function getModuleCount(req, res, next) {
 
     let result;
     try {
-      result = await recordsService.getCount(moduleKey, {
-        ...options,
-        ...(requestContext.signal ? { signal: requestContext.signal } : {}),
-      });
+      if (moduleKey === 'deals') {
+        const dealsResult = await dealsService.getAllDeals({
+          ...options,
+          retrieval_mode: 'all',
+          ...(requestContext.signal ? { signal: requestContext.signal } : {}),
+        });
+        result = {
+          data: [],
+          info: {
+            ...dealsResult.info,
+            count: dealsResult.metadata.uniqueRecordCount,
+          },
+        };
+      } else {
+        result = await recordsService.getCount(moduleKey, {
+          ...options,
+          ...(requestContext.signal ? { signal: requestContext.signal } : {}),
+        });
+      }
     } finally {
       requestContext.cleanup();
     }

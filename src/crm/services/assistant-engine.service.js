@@ -1,5 +1,6 @@
 const { DEBUG_ASSISTANT } = require('../../common/config/env');
 const recordsService = require('./retrieval-engine.service');
+const dealsService = require('./deals.service');
 const { detectDnsRequest } = require('./assistant/dns-detector.service');
 const { resolveDnsRecords, filterDnsRecords, formatDnsResponse } = require('./dns.service');
 const { buildExecutionPlan } = require('./assistant/planner.service');
@@ -384,7 +385,19 @@ async function handleAssistantRequest(payload = {}) {
       item.result?.info?.more_records === true || item.result?.info?.retrievalComplete === false
     ) && !item.step?.explicit)) {
       const options = { question, fields: dataset.step.requiredFieldsByModule?.[dataset.module], retrieval_mode: 'all', force_coql: true };
-      dataset.result = await recordsService.getRecords(dataset.module, options);
+      if (dataset.module === 'deals') {
+        const dealsResult = await dealsService.getAllDeals(options);
+        dataset.result = {
+          data: dealsResult.data,
+          info: {
+            ...dealsResult.info,
+            count: dealsResult.metadata.uniqueRecordCount,
+          },
+          metadata: dealsResult.metadata,
+        };
+      } else {
+        dataset.result = await recordsService.getRecords(dataset.module, options);
+      }
     }
     merged = mergeDatasets(merged.datasets);
     const retryResult = calculateResult(plan, merged.datasets);
