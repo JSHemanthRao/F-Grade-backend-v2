@@ -1,6 +1,7 @@
 const recordsService = require('./retrieval-engine.service');
 const activityService = require('./activity.service');
 const metadataService = require('./crm-metadata.service');
+const closedWonDateService = require('./closed-won-date-service');
 const { formatCurrency, formatNumber, numericValue } = require('./assistant/currency.service');
 const { detectTimeRange } = require('./assistant/date-detector.service');
 const logger = require('../../common/logging/logger');
@@ -68,9 +69,43 @@ function formatPercentage(num) {
   return `${sign}${Number(num).toFixed(1)}%`;
 }
 
-function isClosedWonStage(stage) {
-  const normalized = String(stage || '').trim().toLowerCase();
-  return normalized === 'closed won' || normalized === 'closed-won' || normalized === 'won';
+/**
+ * Determines if a deal's current Stage maps to Closed Won.
+ * Uses the closed-won-date-service for consistent business logic.
+ * 
+ * Key: This checks CURRENT status only. A deal with future Closing_Date can still be Closed Won.
+ * Rule: Do NOT use Closing_Date to decide if a deal is closed—use current Stage field only.
+ *
+ * @param {string} stage - The current Stage value from the deal record
+ * @param {object} stageMetadata - Optional: Organization's Zoho CRM stage metadata
+ * @returns {boolean} true if the deal's current stage maps to Closed Won
+ */
+function isClosedWonStage(stage, stageMetadata = null) {
+  return closedWonDateService.isCurrentlyClosedWon(stage, stageMetadata);
+}
+
+/**
+ * Determines if a deal's current Stage maps to Closed Lost.
+ * Uses the closed-won-date-service for consistent business logic.
+ *
+ * @param {string} stage - The current Stage value from the deal record
+ * @param {object} stageMetadata - Optional: Organization's Zoho CRM stage metadata
+ * @returns {boolean} true if the deal's current stage maps to Closed Lost
+ */
+function isClosedLostStage(stage, stageMetadata = null) {
+  return closedWonDateService.isCurrentlyClosedLost(stage, stageMetadata);
+}
+
+/**
+ * Determines if a deal's current Stage maps to Open.
+ * Uses the closed-won-date-service for consistent business logic.
+ *
+ * @param {string} stage - The current Stage value from the deal record
+ * @param {object} stageMetadata - Optional: Organization's Zoho CRM stage metadata
+ * @returns {boolean} true if the deal is currently Open
+ */
+function isOpenStage(stage, stageMetadata = null) {
+  return closedWonDateService.isCurrentlyOpen(stage, stageMetadata);
 }
 
 function computeStageDistribution(deals = []) {

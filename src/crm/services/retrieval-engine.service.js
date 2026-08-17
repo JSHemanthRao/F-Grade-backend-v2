@@ -1522,8 +1522,98 @@ async function getModuleFields(moduleKey = 'leads') {
   return rawFields.map((field) => field.api_name || field.apiName || field.field_label || field.name || field).filter(Boolean);
 }
 
+/**
+ * Retrieves stage transition history for deals.
+ * Uses the Zoho Activity Service to fetch audit log entries showing when a deal
+ * transitioned into Closed Won stage.
+ *
+ * @param {object} options - Query options
+ * @param {string} options.dealId - Specific deal ID to fetch history for (optional)
+ * @param {string} options.from - Start date (ISO 8601 format)
+ * @param {string} options.to - End date (ISO 8601 format)
+ * @param {string} options.targetStage - Stage to match (e.g., "Closed Won")
+ * @param {number} options.limit - Max records to return
+ * @returns {array} Stage transition entries with timestamps
+ */
+async function getStageTransitionHistory(options = {}) {
+  const activityService = require('./activity.service');
+
+  const {
+    dealId = null,
+    from = null,
+    to = null,
+    targetStage = 'Closed Won',
+    limit = 1000,
+  } = options;
+
+  try {
+    logger.info('[STAGE TRANSITION HISTORY]', {
+      event: 'fetch_start',
+      dealId,
+      from,
+      to,
+      targetStage,
+    });
+
+    // Use activity service to fetch stage change history
+    const activities = await activityService.getActivities({
+      module: 'deals',
+      from,
+      to,
+      action: 'update', // Only interested in updates (stage changes)
+      limit,
+    });
+
+    // Filter to only stage transitions into the target stage
+    const stageTransitions = (activities || [])
+      .filter((activity) => {
+        const isStageChange = activity.field === 'Stage';
+        const isTargetStage =
+          String(activity.new_value || '').toLowerCase() ===
+          String(targetStage || '').toLowerCase();
+        const isSpecificDeal = !dealId || String(activity.record_id) === String(dealId);
+
+        return isStageChange && isTargetStage && isSpecificDeal;
+      })
+      .map((activity) => ({
+        recordId: activity.record_id,
+        recordName: activity.record_name,
+        transitionedTo: activity.new_value,
+        transitionedFrom: activity.old_value,
+        transitionTime: activity.time || activity.audited_time,
+        user: activity.user_name,
+        userId: activity.user_id,
+      }));
+
+    logger.info('[STAGE TRANSITION HISTORY]', {
+      event: 'fetch_complete',
+      dealId,
+      targetStage,
+      matchingTransitions: stageTransitions.length,
+    });
+
+    return stageTransitions;
+  } catch (error) {
+    logger.warn('[STAGE TRANSITION HISTORY]', {
+      event: 'fetch_error',
+      dealId,
+      targetStage,
+      error: error.message,
+    });
+
+    // If audit logs not available, return empty array
+    // (Caller should handle gracefully or fall back to alternative logic)
+    if (error.isScopeMismatch) {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
 module.exports = {
   getCount,
   getModuleFields,
   getRecords,
+  getStageTransitionHistory,
 };
