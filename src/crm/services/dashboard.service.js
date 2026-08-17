@@ -244,6 +244,7 @@ async function buildSalesDashboard(options = {}) {
   let leads = [];
   let dealsError = null;
   let leadsError = null;
+  let dealsRetrievalInfo = null;
 
   // Determine the appropriate date field based on the question
   let dateField = options.date_field;
@@ -316,6 +317,7 @@ async function buildSalesDashboard(options = {}) {
         signal: options.signal,
       });
       deals = dealsResult?.data || [];
+      dealsRetrievalInfo = dealsResult?.info || null;
       logger.info('[DASHBOARD CRM RESPONSE]', {
         endpoint: 'Deals',
         status: 'success',
@@ -426,8 +428,8 @@ async function buildSalesDashboard(options = {}) {
   const endIso = String(dateRange.to).slice(0, 10);
   const targetDateField = options.date_field || 'Closing_Date';
 
-  const hasExplicitDateContext = Boolean(options.dateRange?.from || detectTimeRange(options.question || options.title || options.prompt));
-  if (hasExplicitDateContext || !providedDeals) {
+  const hasExplicitDateContext = Boolean(options.dateRange?.from || detectTimeRange(options.question || options.title || options.prompt)?.startDate);
+  if (hasExplicitDateContext) {
     deals = deals.filter((d) => {
       const dealDate = String(d[targetDateField] || d.Closing_Date || d.closing_date || d.Created_Time || '').slice(0, 10);
       if (!dealDate) return false;
@@ -449,9 +451,14 @@ async function buildSalesDashboard(options = {}) {
     });
   }
 
-  const totalRevenue = deals.reduce((sum, d) => sum + (numericValue(d.Amount || d.amount || 0) || 0), 0);
-  const closedWonDeals = deals.filter((d) => isClosedWonStage(d.Stage || d.stage));
-  const closedWonRevenue = closedWonDeals.reduce((sum, d) => sum + (numericValue(d.Amount || d.amount || 0) || 0), 0);
+  const totalRevenue = deals.reduce((sum, d) => sum + (numericValue(d.Amount ?? d.amount ?? 0) || 0), 0);
+  const closedWonMetrics = closedWonDateService.calculateClosedWonMetrics(deals, {
+    dateFrom: hasExplicitDateContext ? startIso : null,
+    dateTo: hasExplicitDateContext ? endIso : null,
+    dateMeaning: hasExplicitDateContext ? 'closing_date' : 'current_status',
+  });
+  const closedWonDeals = closedWonMetrics.records;
+  const closedWonRevenue = closedWonMetrics.revenue;
   const winRate = deals.length > 0 ? (closedWonDeals.length / deals.length) * 100 : 0;
   const avgDealSize = deals.length > 0 ? totalRevenue / deals.length : 0;
 
@@ -464,7 +471,26 @@ async function buildSalesDashboard(options = {}) {
     total_amount: closedWonRevenue,
     total_deals: deals.length,
     total_revenue: totalRevenue,
+    records_retrieved: deals.length,
+    records_after_filtering: deals.length,
+    closed_won_count: closedWonDeals.length,
+    closed_won_amount: closedWonRevenue,
+    final_returned_amount: closedWonRevenue,
+    retrieval_complete: dealsRetrievalInfo?.retrievalComplete !== false && dealsRetrievalInfo?.more_records !== true,
   });
+
+  if (dealsRetrievalInfo?.retrievalComplete === false || dealsRetrievalInfo?.more_records === true) {
+    return {
+      crmError: true,
+      errorCode: 'CRM_DATA_RECONCILIATION_ERROR',
+      errorMessage: 'CRM Closed Won metrics could not be calculated because CRM pagination was incomplete.',
+      reconciliationErrors: ['CRM_DATA_RECONCILIATION_ERROR'],
+      dashboard: { title: options.title || 'Sales Performance Dashboard', type: 'sales', theme, dateRange, summary: 'CRM data reconciliation failed.', metrics: null, data: [], records: [], tables: [], widgets: [] },
+      data: [],
+      records: [],
+      tables: [],
+    };
+  }
 
   const stageDistribution = computeStageDistribution(deals);
   const employeeRevenue = computeEmployeeRevenue(closedWonDeals);
@@ -502,6 +528,7 @@ async function buildSalesDashboard(options = {}) {
     });
     return {
       crmError: true,
+      errorCode: 'CRM_DATA_RECONCILIATION_ERROR',
       errorMessage: `The dashboard could not be generated because dashboard metrics did not reconcile. ${reconciliationErrors.join(' ')}`,
       reconciliationErrors,
       dashboard: {

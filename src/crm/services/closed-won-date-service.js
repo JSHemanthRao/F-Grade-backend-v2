@@ -17,6 +17,7 @@
 const logger = require('../../common/logging/logger');
 const metadataService = require('./crm-metadata.service');
 const activityService = require('./activity.service');
+const { numericValue } = require('./assistant/currency.service');
 
 /**
  * Standard Closed Won stage/category mappings.
@@ -160,6 +161,45 @@ function filterCurrentlyClosedWon(deals = [], stageMetadata = null) {
   return deals.filter((deal) =>
     isCurrentlyClosedWon(deal.Stage || deal.stage, stageMetadata)
   );
+}
+
+/**
+ * Returns the current Closed Won deal snapshot, optionally restricted by the
+ * expected Closing_Date window. Current status is always decided by Stage.
+ */
+function getClosedWonDeals(deals = [], options = {}) {
+  const {
+    stageMetadata = null,
+    dateFrom = null,
+    dateTo = null,
+    dateMeaning = null,
+  } = options;
+  const closedWonDeals = filterCurrentlyClosedWon(deals, stageMetadata);
+
+  if (dateMeaning === 'actual_closed_won_date') {
+    throw new Error('Actual Closed Won dates require stage history, not deal snapshots.');
+  }
+  if (!dateFrom || !dateTo || dateMeaning !== 'closing_date') return closedWonDeals;
+  return filterClosedWonWithClosingDate(closedWonDeals, dateFrom, dateTo, stageMetadata);
+}
+
+/**
+ * Calculates count and revenue from the same complete Closed Won dataset.
+ * Amount is parsed without truncating decimal currency values.
+ */
+function calculateClosedWonMetrics(deals = [], options = {}) {
+  const records = getClosedWonDeals(deals, options);
+  const amountField = options.amountField || 'Amount';
+  const closedWonRevenue = records.reduce((total, deal) => {
+    const value = numericAmount(deal?.[amountField] ?? deal?.Amount ?? deal?.amount);
+    return total + value;
+  }, 0);
+  return {
+    records,
+    count: records.length,
+    revenue: Number(closedWonRevenue.toFixed(2)),
+    amountField,
+  };
 }
 
 /**
@@ -368,8 +408,7 @@ function normalizeDealForTransition(deal) {
 }
 
 function numericAmount(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : 0;
+  return numericValue(value) ?? 0;
 }
 
 /**
@@ -626,6 +665,8 @@ module.exports = {
   isCurrentlyOpen,
   isValidClosingDate,
   filterCurrentlyClosedWon,
+  getClosedWonDeals,
+  calculateClosedWonMetrics,
   filterClosedWonWithClosingDate,
   disambiguateClosedWonDateQuery,
   buildClosedWonWithClosingDateCriteria,

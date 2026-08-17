@@ -37,12 +37,18 @@ const ZOHO_CLIENT_SECRET = process.env.ZOHO_CLIENT_SECRET || process.env.CLIENT_
 const ZOHO_REFRESH_TOKEN = process.env.ZOHO_REFRESH_TOKEN || process.env.REFRESH_TOKEN || '';
 const ZOHO_API_DOMAIN = process.env.ZOHO_API_DOMAIN || process.env.API_DOMAIN || '';
 
+function defaultAccountsUrl(apiDomain) {
+  const host = new URL(apiDomain).hostname.toLowerCase();
+  const suffix = host.replace(/^www\./, '').replace(/^zohoapis\./, '');
+  return `https://accounts.zoho.${suffix}`;
+}
+
 module.exports = {
   APP_NAME: process.env.APP_NAME || 'F-Grade Corporate AI Backend',
   NODE_ENV: process.env.NODE_ENV || 'development',
   DEBUG_ASSISTANT: process.env.DEBUG_ASSISTANT === 'true' || process.env.DEBUG_ASSISTANT === '1',
   PORT: toNumber(process.env.PORT, 3000),
-  ZOHO_ACCOUNTS_URL: process.env.ZOHO_ACCOUNTS_URL || 'https://accounts.zoho.in',
+  ZOHO_ACCOUNTS_URL: process.env.ZOHO_ACCOUNTS_URL || defaultAccountsUrl(ZOHO_API_DOMAIN),
   ZOHO_API_DOMAIN,
   // Keep individual CRM calls comfortably below the Copilot connector
   // deadline. Deployments can still override this explicitly.

@@ -5,7 +5,13 @@ const {
   ZOHO_API_DOMAIN,
   ZOHO_API_TIMEOUT_MS,
 } = require('./env');
-const { getAuthorizationHeader } = require('../auth/auth.service');
+const {
+  getAuthorizationHeader,
+  getAccessToken,
+  isInvalidTokenError,
+  authenticationError,
+} = require('../auth/auth.service');
+const tokenService = require('../auth/token.service');
 const logger = require('../logging/logger');
 
 const keepAliveOptions = {
@@ -55,6 +61,23 @@ zohoClient.interceptors.response.use(
   },
   (error) => {
     logRequestDuration(error.config, error.response?.status, error.code);
+
+    const config = error.config;
+    if (config && isInvalidTokenError(error) && !config._zohoAuthRetry) {
+      config._zohoAuthRetry = true;
+      tokenService.clearAccessToken();
+      return getAccessToken({ forceRefresh: true, signal: config.signal })
+        .then(() => zohoClient(config))
+        .catch((refreshError) => {
+          if (refreshError?.isZohoAuthenticationError) throw refreshError;
+          throw authenticationError('Zoho authentication failed after the CRM rejected the access token.', refreshError);
+        });
+    }
+
+    if (isInvalidTokenError(error)) {
+      throw authenticationError('Zoho authentication failed after the refreshed access token was rejected.', error);
+    }
+
     return Promise.reject(error);
   },
 );

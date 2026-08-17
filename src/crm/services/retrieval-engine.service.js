@@ -1244,7 +1244,41 @@ async function getRecords(moduleKey, options = {}) {
           reason: 'coql_scope_unavailable',
           message: 'Falling back to exact CRM Search aggregation',
         });
-        const result = await executeSearchAggregate(normalizedKey, moduleDefinition, effectiveOptions);
+        let result;
+        try {
+          result = await executeSearchAggregate(normalizedKey, moduleDefinition, effectiveOptions);
+        } catch (fallbackError) {
+          if (fallbackError?.response?.status !== 400) throw fallbackError;
+          logger.warn('Retrieval Engine', {
+            module: normalizedKey,
+            reason: 'aggregate_search_rejected',
+            message: 'Falling back to complete matching records for local aggregation',
+          });
+          const recordsResult = await executeSearchRecords(normalizedKey, moduleDefinition, {
+            ...effectiveOptions,
+            force_coql: false,
+            force_search: true,
+            retrieval_mode: 'all',
+            fields: [getAggregateField(moduleDefinition, effectiveOptions.aggregate_field), 'id'],
+          }, { ...retrievalPlan, fetchAll: true });
+          const field = getAggregateField(moduleDefinition, effectiveOptions.aggregate_field);
+          const aggregateValues = numericAggregateValues(recordsResult.data || [], field, normalizeAggregateMetrics(effectiveOptions));
+          result = {
+            data: [],
+            info: {
+              count: recordsResult.data?.length || 0,
+              more_records: false,
+              retrievalComplete: recordsResult.info?.retrievalComplete !== false,
+              page: 1,
+              per_page: 1,
+              retrievalStrategy: RETRIEVAL_STRATEGIES.AGGREGATE,
+              aggregateField: field,
+              aggregateValues,
+              aggregateValue: aggregateValues.sum ?? aggregateValues.average ?? 0,
+              fallback: 'complete_matching_records',
+            },
+          };
+        }
         logRetrievalTelemetry({
           moduleKey: normalizedKey,
           criteria: effectiveOptions.criteria,

@@ -191,8 +191,6 @@ async function handleAssistantRequest(payload = {}) {
     const suppliedData = payload?.data
       || payload?.records
       || payload?.deals
-      || payload?.context?.datasets?.flatMap((ds) => ds?.result?.data || ds?.data || [])
-      || payload?.conversationContext?.datasets?.flatMap((ds) => ds?.result?.data || ds?.data || [])
       || undefined;
 
     try {
@@ -206,6 +204,17 @@ async function handleAssistantRequest(payload = {}) {
         data: Array.isArray(suppliedData) && suppliedData.length > 0 ? suppliedData : undefined,
         signal: payload.signal,
       });
+
+      if (dashboardResult.crmError) {
+        return {
+          success: false,
+          summary: dashboardResult.errorMessage || 'The CRM dashboard data could not be reconciled.',
+          error: {
+            code: dashboardResult.errorCode || 'CRM_API_ERROR',
+            message: dashboardResult.errorMessage || 'The CRM dashboard data could not be reconciled.',
+          },
+        };
+      }
 
       const dashboardObj = dashboardResult.dashboard;
       const rawRecords = dashboardResult.data || dashboardObj.data || [];

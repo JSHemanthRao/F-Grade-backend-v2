@@ -383,7 +383,7 @@ async function getDashboardData(req, res, next) {
       return res.status(502).json({
         success: false,
         error: {
-          code: 'CRM_API_ERROR',
+          code: result.errorCode || 'CRM_API_ERROR',
           message: result.errorMessage || 'The CRM API returned an error. The dashboard could not be generated.',
         },
         dashboard: result.dashboard,
