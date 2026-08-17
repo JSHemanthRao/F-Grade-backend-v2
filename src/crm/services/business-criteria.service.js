@@ -4,7 +4,7 @@ const EXPLICIT_CREATION_PATTERN = /\b(created|creation|added|newly\s+created)\b/
 const NEW_CUSTOMER_PATTERN = /\bnew\s+(?:customers?|accounts?|records?)\b|\b(?:customers?|accounts?|records?)\s+(?:created|added)\b/i;
 const EXISTING_ONLY_PATTERN = /\bexisting\s+(?:customers?|accounts?|records?)\s+only\b|\bonly\s+existing\s+(?:customers?|accounts?|records?)\b/i;
 const NEW_ONLY_PATTERN = /\bnew\s+(?:customers?|accounts?|records?)\s+only\b|\bonly\s+new\s+(?:customers?|accounts?|records?)\b/i;
-const CLOSED_WON_STATUS_PATTERN = /\b(closed\s+won|closed\s+lost|already\s+closed|already\s+won|currently\s+closed)\b/i;
+const CLOSED_WON_STATUS_PATTERN = /\b(closed\s+(?:won|lost|deals?)|already\s+closed|already\s+won|currently\s+closed|deals?\s+that\s+are\s+closed|closed\s+sales?)\b/i;
 const CLOSED_WON_IN_PERIOD_PATTERN = /\b(?:closed\s+won|won)\b[\s\S]{0,40}\b(?:in|during|on|of)\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|last\s+month|this\s+month)\b/i;
 
 const DATE_FIELDS_BY_MODULE = {

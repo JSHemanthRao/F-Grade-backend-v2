@@ -427,6 +427,55 @@ test('CRM query endpoint applies Zoho server-side Created_Time date filtering fo
   }
 });
 
+test('CRM query endpoint interprets "give me the closed deals of last month" as Closed Won July closing dates only', async () => {
+  const originalGet = zohoClient.get;
+  const requests = [];
+  const julyDeal = { id: 'deal-july', Stage: 'Closed Won', Closing_Date: '2026-07-15T00:00:00+05:30' };
+  const augustDeal = { id: 'deal-august', Stage: 'Closed Won', Closing_Date: '2026-08-15T00:00:00+05:30' };
+  const mockZohoRecords = [julyDeal, augustDeal];
+  const expectedCriteria = "(Stage:equals:Closed Won)and((Closing_Date:greater_equal:2026-07-01T00:00:00Z)and(Closing_Date:less_than:2026-08-01T00:00:00Z))";
+
+  zohoClient.get = async (url, config) => {
+    requests.push({ url, config });
+    const matchingRecords = url === '/crm/v8/Deals' && config.params.criteria === expectedCriteria
+      ? mockZohoRecords.filter((record) => new Date(record.Closing_Date) >= new Date('2026-07-01T00:00:00+05:30') && new Date(record.Closing_Date) < new Date('2026-08-01T00:00:00+05:30'))
+      : mockZohoRecords;
+
+    return {
+      data: {
+        data: matchingRecords,
+        info: { count: matchingRecords.length, per_page: config.params.per_page, more_records: false },
+      },
+    };
+  };
+
+  try {
+    const req = {
+      method: 'GET',
+      query: {
+        module: 'Deals',
+        search: 'give me the closed deals of last month',
+        limit: '10',
+      },
+      route: { path: '/query' },
+    };
+    const res = { json(payload) { this.payload = payload; } };
+
+    await controller.getModuleQuery(req, res, () => {});
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, '/crm/v8/Deals');
+    assert.equal(requests[0].config.params.criteria, expectedCriteria);
+    assert.ok(requests[0].config.params.criteria.includes("Stage:equals:Closed Won"));
+    assert.ok(requests[0].config.params.criteria.includes("Closing_Date:greater_equal:2026-07-01T00:00:00Z"));
+    assert.ok(requests[0].config.params.criteria.includes("Closing_Date:less_than:2026-08-01T00:00:00Z"));
+    assert.deepEqual(res.payload.data, [julyDeal]);
+    assert.equal(res.payload.data.every((record) => record.Stage === 'Closed Won' && new Date(record.Closing_Date) >= new Date('2026-07-01T00:00:00+05:30') && new Date(record.Closing_Date) < new Date('2026-08-01T00:00:00+05:30')), true);
+  } finally {
+    zohoClient.get = originalGet;
+  }
+});
+
 test('CRM query endpoint falls back to Zoho /search with Created_Time criteria when COQL scope is unavailable', async () => {
   const originalGet = zohoClient.get;
   const originalPost = zohoClient.post;

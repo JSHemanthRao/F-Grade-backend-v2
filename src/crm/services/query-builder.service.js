@@ -115,7 +115,7 @@ function buildWhereClause(moduleKey, requestText, criteria, options = {}) {
   const text = normalizeText(requestText).toLowerCase();
   const conversionFields = options.conversion_fields || [];
   const clauses = [];
-  if (/closed\s+won/.test(text)) clauses.push("Stage = 'Closed Won'");
+  if (/closed\s+won|closed\s+deals?|closed\s+sales?|deals?\s+that\s+are\s+closed/.test(text)) clauses.push("Stage = 'Closed Won'");
   if (moduleKey === 'leads' && /conver/.test(text) && options.conversion_metric !== 'rate') {
     if (conversionFields.includes('Converted__s') || conversionFields.includes('Converted')) clauses.push(`${conversionFields.includes('Converted__s') ? 'Converted__s' : 'Converted'} = true`);
     if (/into\s+deals?|to\s+deals?/.test(text) && conversionFields.includes('Converted_Deal')) clauses.push('Converted_Deal is not null');

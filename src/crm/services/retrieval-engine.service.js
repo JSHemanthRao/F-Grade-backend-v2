@@ -508,7 +508,7 @@ function buildCountCriteria(moduleKey, moduleDefinition, options = {}, requestTe
 
   const criteriaParts = [];
 
-  if (/\bclosed\s+won\b/.test(normalizedText)) {
+  if (/\bclosed\s+(?:won|deals?|sales?)\b|\bdeals?\s+that\s+are\s+closed\b/.test(normalizedText)) {
     const stageField = getPreferredField(moduleDefinition, ['Stage', 'Deal_Stage']);
 
     if (stageField) {
