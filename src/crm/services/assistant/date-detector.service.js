@@ -83,6 +83,7 @@ function resolveWindow(label, now, rollingMonths, namedMonth, customRange) {
   }
   if (label === 'this month') return dateWindow(monthStart(year, month), now);
   if (label === 'last month') return dateWindow(monthStart(year, month - 1), monthStart(year, month));
+  if (label === 'next month') return dateWindow(monthStart(year, month + 1), monthStart(year, month + 2));
   if (label === 'this quarter' || label === 'last quarter') {
     const quarter = Math.floor(month / 3) + (label === 'last quarter' ? -1 : 0);
     return dateWindow(monthStart(year, quarter * 3), monthStart(year, (quarter + 1) * 3));
@@ -168,7 +169,7 @@ function detectTimeRange(question) {
 
   const customRange = parseCustomRange(normalizedQuestion, now);
   const detectedKeywords = [];
-  const relativeTerms = ['today', 'yesterday', 'tomorrow', 'this week', 'last week', 'this month', 'last month', 'this quarter', 'last quarter', 'this year', 'last year', 'last 30 days'];
+  const relativeTerms = ['today', 'yesterday', 'tomorrow', 'this week', 'last week', 'this month', 'last month', 'next month', 'this quarter', 'last quarter', 'this year', 'last year', 'last 30 days'];
   relativeTerms.forEach((term) => { if (normalizedQuestion.includes(term)) detectedKeywords.push(term); });
   if (/current\s+month|month[-\s]+to[-\s]+date/.test(normalizedQuestion)) detectedKeywords.push('this month');
   if (/previous\s+month/.test(normalizedQuestion)) detectedKeywords.push('last month');

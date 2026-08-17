@@ -134,6 +134,10 @@ function parseDateFilter(question, timeRange, moduleKey) {
   if (!range?.startDate || !range?.endDate || range.range === 'all_time') return null;
   const text = String(question || '').toLowerCase();
   const dateField = selectBusinessDateField(moduleKey, text);
+  // Actual Closed Won dates live in stage history, not in a Deal field.
+  // The history executor owns that time filter, so never create an invalid
+  // `field: null` record filter here.
+  if (!dateField) return null;
   return {
     field: dateField,
     logicalField: 'date',
@@ -397,6 +401,7 @@ function buildFilterPlan({ question = '', module, modules = [], plan = {}, conte
     return true;
   });
   const requestedFilters = detectRequestedFilters(question, plan.timeRange, moduleKey);
+  if (plan.businessRequest?.requires_stage_history) requestedFilters.date = false;
   const requestedValidationErrors = [];
 
   const ignoredLogicalFields = new Set(ignoredFilters.map((filter) => filter.logicalField));

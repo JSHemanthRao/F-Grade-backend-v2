@@ -34,7 +34,9 @@ const LABEL_FIELDS_BY_MODULE = {
 };
 const UNIVERSAL_CRM_FIELDS = new Set(['id', 'Created_Time', 'Modified_Time', 'Converted_Date_Time', 'Converted__s', 'Converted_Deal']);
 
-function dateFieldFor(moduleKey, question) {
+function dateFieldFor(moduleKey, question, businessRequest = {}) {
+  if (businessRequest.dateMeaning === 'actual_closed_won_date' || businessRequest.dateMeaning === 'ambiguous') return null;
+  if (businessRequest.dateMeaning === 'closing_date' || businessRequest.dateMeaning === 'expected_closing_date') return 'Closing_Date';
   return selectBusinessDateField(moduleKey, question);
 }
 
@@ -78,7 +80,7 @@ function sortFor(question, moduleKey) {
   return { field, direction: explicit?.[2] ? (/desc/i.test(explicit[2]) ? 'desc' : 'asc') : direction };
 }
 
-function fieldsFor({ moduleKey, moduleDefinition, operation, question, timeRange, entities, metrics }) {
+function fieldsFor({ moduleKey, moduleDefinition, operation, question, timeRange, entities, metrics, businessRequest }) {
   if (operation === 'COUNT') return ['id'];
   const fields = new Set(['id']);
   (LABEL_FIELDS_BY_MODULE[moduleKey] || moduleDefinition.defaultFields || []).forEach((field) => fields.add(field));
@@ -96,7 +98,8 @@ function fieldsFor({ moduleKey, moduleDefinition, operation, question, timeRange
   if (entities?.owners?.length || /owner|assigned|representative|rep/i.test(text)) fields.add('Owner');
   if (entities?.companies?.length || /account|company|customer/i.test(text)) fields.add(moduleKey === 'deals' ? 'Account_Name' : 'Company');
   if (entities?.leadSources?.length || /lead\s+source|source/i.test(text)) fields.add(moduleKey === 'deals' ? 'Deal_Source' : 'Lead_Source');
-  if (timeRange?.range && timeRange.range !== 'all_time') fields.add(dateFieldFor(moduleKey, question));
+  const dateField = dateFieldFor(moduleKey, question, businessRequest);
+  if (timeRange?.range && timeRange.range !== 'all_time' && dateField) fields.add(dateField);
   if (timeRange?.range && timeRange.range !== 'all_time' && !isExplicitCreationRequest(question)) fields.add('Created_Time');
   if (/email/i.test(text)) fields.add('Email');
   if (/phone|mobile|telephone/i.test(text)) fields.add('Phone');
@@ -113,14 +116,14 @@ function normalizePeriod(period) {
   };
 }
 
-function buildIntentQueryPlan({ question, moduleKey, intents = [], metrics = [], timeRange = {}, entities = {}, pagination = {}, relationships = [] } = {}) {
+function buildIntentQueryPlan({ question, moduleKey, intents = [], metrics = [], timeRange = {}, entities = {}, pagination = {}, relationships = [], businessRequest = {} } = {}) {
   const moduleDefinition = getModuleDefinition(moduleKey);
   if (!moduleDefinition) throw new Error(`Unsupported CRM module: ${moduleKey}`);
   const operation = operationFor(intents, metrics, question);
   const dateRequested = Boolean(timeRange.startDate && timeRange.endDate);
-  const dateField = dateRequested ? dateFieldFor(moduleKey, question) : null;
+  const dateField = dateRequested ? dateFieldFor(moduleKey, question, businessRequest) : null;
   const parsedFilters = parseQuestionFilters(question, moduleKey, timeRange);
-  const fields = fieldsFor({ moduleKey, moduleDefinition, operation, question, timeRange, entities, metrics });
+  const fields = fieldsFor({ moduleKey, moduleDefinition, operation, question, timeRange, entities, metrics, businessRequest });
   const amountField = amountFieldFor(moduleDefinition);
   const customerScope = getCustomerRecordScope(question);
   const periods = Array.isArray(timeRange.periods) ? timeRange.periods.map(normalizePeriod).filter(Boolean) : [];
@@ -157,6 +160,8 @@ function buildIntentQueryPlan({ question, moduleKey, intents = [], metrics = [],
     customerScope,
     criteria: null,
     queryValidated: false,
+    dateMeaning: businessRequest.dateMeaning || null,
+    requiresStageHistory: Boolean(businessRequest.requires_stage_history),
     ...(amountField ? { aggregateField: amountField } : {}),
   };
 }

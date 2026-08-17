@@ -124,12 +124,12 @@ function buildWhereClause(moduleKey, requestText, criteria, options = {}) {
   if (requestedDateWindow) {
     const field = getDateField(moduleKey, text, conversionFields);
     clauses.push(`${field} >= '${requestedDateWindow.start}'`, `${field} < '${requestedDateWindow.end}'`);
-  } else if (/this\s+week|this\s+month|current\s+month|month[-\s]+to[-\s]+date|last\s+month|previous\s+month|this\s+quarter|last\s+quarter/.test(text)) {
+  } else if (/this\s+week|this\s+month|current\s+month|next\s+month|month[-\s]+to[-\s]+date|last\s+month|previous\s+month|this\s+quarter|last\s+quarter/.test(text)) {
     const window = /week/.test(text)
       ? getWeekWindow(/last\s+week/.test(text) ? -1 : 0)
       : /quarter/.test(text)
       ? getQuarterWindow(/last\s+quarter/.test(text) ? -1 : 0)
-      : getMonthWindow(/last\s+month|previous\s+month/.test(text) ? -1 : 0);
+      : getMonthWindow(/last\s+month|previous\s+month/.test(text) ? -1 : /next\s+month/.test(text) ? 1 : 0);
     const field = getDateField(moduleKey, text, conversionFields);
     clauses.push(`${field} >= '${window.start}'`, `${field} < '${window.end}'`);
   }

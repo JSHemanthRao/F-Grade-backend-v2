@@ -1,10 +1,11 @@
-const MONTH_OR_PERIOD_PATTERN = /\b(today|yesterday|tomorrow|this\s+week|last\s+week|this\s+month|current\s+month|month[-\s]+to[-\s]+date|last\s+month|previous\s+month|this\s+quarter|last\s+quarter|this\s+year|last\s+year|last\s+\d+\s+months?|january|february|march|april|may|june|july|august|september|october|november|december|between\s+.*\s+and\s+.*|from\s+.*\s+to\s+.*)\b/i;
+const MONTH_OR_PERIOD_PATTERN = /\b(today|yesterday|tomorrow|this\s+week|last\s+week|this\s+month|current\s+month|next\s+month|month[-\s]+to[-\s]+date|last\s+month|previous\s+month|this\s+quarter|last\s+quarter|this\s+year|last\s+year|last\s+\d+\s+months?|january|february|march|april|may|june|july|august|september|october|november|december|between\s+.*\s+and\s+.*|from\s+.*\s+to\s+.*)\b/i;
 const BUSINESS_ACTIVITY_PATTERN = /\b(data|business\s+data|business\s+activity|sales?|revenue|amount|value|deal(?:s)?|customer\s+data|customers?)\b/i;
 const EXPLICIT_CREATION_PATTERN = /\b(created|creation|added|newly\s+created)\b/i;
 const NEW_CUSTOMER_PATTERN = /\bnew\s+(?:customers?|accounts?|records?)\b|\b(?:customers?|accounts?|records?)\s+(?:created|added)\b/i;
 const EXISTING_ONLY_PATTERN = /\bexisting\s+(?:customers?|accounts?|records?)\s+only\b|\bonly\s+existing\s+(?:customers?|accounts?|records?)\b/i;
 const NEW_ONLY_PATTERN = /\bnew\s+(?:customers?|accounts?|records?)\s+only\b|\bonly\s+new\s+(?:customers?|accounts?|records?)\b/i;
 const CLOSED_WON_STATUS_PATTERN = /\b(closed\s+won|closed\s+lost|already\s+closed|already\s+won|currently\s+closed)\b/i;
+const CLOSED_WON_IN_PERIOD_PATTERN = /\b(?:closed\s+won|won)\b[\s\S]{0,40}\b(?:in|during|on|of)\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|last\s+month|this\s+month)\b/i;
 
 const DATE_FIELDS_BY_MODULE = {
   deals: 'Closing_Date',
@@ -60,6 +61,10 @@ function selectBusinessDateField(moduleKey, question, conversionFields = []) {
   
   // CRITICAL: For deals, distinguish between current Closed Won STATUS vs. DATE FILTERS
   if (moduleKey === 'deals') {
+    // "close watch" has no stable CRM meaning. It must be resolved through
+    // conversation context before a date field is selected.
+    if (/\bclose\s+watch\b/i.test(text)) return null;
+
     // Handle stage-history queries first: these are about when a deal transitioned,
     // not about current status or Closing_Date logic.
     const stageHistoryTransition = /\b(became|turned|transitioned|changed\s+to|when\s+did)\b/i.test(text)
@@ -78,8 +83,11 @@ function selectBusinessDateField(moduleKey, question, conversionFields = []) {
         }
       }
 
-      // If they explicitly mention a period or a closing-date field, use Closing_Date.
-      if (MONTH_OR_PERIOD_PATTERN.test(text) || /closing\s*date/i.test(text)) {
+      // This lower-level legacy selector has no business request context;
+      // preserve a date field for direct query-builder callers. The central
+      // intent resolver overrides this to audit history for a Closed Won
+      // event-in-period request.
+      if (MONTH_OR_PERIOD_PATTERN.test(text) || /closing[-_\s]*date|expected\s+to\s+close|expected\s+closing/i.test(text)) {
         return 'Closing_Date';
       }
 

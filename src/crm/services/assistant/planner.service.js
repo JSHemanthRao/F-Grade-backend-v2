@@ -9,6 +9,7 @@ const { detectRelationships } = require('./relationship-detector.service');
 const { generateTasks } = require('./task-generator.service');
 const { resolveDependencies } = require('./dependency-resolver.service');
 const { buildIntentQueryPlan } = require('./intent-query-planner.service');
+const { resolveBusinessRequest } = require('../intent-resolution.service');
 const logger = require('../../../common/logging/logger');
 
 function detectPagination(question, module, conversation = {}) {
@@ -57,24 +58,26 @@ function detectPagination(question, module, conversation = {}) {
 function buildExecutionPlan(question, context = {}) {
   const startedAt = process.hrtime.bigint();
   const originalQuestion = String(question || '').trim();
-  const normalizedQuestion = normalizeQuestion(originalQuestion);
-  const tokens = tokenizeQuestion(originalQuestion);
-  const conversation = resolveConversationContext(originalQuestion, context);
-  const intents = detectIntents(originalQuestion);
-  const detectedModules = detectModules(originalQuestion);
+  const businessRequest = resolveBusinessRequest(originalQuestion, context);
+  const semanticQuestion = businessRequest.corrected_question || originalQuestion;
+  const normalizedQuestion = normalizeQuestion(semanticQuestion);
+  const tokens = tokenizeQuestion(semanticQuestion);
+  const conversation = resolveConversationContext(semanticQuestion, context);
+  const intents = detectIntents(semanticQuestion);
+  const detectedModules = detectModules(semanticQuestion);
   const isPerformanceReport = /complete\s+crm\s+performance\s+report|crm\s+performance\s+report|performance\s+report/i.test(originalQuestion);
   const modules = isPerformanceReport
     ? ['leads', 'contacts', 'accounts', 'deals']
     : detectedModules.length > 0
       ? detectedModules
       : conversation.effectiveModules;
-  const timeRange = detectTimeRange(originalQuestion);
-  const pagination = detectPagination(originalQuestion, modules[0], conversation);
-  const entities = detectEntities(originalQuestion);
-  const metrics = detectMetrics(originalQuestion);
-  const relationships = detectRelationships(originalQuestion, modules);
+  const timeRange = detectTimeRange(semanticQuestion);
+  const pagination = detectPagination(semanticQuestion, modules[0], conversation);
+  const entities = detectEntities(semanticQuestion);
+  const metrics = detectMetrics(semanticQuestion);
+  const relationships = detectRelationships(semanticQuestion, modules);
   const queryPlansByModule = Object.fromEntries(modules.map((moduleKey) => [moduleKey, buildIntentQueryPlan({
-    question: originalQuestion,
+    question: semanticQuestion,
     moduleKey,
     intents,
     metrics,
@@ -82,10 +85,12 @@ function buildExecutionPlan(question, context = {}) {
     entities,
     pagination,
     relationships,
+    businessRequest,
   })]));
   const queryPlan = queryPlansByModule[modules[0]] || null;
   const generatedTasks = generateTasks({
-    question: originalQuestion,
+    question: semanticQuestion,
+    businessRequest,
     intents,
     modules,
     timeRange,
@@ -98,6 +103,7 @@ function buildExecutionPlan(question, context = {}) {
   const resolved = resolveDependencies(generatedTasks);
   const plan = {
     question: originalQuestion,
+    businessRequest,
     normalizedQuestion,
     tokens,
     intents,

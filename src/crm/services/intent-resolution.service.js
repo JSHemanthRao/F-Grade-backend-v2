@@ -18,6 +18,11 @@ const { detectIntents } = require('./assistant/intent-detector.service');
 const { resolveConversationContext } = require('./assistant/conversation-context.service');
 const { getModuleDefinition, getSupportedModuleKeys } = require('./module-definition.service');
 
+const CLOSED_WON_PATTERN = /\b(?:closed\s+won|closedwon|won)\b/i;
+const EXPLICIT_CLOSING_DATE_PATTERN = /\b(?:closing[-_\s]*date|expected\s+to\s+close|expected\s+closing|close\s+date)\b/i;
+const ACTUAL_CLOSED_WON_PATTERN = /\b(?:actually|became|become|turned|transitioned|moved|went|were)\b[\s\S]{0,40}\b(?:closed\s+won|won)\b|\b(?:deals?\s+)?won\s+(?:in|during|on)\b|\bclosed\s+won\s+deals?\s+of\b/i;
+const CLOSE_WATCH_PATTERN = /\bclose\s+watch\b/i;
+
 // Phonetic/typo correction mappings for common CRM speech-to-text errors
 const PHONETIC_CORRECTIONS = {
   // Closed Won variations
@@ -180,9 +185,36 @@ function detectStatus(question) {
  */
 function detectStageHistory(question) {
   const text = String(question).toLowerCase();
-  const hasTransitionKeyword = /\b(became|turned|transitioned|changed\s+to|when\s+did|when\s+was)\b/i.test(text);
-  const hasStageKeyword = /\b(closed\s+won|closed\s+lost|won|lost|stage|category)\b/i.test(text);
-  return hasTransitionKeyword && hasStageKeyword;
+  return ACTUAL_CLOSED_WON_PATTERN.test(text)
+    || (/\b(became|turned|transitioned|changed\s+to|when\s+did|when\s+was)\b/i.test(text)
+      && /\b(closed\s+won|closed\s+lost|won|lost|stage|category)\b/i.test(text));
+}
+
+/**
+ * Makes the date concept explicit before the request reaches a query builder.
+ * Closing_Date is an expected date; actual_closed_won_date is audit history.
+ */
+function resolveDealDateMeaning(question, context = {}) {
+  const text = String(question || '').toLowerCase();
+  const hasPeriod = Boolean(resolveDateRange(question).from);
+  const closedWon = CLOSED_WON_PATTERN.test(text);
+  const expectedClose = /\bexpected\s+to\s+close\b/i.test(text);
+
+  if (CLOSE_WATCH_PATTERN.test(text)) {
+    const priorWasClosedWon = /\bclosed\s+won\b/i.test(String(context.lastQuestion || context.previousQuestion || ''))
+      || context.lastPlan?.businessRequest?.status === 'Closed Won';
+    return priorWasClosedWon
+      ? { dateMeaning: hasPeriod ? 'actual_closed_won_date' : 'current_status', requiresStageHistory: hasPeriod, ambiguous: false }
+      : { dateMeaning: 'ambiguous', requiresStageHistory: false, ambiguous: true };
+  }
+
+  if (expectedClose) return { dateMeaning: 'expected_closing_date', requiresStageHistory: false, ambiguous: false };
+  if (EXPLICIT_CLOSING_DATE_PATTERN.test(text)) return { dateMeaning: 'closing_date', requiresStageHistory: false, ambiguous: false };
+  if (closedWon && (detectStageHistory(text) || hasPeriod)) {
+    return { dateMeaning: 'actual_closed_won_date', requiresStageHistory: true, ambiguous: false };
+  }
+  if (closedWon) return { dateMeaning: 'current_status', requiresStageHistory: false, ambiguous: false };
+  return { dateMeaning: hasPeriod ? 'closing_date' : null, requiresStageHistory: false, ambiguous: false };
 }
 
 /**
@@ -260,16 +292,16 @@ function resolveBusinessRequest(question, context = {}) {
   const status = detectStatus(correctedQuestion);
 
   // Step 7: Detect stage history requirement
-  const requiresStageHistory = detectStageHistory(correctedQuestion);
+  const dealDateMeaning = resolveDealDateMeaning(correctedQuestion, context);
+  const requiresStageHistory = dealDateMeaning.requiresStageHistory || detectStageHistory(correctedQuestion);
 
   // Step 8: Resolve date range
   const dateRange = resolveDateRange(correctedQuestion);
 
   // Step 9: Determine date field based on operation and intent
   let dateField = null;
-  if (operation === 'query' || operation === 'count') {
-    if (status && dateRange.from && dateRange.to) {
-      // Closed Won deals with closing date in period
+  if (operation === 'query' || operation === 'count' || operation === 'dashboard') {
+    if (dealDateMeaning.dateMeaning === 'closing_date' || dealDateMeaning.dateMeaning === 'expected_closing_date') {
       dateField = 'Closing_Date';
     } else if (status && !requiresStageHistory) {
       // Current status query (no date field)
@@ -285,7 +317,7 @@ function resolveBusinessRequest(question, context = {}) {
   let interpretation = 'currentStatus';
   if (requiresStageHistory) {
     interpretation = 'transitionDate';
-  } else if (dateRange.from && dateRange.to && status) {
+  } else if (dealDateMeaning.dateMeaning === 'closing_date' && dateRange.from && dateRange.to && status) {
     interpretation = 'dateRange';
   }
 
@@ -308,6 +340,15 @@ function resolveBusinessRequest(question, context = {}) {
     corrected_question: correctedQuestion,
     intents,
     requires_stage_history: requiresStageHistory,
+    dateMeaning: dealDateMeaning.dateMeaning || undefined,
+    intent: dealDateMeaning.dateMeaning === 'actual_closed_won_date'
+      ? 'closed_won_in_period'
+      : dealDateMeaning.dateMeaning === 'closing_date' && status === 'Closed Won'
+        ? 'closed_won_with_closing_date_in_period'
+        : status === 'Closed Won'
+          ? 'current_closed_won'
+          : undefined,
+    requires_clarification: dealDateMeaning.ambiguous || undefined,
     interpretation,
     conversation_context: {
       previousQuestion: conversationContext.previousQuestion,
@@ -316,6 +357,17 @@ function resolveBusinessRequest(question, context = {}) {
       hasReference: conversationContext.hasReference,
     },
   };
+
+  if (dateRange.from && dateRange.to) {
+    logger.info('CRM normalized request', {
+      intent: normalizedRequest.intent || (requiresStageHistory ? 'closed_won_in_period' : 'date_filtered_query'),
+      module: module === 'deals' ? 'Deals' : module,
+      status: normalizedRequest.status || null,
+      dateMeaning: normalizedRequest.dateMeaning || null,
+      from: dateRange.from,
+      to: dateRange.to,
+    });
+  }
 
   // Clean up undefined values
   return Object.fromEntries(
@@ -346,6 +398,7 @@ module.exports = {
   determineOperation,
   detectStatus,
   detectStageHistory,
+  resolveDealDateMeaning,
   resolveDateRange,
   applyPhoneticCorrection,
   logIntentResolution,

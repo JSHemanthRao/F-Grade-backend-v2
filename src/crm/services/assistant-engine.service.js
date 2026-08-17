@@ -25,6 +25,7 @@ const activityService = require('./activity.service');
 const dashboardService = require('./dashboard.service');
 const { formatActivityResponse } = require('./assistant/activity-formatter.service');
 const { detectTimeRange } = require('./assistant/date-detector.service');
+const { resolveBusinessRequest } = require('./intent-resolution.service');
 
 const ACTIVITY_QUESTION_PATTERN = /(today'?s?\s+(?:crm\s+)?activity|crm\s+activity|what\s+did\s+.*\s+do\s+today|what\s+changes\s+did\s+.*\s+make\s+today|activity\s+for\s+all\s+employees|daily\s+activity|activity\s+report)/i;
 
@@ -176,6 +177,17 @@ async function handleAssistantRequest(payload = {}) {
 
   if (DASHBOARD_QUESTION_PATTERN.test(question)) {
     const params = extractDashboardParams(question);
+    const dashboardRequest = resolveBusinessRequest(question, payload?.context || payload?.conversationContext || {});
+    if (dashboardRequest.requires_stage_history) {
+      return {
+        success: false,
+        summary: 'The requested dashboard needs actual Closed Won transition history, which could not be retrieved.',
+        error: { code: 'STAGE_HISTORY_UNAVAILABLE', dateMeaning: 'actual_closed_won_date', from: dashboardRequest.from || null, to: dashboardRequest.to || null },
+      };
+    }
+    if (dashboardRequest.dateMeaning === 'closing_date' || dashboardRequest.dateMeaning === 'expected_closing_date') {
+      params.date_field = 'Closing_Date';
+    }
     const suppliedData = payload?.data
       || payload?.records
       || payload?.deals
@@ -246,6 +258,29 @@ async function handleAssistantRequest(payload = {}) {
   }
   const context = suppliedContext;
   const plan = optimizeExecutionPlan(buildExecutionPlan(question, context));
+  if (plan.businessRequest?.requires_clarification) {
+    return {
+      success: false,
+      message: '“Close watch” is ambiguous. Do you mean currently Closed Won deals, deals expected to close, or deals that actually became Closed Won during the period?',
+      error: { code: 'AMBIGUOUS_CLOSE_WATCH' },
+      requestedInformation: question,
+    };
+  }
+  if (plan.businessRequest?.requires_stage_history) {
+    // Never substitute Closing_Date or current Stage for a historical win
+    // event. A dedicated audit-history retrieval must supply this dataset.
+    return {
+      success: false,
+      message: 'Actual Closed Won dates require CRM stage-history/audit data, which could not be retrieved for this request.',
+      error: {
+        code: 'STAGE_HISTORY_UNAVAILABLE',
+        dateMeaning: 'actual_closed_won_date',
+        from: plan.timeRange?.startDate || null,
+        to: plan.timeRange?.endDate || null,
+      },
+      requestedInformation: question,
+    };
+  }
   const moduleCandidates = plan.modules;
   if (!moduleCandidates.length) return { success: false, message: 'I could not identify the CRM information needed to answer that question.' };
   const queryPlanValidation = validateIntentQueryPlans(plan.queryPlansByModule);

@@ -299,6 +299,50 @@ function buildStageTransitionCriteria(
   };
 }
 
+function historyValue(entry, names) {
+  for (const name of names) {
+    const value = entry?.[name];
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'object') return value.name || value.value || value.display_value || null;
+    return value;
+  }
+  return null;
+}
+
+/**
+ * Returns only genuine transitions INTO Closed Won. It deliberately does not
+ * infer a win timestamp from Closing_Date, Created_Time, or Modified_Time.
+ */
+function findClosedWonTransitions(history = [], stageMetadata = null) {
+  return (Array.isArray(history) ? history : []).map((entry) => {
+    const field = historyValue(entry, ['field', 'field_name', 'api_name']);
+    const previousStage = historyValue(entry, ['previous_value', 'old_value', 'old', 'from_value']);
+    const newStage = historyValue(entry, ['new_value', 'new', 'to_value', 'value']);
+    const actualClosedWonDate = historyValue(entry, ['audited_time', 'timestamp', 'time', 'modified_time']);
+    if (!/^(stage|deal_stage)$/i.test(String(field || ''))
+      || isCurrentlyClosedWon(previousStage, stageMetadata)
+      || !isCurrentlyClosedWon(newStage, stageMetadata)
+      || !actualClosedWonDate) return null;
+    return {
+      dealId: historyValue(entry, ['record_id', 'deal_id', 'id']),
+      previousStage,
+      newStage,
+      actualClosedWonDate,
+      source: 'stage_history',
+    };
+  }).filter(Boolean);
+}
+
+function filterClosedWonTransitionsInPeriod(history = [], from, to, stageMetadata = null) {
+  const start = new Date(from).valueOf();
+  const end = new Date(to).valueOf();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) throw new Error('A valid half-open date range is required.');
+  return findClosedWonTransitions(history, stageMetadata).filter((transition) => {
+    const time = new Date(transition.actualClosedWonDate).valueOf();
+    return Number.isFinite(time) && time >= start && time < end;
+  });
+}
+
 /**
  * Normalizes and extracts both dates from a deal record, with clear labeling.
  * Returns: { currentStage, isClosedWon, closingDate, actualClosedWonDate, actualClosedWonDateFromHistory }
@@ -464,6 +508,8 @@ module.exports = {
   disambiguateClosedWonDateQuery,
   buildClosedWonWithClosingDateCriteria,
   buildStageTransitionCriteria,
+  findClosedWonTransitions,
+  filterClosedWonTransitionsInPeriod,
   normalizeDealDates,
   validateDealClosedWonLogic,
   interpretClosedWonQuery,
