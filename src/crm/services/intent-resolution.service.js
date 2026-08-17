@@ -180,6 +180,22 @@ function detectStatus(question) {
   return null;
 }
 
+function detectContextStatus(context = {}) {
+  const previousBusinessRequest = context.lastPlan?.businessRequest || context.previousPlan?.businessRequest;
+  const directStatus = previousBusinessRequest?.status || previousBusinessRequest?.category;
+  if (directStatus) return directStatus;
+
+  const stageFilter = context.lastPlan?.filterPlans?.deals?.filters
+    ?.find((filter) => filter.logicalField === 'stage' || filter.field === 'Stage');
+  const stageValue = Array.isArray(stageFilter?.value) ? stageFilter.value[0] : stageFilter?.value;
+  if (stageValue) return detectStatus(String(stageValue)) || stageValue;
+
+  const queryStage = context.lastPlan?.queryPlan?.stage;
+  if (queryStage) return detectStatus(String(queryStage)) || queryStage;
+
+  return detectStatus(context.lastQuestion || context.previousQuestion || '');
+}
+
 /**
  * Detect if query is about stage history (when deal became Closed Won)
  *
@@ -300,7 +316,7 @@ function resolveBusinessRequest(question, context = {}) {
   const operation = determineOperation(correctedQuestion, intents);
 
   // Step 6: Detect status/category
-  const status = detectStatus(correctedQuestion);
+  const status = detectStatus(correctedQuestion) || detectContextStatus(context);
 
   // Step 7: Detect stage history requirement (deals module only)
   let dealDateMeaning = { dateMeaning: null, requiresStageHistory: false, ambiguous: false };

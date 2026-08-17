@@ -135,6 +135,9 @@ describe('Conversational Context Preservation', () => {
     const request = resolveBusinessRequest('And in July?', context);
     
     assert(request.conversation_context.previousModules.includes('deals'));
+    assert.equal(request.status, 'Closed Won');
+    assert.equal(request.dateMeaning, 'closing_date');
+    assert.equal(request.date_field, 'Closing_Date');
   });
 
   test('preserves date context for follow-up', () => {
