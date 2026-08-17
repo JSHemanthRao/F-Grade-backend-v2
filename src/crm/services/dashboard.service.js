@@ -473,24 +473,69 @@ async function buildSalesDashboard(options = {}) {
   const leadSources = computeLeadSourceDistribution(leads);
   const topPerformer = employeeRevenue[0]?.employee || 'Team';
 
-  // Reconciliation checks
+  // Reconciliation checks (Part 15): if any metric does NOT reconcile,
+  // return success=false with a data-consistency error — never fake results.
   const reconciledEmpRevenue = employeeRevenue.reduce((sum, e) => sum + (e.revenue || 0), 0);
   const stageWonObj = stageDistribution.find((s) => isClosedWonStage(s.label));
   const reconciledStageWonCount = stageWonObj ? stageWonObj.count : 0;
 
+  const reconciliationErrors = [];
   if (reconciledEmpRevenue !== closedWonRevenue) {
-    logger.warn('Dashboard Reconciliation Mismatch: Employee Revenue Sum != Closed Won Revenue', {
-      reconciledEmpRevenue,
-      closedWonRevenue,
-    });
+    reconciliationErrors.push(
+      `Employee revenue total (${reconciledEmpRevenue}) does not equal Closed Won revenue (${closedWonRevenue}).`,
+    );
+  }
+  if (reconciledStageWonCount !== closedWonDeals.length) {
+    reconciliationErrors.push(
+      `Stage distribution Closed Won count (${reconciledStageWonCount}) does not equal Closed Won deals count (${closedWonDeals.length}).`,
+    );
   }
 
-  if (reconciledStageWonCount !== closedWonDeals.length) {
-    logger.warn('Dashboard Reconciliation Mismatch: Stage Closed Won Count != Closed Won Deals Count', {
-      reconciledStageWonCount,
+  if (reconciliationErrors.length > 0) {
+    logger.error('[CRM RECONCILIATION]', {
+      event: 'reconciliation_failed',
+      errors: reconciliationErrors,
       closedWonCount: closedWonDeals.length,
+      closedWonRevenue,
+      employeeRevenueTotal: reconciledEmpRevenue,
+      stageClosedWonCount: reconciledStageWonCount,
     });
+    return {
+      crmError: true,
+      errorMessage: `The dashboard could not be generated because dashboard metrics did not reconcile. ${reconciliationErrors.join(' ')}`,
+      reconciliationErrors,
+      dashboard: {
+        title: options.title || 'Sales Performance Dashboard',
+        type: 'sales',
+        theme,
+        dateRange,
+        summary: `Data consistency error: dashboard metrics did not reconcile.`,
+        metrics: null,
+        data: [],
+        records: [],
+        tables: [],
+        widgets: [
+          {
+            id: 'reconciliation-error-widget',
+            type: 'error',
+            title: 'Data Consistency Error',
+            status: 'error',
+            message: reconciliationErrors.join(' '),
+          },
+        ],
+      },
+      data: [],
+      records: [],
+      tables: [],
+    };
   }
+
+  logger.info('[CRM RECONCILIATION]', {
+    closedWonCount: closedWonDeals.length,
+    closedWonRevenue,
+    employeeRevenueTotal: reconciledEmpRevenue,
+    stageClosedWonCount: reconciledStageWonCount,
+  });
 
   const metrics = {
     totalRevenue,

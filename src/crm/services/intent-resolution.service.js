@@ -372,6 +372,27 @@ function resolveBusinessRequest(question, context = {}) {
     },
   };
 
+  // Part 31 — structured deterministic logging (never logs secrets).
+  logger.info('[CRM INTENT]', {
+    intent: normalizedRequest.intent || (requiresStageHistory ? 'closed_won_in_period' : 'date_filtered_query'),
+    module: module === 'deals' ? 'Deals' : module,
+    operation,
+    status: normalizedRequest.status || null,
+    requiresStageHistory: Boolean(requiresStageHistory),
+    interpretation,
+    originalQuestion: question,
+  });
+
+  if (dateRange.from && dateRange.to) {
+    logger.info('[CRM DATE]', {
+      from: dateRange.from,
+      to: dateRange.to,
+      meaning: dealDateMeaning.dateMeaning || (dateField || 'derived_from_keywords'),
+      dateField: dateField || null,
+      period: dateRange.period || null,
+    });
+  }
+
   if (dateRange.from && dateRange.to) {
     logger.info('CRM normalized request', {
       intent: normalizedRequest.intent || (requiresStageHistory ? 'closed_won_in_period' : 'date_filtered_query'),

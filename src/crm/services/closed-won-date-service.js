@@ -344,6 +344,126 @@ function filterClosedWonTransitionsInPeriod(history = [], from, to, stageMetadat
 }
 
 /**
+ * Normalizes a deal record into the standard deterministic Closed Won output shape.
+ */
+function normalizeDealForTransition(deal) {
+  if (!deal || typeof deal !== 'object') return null;
+  const owner = (() => {
+    const o = deal.Owner;
+    if (o && typeof o === 'object') return o.name || o.full_name || '';
+    return String(o || deal.Owner_Name || '');
+  })();
+  return {
+    dealId: String(deal.id || deal.ID || ''),
+    dealName: deal.Deal_Name || deal.Deal || deal.deal_name || 'Untitled Deal',
+    accountName: (() => {
+      const a = deal.Account_Name;
+      if (a && typeof a === 'object') return a.name || '';
+      return String(a || '');
+    })(),
+    amount: numericAmount(deal.Amount ?? deal.amount ?? 0),
+    owner,
+    closingDate: deal.Closing_Date || deal.closing_date || null,
+  };
+}
+
+function numericAmount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+/**
+ * PART 7 — Actual Closed Won transitions (dedicated deterministic function).
+ *
+ * Takes the relevant Deal records plus their stage/audit history and returns ONLY
+ * genuine stage transitions INTO Closed Won during the half-open range [from, to).
+ *
+ * The returned date is the ACTUAL transition timestamp (from stage history) — NEVER
+ * Closing_Date, Created_Time, or Modified_Time.
+ *
+ * @param {Array<object>} deals - Relevant Deal records (current snapshot).
+ * @param {Array<object>} history - Stage history / audit entries for those deals.
+ * @param {object} options
+ * @param {string} options.from - Start of half-open range (ISO 8601).
+ * @param {string} options.to - End of half-open range (ISO 8601, exclusive).
+ * @param {object|null} options.stageMetadata - Optional org stage metadata.
+ * @returns {Array<object>} Normalized transitions.
+ */
+function getActualClosedWonTransitions(deals = [], history = [], options = {}) {
+  const { from, to, stageMetadata = null } = options;
+  if (!from || !to) throw new Error('A valid half-open date range (from/to) is required.');
+
+  const inPeriod = filterClosedWonTransitionsInPeriod(history, from, to, stageMetadata);
+  const dealById = new Map(
+    (Array.isArray(deals) ? deals : [])
+      .map((deal) => {
+        const id = String(deal?.id ?? deal?.ID ?? '');
+        return id ? [id, deal] : null;
+      })
+      .filter(Boolean),
+  );
+
+  return inPeriod.map((transition) => {
+    const deal = dealById.get(String(transition.dealId)) || {};
+    const normalized = normalizeDealForTransition(deal);
+    return {
+      dealId: transition.dealId,
+      dealName: normalized ? normalized.dealName : (deal.Deal_Name || 'Untitled Deal'),
+      accountName: normalized ? normalized.accountName : '',
+      amount: normalized ? normalized.amount : 0,
+      owner: normalized ? normalized.owner : '',
+      previousStage: transition.previousStage,
+      newStage: transition.newStage || 'Closed Won',
+      actualClosedWonDate: transition.actualClosedWonDate,
+      closingDate: normalized ? normalized.closingDate : (deal.Closing_Date || null),
+    };
+  });
+}
+
+/**
+ * PART 7 — Fetches the relevant Deal records + stage history from the CRM, then
+ * returns the actual Closed Won transitions inside the requested half-open range.
+ *
+ * @param {object} options
+ * @param {string} options.from - Start of half-open range (ISO 8601).
+ * @param {string} options.to - End of half-open range (ISO 8601, exclusive).
+ * @param {object|null} options.stageMetadata - Optional org stage metadata.
+ * @param {AbortSignal|null} options.signal
+ * @param {number} [options.limit]
+ * @returns {Promise<{ success: boolean, count: number, data: Array<object> }>}
+ *   Throws on CRM failure (never returns empty success for an API error).
+ */
+async function fetchActualClosedWonTransitions(options = {}) {
+  const { from, to, stageMetadata = null, signal, limit = 1000 } = options;
+  if (!from || !to) throw new Error('A valid half-open date range (from/to) is required.');
+
+  const retrievalEngine = require('./retrieval-engine.service');
+
+  const dealsResult = await retrievalEngine.getRecords('deals', {
+    from: null,
+    to: null,
+    date_field: null,
+    retrieval_mode: 'all',
+    fields: ['id', 'Deal_Name', 'Amount', 'Stage', 'Closing_Date', 'Account_Name', 'Owner'],
+    limit,
+    signal,
+  });
+  const deals = Array.isArray(dealsResult?.data) ? dealsResult.data : [];
+
+  const history = await retrievalEngine.getStageTransitionHistory({
+    from,
+    to,
+    targetStage: 'Closed Won',
+    limit,
+    signal,
+  });
+
+  const data = getActualClosedWonTransitions(deals, history, { from, to, stageMetadata });
+  return { success: true, count: data.length, data };
+}
+
+
+/**
  * Normalizes and extracts both dates from a deal record, with clear labeling.
  * Returns: { currentStage, isClosedWon, closingDate, actualClosedWonDate, actualClosedWonDateFromHistory }
  *
@@ -499,6 +619,8 @@ function interpretClosedWonQuery(question = '') {
 }
 
 module.exports = {
+  getActualClosedWonTransitions,
+  fetchActualClosedWonTransitions,
   isCurrentlyClosedWon,
   isCurrentlyClosedLost,
   isCurrentlyOpen,
