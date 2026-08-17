@@ -21,7 +21,7 @@ test('Date Filtering Regression Suite', async (suite) => {
     assert.equal(businessRequest.to, '2026-08-01T00:00:00Z', 'Should end before August 1st');
   });
 
-  test('Deals that became Closed Won in July uses stage history, not Closing_Date', () => {
+  test('Closed Won deals that became closed in July uses stage history, not Closing_Date', () => {
     // This is the contrasting case: when user asks about when a deal transitioned
     const businessRequest = resolveBusinessRequest('deals that became closed won in July');
     
@@ -29,6 +29,17 @@ test('Date Filtering Regression Suite', async (suite) => {
     assert.equal(businessRequest.status, 'Closed Won', 'Should detect Closed Won status');
     assert.equal(businessRequest.requires_stage_history, true, 'Should require stage history');
     assert.equal(businessRequest.dateMeaning, 'actual_closed_won_date', 'Should interpret as actual_closed_won_date meaning');
+  });
+
+  test('Generic "closed deals of last month" is treated as a real closed-stage query, not a raw Closing_Date month filter', () => {
+    const businessRequest = resolveBusinessRequest('give me the closed deals of last month');
+    
+    assert.equal(businessRequest.module, 'deals', 'Should resolve to deals module');
+    assert.equal(businessRequest.status, 'Closed Won', 'Should treat generic closed deals as Closed Won sales deals');
+    assert.equal(businessRequest.date_field, 'Closing_Date', 'Should use Closing_Date only when the period is meant to apply to the deal close date');
+    assert.equal(businessRequest.requires_stage_history, false, 'Should not trigger stage history for a plain closed-deals query');
+    assert.equal(businessRequest.from, '2026-07-01T00:00:00Z', 'Should use the previous month as the date range');
+    assert.equal(businessRequest.to, '2026-08-01T00:00:00Z', 'Should stay within the previous month interval');
   });
 
   test('Closed Won deals (no period) uses current status, not date filter', () => {

@@ -18,7 +18,7 @@ const { detectIntents } = require('./assistant/intent-detector.service');
 const { resolveConversationContext } = require('./assistant/conversation-context.service');
 const { getModuleDefinition, getSupportedModuleKeys } = require('./module-definition.service');
 
-const CLOSED_WON_PATTERN = /\b(?:closed\s+won|closedwon|won)\b/i;
+const CLOSED_WON_PATTERN = /\b(?:closed\s+(?:won|deals?)|closedwon|won)\b/i;
 const EXPLICIT_CLOSING_DATE_PATTERN = /\b(?:closing[-_\s]*date|expected\s+to\s+close|expected\s+closing|close\s+date)\b/i;
 const ACTUAL_CLOSED_WON_PATTERN = /\b(?:actually|became|become|turned|transitioned|moved|went|were)\b[\s\S]{0,40}\b(?:closed\s+won|won)\b|\b(?:deals?\s+)?won\s+(?:in|during|on)\b|\bclosed\s+won\s+deals?\s+of\b/i;
 const CLOSE_WATCH_PATTERN = /\bclose\s+watch\b/i;
@@ -164,11 +164,14 @@ function determineOperation(question, intents = []) {
 function detectStatus(question) {
   const text = String(question).toLowerCase();
 
+  if (/\bclosed\s+lost\b|\bclosed lost\b/.test(text)) {
+    return 'Closed Lost';
+  }
   if (/\bclosed\s+won\b|\bclosed won\b|\balready\s+closed\s+won\b|\bcurrently\s+closed\s+won\b/.test(text)) {
     return 'Closed Won';
   }
-  if (/\bclosed\s+lost\b|\bclosed lost\b/.test(text)) {
-    return 'Closed Lost';
+  if (/\b(?:closed\s+deals?|closed\s+sales?|deals?\s+closed\s+(?:last|this|in|during|on)|deals?\s+that\s+are\s+closed)\b/.test(text)) {
+    return 'Closed Won';
   }
   if (/\bopen\b|\bunwon\b|\bin\s+progress\b/.test(text)) {
     return 'Open';
