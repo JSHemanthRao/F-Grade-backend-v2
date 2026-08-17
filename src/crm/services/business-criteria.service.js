@@ -4,6 +4,7 @@ const EXPLICIT_CREATION_PATTERN = /\b(created|creation|added|newly\s+created)\b/
 const NEW_CUSTOMER_PATTERN = /\bnew\s+(?:customers?|accounts?|records?)\b|\b(?:customers?|accounts?|records?)\s+(?:created|added)\b/i;
 const EXISTING_ONLY_PATTERN = /\bexisting\s+(?:customers?|accounts?|records?)\s+only\b|\bonly\s+existing\s+(?:customers?|accounts?|records?)\b/i;
 const NEW_ONLY_PATTERN = /\bnew\s+(?:customers?|accounts?|records?)\s+only\b|\bonly\s+new\s+(?:customers?|accounts?|records?)\b/i;
+const CLOSED_WON_STATUS_PATTERN = /\b(closed\s+won|closed\s+lost|already\s+closed|already\s+won|currently\s+closed)\b/i;
 
 const DATE_FIELDS_BY_MODULE = {
   deals: 'Closing_Date',
@@ -49,12 +50,47 @@ function shouldDefaultMonthlyBusinessActivityToDeals(question) {
 
 function selectBusinessDateField(moduleKey, question, conversionFields = []) {
   const text = normalizeText(question);
+  
   if (moduleKey === 'leads' && /conver/.test(text)) {
     return conversionFields.find((field) => /converted.*(date|time)|converted_time/i.test(field)) || 'Converted_Date_Time';
   }
+  
   if (isExplicitModifiedRequest(text)) return 'Modified_Time';
   if (isExplicitCreationRequest(text)) return 'Created_Time';
-  if (moduleKey === 'deals' && /closed|closing|sales?|revenue|amount|value|customer|data/.test(text)) return 'Closing_Date';
+  
+  // CRITICAL: For deals, distinguish between current Closed Won STATUS vs. DATE FILTERS
+  if (moduleKey === 'deals') {
+    // Handle stage-history queries first: these are about when a deal transitioned,
+    // not about current status or Closing_Date logic.
+    const stageHistoryTransition = /\b(became|turned|transitioned|changed\s+to|when\s+did)\b/i.test(text)
+      && /\b(closed\s+won|closed\s+lost|won|lost)\b/i.test(text);
+    if (stageHistoryTransition) {
+      return null;
+    }
+
+    // Check if asking about Closed Won/Closed Lost status
+    if (CLOSED_WON_STATUS_PATTERN.test(text)) {
+      // Current-status questions should not use Closing_Date as proof of closure.
+      // Examples: "already closed won", "currently closed won", "which deals are closed won"
+      if (/\balready\b|\bcurrently\b|\bnow\b|\bhow\s+many\b|\bcount\b|\bwhich\s+deals\b|\bshow\s+me\b|\bgive\s+me\b/i.test(text)) {
+        if (!MONTH_OR_PERIOD_PATTERN.test(text) && !/closing\s*date/i.test(text)) {
+          return null;
+        }
+      }
+
+      // If they explicitly mention a period or a closing-date field, use Closing_Date.
+      if (MONTH_OR_PERIOD_PATTERN.test(text) || /closing\s*date/i.test(text)) {
+        return 'Closing_Date';
+      }
+
+      // Otherwise, default to current-status behavior and ignore Closing_Date as proof.
+      return null;
+    }
+
+    // For other deal queries with "sales", "revenue", "amount", "value" that don't involve status
+    if (/sales?|revenue|amount|value|customer|data/.test(text)) return 'Closing_Date';
+  }
+  
   return DATE_FIELDS_BY_MODULE[moduleKey] || 'Created_Time';
 }
 

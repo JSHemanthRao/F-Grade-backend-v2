@@ -245,15 +245,38 @@ async function buildSalesDashboard(options = {}) {
   let dealsError = null;
   let leadsError = null;
 
+  // Determine the appropriate date field based on the question
   let dateField = options.date_field;
   if (!dateField && options.question) {
     if (/created|creation/i.test(options.question)) {
       dateField = 'Created_Time';
     } else if (/modified|updated|changed/i.test(options.question)) {
       dateField = 'Modified_Time';
+    } else if (/closing\s*date/i.test(options.question)) {
+      // Explicitly asking for closing date
+      dateField = 'Closing_Date';
     }
   }
-  dateField = dateField || 'Closing_Date';
+  
+  // For deal queries asking about Closed Won/Closed Lost status with explicit current status indicators
+  // do NOT automatically add a Closing_Date filter.
+  const isClosedStatusQuery = options.question && /\bclosed\s+won\b|\bclosed\s+lost\b/i.test(options.question);
+  const isExplicitCurrentStatus = options.question && /\balready\b|\bcurrently\b|\bnow\b/i.test(options.question);
+  const hasPeriod = options.question && /this\s+month|last\s+month|january|february|march|april|may|june|july|august|september|october|november|december/i.test(options.question);
+  
+  if (!dateField && isClosedStatusQuery && isExplicitCurrentStatus) {
+    // "already closed won" or "currently closed won" = no date filter
+    dateField = undefined;
+  } else if (!dateField && isClosedStatusQuery && hasPeriod) {
+    // "closed won in July" = use Closing_Date to filter to July
+    dateField = 'Closing_Date';
+  } else if (!dateField && isClosedStatusQuery && !hasPeriod) {
+    // "Give me closed won deals" without period = current status, no date filter
+    dateField = undefined;
+  } else if (!dateField && !isClosedStatusQuery) {
+    // For non-Closed status queries, default to Closing_Date for deals
+    dateField = 'Closing_Date';
+  }
 
   logger.info('[DASHBOARD REQUEST]', {
     request: options.question || options.title || '(none)',
