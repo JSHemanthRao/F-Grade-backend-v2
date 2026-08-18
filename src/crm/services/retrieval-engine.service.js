@@ -5,6 +5,7 @@ const { buildQueryPlan, isInvalidQueryError } = require('./query-builder.service
 const { numericValue } = require('./assistant/currency.service');
 const { selectBusinessDateField } = require('./business-criteria.service');
 const logger = require('../../common/logging/logger');
+const { toCRMError } = require('../crm.errors');
 const {
   DEFAULT_PER_PAGE,
   fetchAllPages,
@@ -851,7 +852,7 @@ async function executeSearchRecords(moduleKey, moduleDefinition, options = {}, r
     const fetchAllStart = process.hrtime.bigint();
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        if (options.force_search && params.criteria) {
+        if (params.criteria) {
           logger.info('ZOHO REQUEST DEBUG', {
             endpoint: `/crm/v8/${moduleDefinition.endpoint}/search`,
             criteria: params.criteria,
@@ -1109,6 +1110,10 @@ async function getRecords(moduleKey, options = {}) {
     ...retrievalPlan.params,
     retrieval_mode: effectiveRetrievalMode,
   };
+
+  if (retrievalPlan.fetchAll && (effectiveOptions.criteria || effectiveOptions.filter || effectiveOptions.filters)) {
+    effectiveOptions.force_search = true;
+  }
 
   let availableFields = Array.isArray(moduleDefinition.defaultFields)
     ? moduleDefinition.defaultFields.map(normalizeFieldName)
@@ -1546,6 +1551,55 @@ async function getRecords(moduleKey, options = {}) {
   }
 }
 
+async function getAllCRMRecords({ module, fields, filter, sort, ...options } = {}) {
+  if (!module) {
+    throw new Error('CRM module is required');
+  }
+
+  const retrievalOptions = {
+    ...options,
+    fields,
+    retrieval_mode: 'all',
+    retrievalCache: undefined,
+  };
+
+  if (filter !== undefined && filter !== null && filter !== '') {
+    retrievalOptions.criteria = filter;
+    retrievalOptions.force_search = true;
+  }
+
+  if (sort) {
+    retrievalOptions.sort_by = sort.field || sort.sort_by || sort;
+    if (sort.order || sort.sort_order) retrievalOptions.sort_order = sort.order || sort.sort_order;
+  }
+
+  let result;
+  try {
+    result = await getRecords(module, retrievalOptions);
+  } catch (error) {
+    throw toCRMError(error, module);
+  }
+  const records = Array.isArray(result?.data) ? result.data : [];
+  const info = result?.info || {};
+
+  logger.info('[CRM RETRIEVAL COMPLETE]', {
+    module,
+    pages: info.pagesFetched || 1,
+    records: records.length,
+    uniqueRecords: records.length,
+  });
+
+  return {
+    records,
+    count: records.length,
+    pagesRetrieved: info.pagesFetched || 1,
+    recordsRetrieved: records.length,
+    uniqueRecords: records.length,
+    source: 'Zoho CRM',
+    info,
+  };
+}
+
 async function getModuleFields(moduleKey = 'leads') {
   const normalizedKey = normalizeModuleKey(moduleKey);
   const moduleDefinition = getModuleDefinition(normalizedKey);
@@ -1648,6 +1702,7 @@ async function getStageTransitionHistory(options = {}) {
 module.exports = {
   getCount,
   getModuleFields,
+  getAllCRMRecords,
   getRecords,
   getStageTransitionHistory,
 };

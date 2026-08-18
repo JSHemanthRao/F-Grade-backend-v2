@@ -5,7 +5,7 @@ const { getModuleDefinition } = require('../src/crm/services/module-definition.s
 const recordsService = require('../src/crm/services/retrieval-engine.service');
 const { zohoClient } = require('../src/common/config/axios');
 
-test('date-filtered queries do not set fetchAll and return paginated_list', () => {
+test('date-filtered queries require complete retrieval', () => {
   const moduleDefinition = getModuleDefinition('leads');
   const options = {
     requestText: 'Show me leads created in July',
@@ -15,9 +15,8 @@ test('date-filtered queries do not set fetchAll and return paginated_list', () =
   };
 
   const plan = getRetrievalPlan(moduleDefinition, options);
-  assert.equal(plan.fetchAll, false, 'Expected fetchAll to be false for date-filtered conversational queries');
-  assert.equal(plan.strategy === 'paginated_list' || plan.strategy === 'paginated_list', true);
-  assert.equal(plan.params.per_page, DEFAULT_LIMITED_PER_PAGE);
+  assert.equal(plan.fetchAll, true);
+  assert.equal(plan.strategy, 'full_dataset');
 });
 
 test('count questions use COUNT retrieval strategy', () => {

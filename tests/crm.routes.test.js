@@ -307,7 +307,7 @@ test('CRM service applies module fields and forwards Zoho query parameters', asy
   }
 });
 
-test('CRM service keeps filtered conversational requests bounded when pagination is not explicit', async () => {
+test('CRM service completes filtered conversational requests when pagination is not explicit', async () => {
   const originalGet = zohoClient.get;
   const requests = [];
   const pages = [
@@ -329,18 +329,17 @@ test('CRM service keeps filtered conversational requests bounded when pagination
       sort_order: 'desc',
     });
 
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, 3);
     requests.forEach((request) => {
-      assert.equal(request.url, '/crm/v8/Deals');
-      assert.equal(request.config.params.page, 1);
-      assert.equal(request.config.params.per_page, 25);
+      assert.equal(request.url, '/crm/v8/Deals/search');
+      assert.equal(request.config.params.per_page, 200);
       assert.equal(request.config.params.fields, 'Deal_Name,Stage');
       assert.equal(request.config.params.criteria, "(Stage:equals:Closed Won)");
       assert.equal(request.config.params.sort_by, 'Closing_Date');
       assert.equal(request.config.params.sort_order, 'desc');
     });
-    assert.deepEqual(result.data, [{ id: '1' }]);
-    assert.equal(result.info.more_records, true);
+    assert.deepEqual(result.data, [{ id: '1' }, { id: '2' }, { id: '3' }]);
+    assert.equal(result.info.more_records, false);
   } finally {
     zohoClient.get = originalGet;
   }
@@ -651,7 +650,7 @@ test('CRM service keeps only the requested page when retrieval_mode=page', async
   }
 });
 
-test('CRM service keeps natural-language all-record list requests bounded by default', async () => {
+test('CRM service completes natural-language all-record list requests', async () => {
   const originalGet = zohoClient.get;
   const requests = [];
   const pages = [
@@ -672,14 +671,13 @@ test('CRM service keeps natural-language all-record list requests bounded by def
       search: 'Show all Tasks',
     });
 
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, 3);
     requests.forEach((request) => {
       assert.equal(request.url, '/crm/v8/Tasks');
-      assert.equal(request.config.params.page, 1);
-      assert.equal(request.config.params.per_page, 25);
+      assert.equal(request.config.params.per_page, 200);
     });
-    assert.equal(result.data.length, 25);
-    assert.equal(result.info.more_records, true);
+    assert.equal(result.data.length, 52);
+    assert.equal(result.info.more_records, false);
   } finally {
     zohoClient.get = originalGet;
   }
@@ -727,7 +725,7 @@ test('CRM service completes Closed Won June 2026 searches across later pages', a
   }
 });
 
-test('CRM service keeps Copilot default complete-list phrasing bounded', async () => {
+test('CRM service completes Copilot default complete-list phrasing', async () => {
   const originalGet = zohoClient.get;
   const requests = [];
   const pages = [
@@ -747,12 +745,12 @@ test('CRM service keeps Copilot default complete-list phrasing bounded', async (
       search: 'Give me the complete list of Leads from Advertisement',
     });
 
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, 2);
     requests.forEach((request) => {
-      assert.equal(request.config.params.page, 1);
-      assert.equal(request.config.params.per_page, 25);
+      assert.equal(request.config.params.page, undefined);
+      assert.equal(request.config.params.per_page, 200);
     });
-    assert.deepEqual(result.data, [{ id: '1' }]);
+    assert.deepEqual(result.data, [{ id: '1' }, { id: '2' }]);
   } finally {
     zohoClient.get = originalGet;
   }
@@ -950,18 +948,15 @@ test('CRM service treats top and analytics prompts as full retrieval', async () 
   }
 });
 
-test('CRM service uses one bounded request for specific record prompts', async () => {
+test('CRM service paginates specific record prompts', async () => {
   const originalGet = zohoClient.get;
   const requests = [];
 
   zohoClient.get = async (url, config) => {
     requests.push({ url, config });
-    return {
-      data: {
-        data: [{ id: '1' }],
-        info: { more_records: true },
-      },
-    };
+    return { data: requests.length === 1
+      ? { data: [{ id: '1' }], info: { more_records: true } }
+      : { data: [{ id: '2' }], info: { more_records: false } } };
   };
 
   try {
@@ -969,17 +964,16 @@ test('CRM service uses one bounded request for specific record prompts', async (
       search: 'Show Deal ABC',
     });
 
-    assert.equal(requests.length, 1);
-    assert.equal(requests[0].url, '/crm/v8/Deals');
-    assert.equal(requests[0].config.params.page, 1);
-    assert.equal(requests[0].config.params.per_page, 1);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url, '/crm/v8/Deals/search');
+    assert.equal(requests[0].config.params.per_page, 200);
     assert.equal(requests[0].config.params.criteria, '((Deal_Name:equals:ABC)or(Account_Name:equals:ABC))');
   } finally {
     zohoClient.get = originalGet;
   }
 });
 
-test('CRM service keeps explicit filtered list requests bounded', async () => {
+test('CRM service completes explicit filtered list requests', async () => {
   const originalGet = zohoClient.get;
   const requests = [];
   const pages = [
@@ -998,14 +992,13 @@ test('CRM service keeps explicit filtered list requests bounded', async () => {
       search: 'Show contacts from Hyderabad',
     });
 
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, 2);
     requests.forEach((request) => {
-      assert.equal(request.url, '/crm/v8/Contacts');
-      assert.equal(request.config.params.page, 1);
-      assert.equal(request.config.params.per_page, 25);
+      assert.equal(request.url, '/crm/v8/Contacts/search');
+      assert.equal(request.config.params.per_page, 200);
       assert.equal(request.config.params.criteria, '(Mailing_City:equals:Hyderabad)');
     });
-    assert.deepEqual(result.data, [{ id: '1' }]);
+    assert.deepEqual(result.data, [{ id: '1' }, { id: '2' }]);
   } finally {
     zohoClient.get = originalGet;
   }
@@ -1033,7 +1026,7 @@ test('CRM service infers simple equality filters before complete retrieval', asy
     assert.equal(requests.length, 1);
     assert.equal(requests[0].url, '/crm/v8/Accounts');
     assert.equal(requests[0].config.params.page, 1);
-    assert.equal(requests[0].config.params.per_page, 25);
+    assert.equal(requests[0].config.params.per_page, 200);
     assert.equal(requests[0].config.params.criteria, '(Invoice_Type:equals:RAW)');
   } finally {
     zohoClient.get = originalGet;

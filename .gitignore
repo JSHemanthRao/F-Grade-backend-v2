@@ -1,3 +1,26 @@
-node_modules/
+# Python
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets
 .env
+.env.local
+
+# Node (legacy)
+node_modules/
 npm-debug.log*
+
+# Temporary / debug node files
+temp_*.js
+tmp_*.js
+temp_*.json
+temp_*.txt
+
+# Logs & OS
+*.log
+.DS_Store
+Thumbs.db

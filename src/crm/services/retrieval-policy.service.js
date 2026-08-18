@@ -23,6 +23,8 @@ const RETRIEVAL_MODES = {
 };
 
 const FULL_RETRIEVAL_PATTERNS = [
+  /\ball\b/,
+  /\bcomplete\s+(?:list|dataset|set)\b/,
   /\bsum\b/,
   /\bsummary\b/,
   /\bgrouped\b/,
@@ -485,13 +487,10 @@ function getRetrievalPlan(moduleDefinition, options = {}) {
   const hasDateRangeFilter = options.date_field && options.from && options.to;
   if (hasDateRangeFilter) {
     return {
-      strategy: RETRIEVAL_STRATEGIES.PAGINATED_LIST,
-      fetchAll: false,
-      params: {
-        page: 1,
-        per_page: DEFAULT_LIMITED_PER_PAGE,
-      },
-      reason: 'date_filtered_paginated_list',
+      strategy: RETRIEVAL_STRATEGIES.FULL_DATASET,
+      fetchAll: true,
+      params: {},
+      reason: 'date_filtered_complete_dataset',
       retrievalMode,
     };
   }
@@ -513,19 +512,14 @@ function getRetrievalPlan(moduleDefinition, options = {}) {
     };
   }
 
-  // If callers provided explicit filter criteria or we inferred a specific
-  // equality criteria from the request, keep the lookup server-side but
-  // bounded for conversational use.
+  // Server-side criteria still require complete pagination. A filter narrows
+  // the dataset; it does not authorize dropping matching records after page 1.
   if (hasExplicitFilter(options) || inferredCriteria) {
     return {
-      strategy: RETRIEVAL_STRATEGIES.PAGINATED_LIST,
-      fetchAll: false,
-      params: {
-        page: 1,
-        per_page: DEFAULT_LIMITED_PER_PAGE,
-        ...(inferredCriteria ? { criteria: inferredCriteria } : {}),
-      },
-      reason: 'filtered_paginated_list',
+      strategy: RETRIEVAL_STRATEGIES.FULL_DATASET,
+      fetchAll: true,
+      params: inferredCriteria ? { criteria: inferredCriteria } : {},
+      reason: 'filtered_complete_dataset',
       retrievalMode,
     };
   }
@@ -556,17 +550,12 @@ function getRetrievalPlan(moduleDefinition, options = {}) {
       : buildOrCriteria(getSearchableFields(moduleDefinition), specificSearchTerm);
 
     return {
-      // A specifically named CRM record is a bounded lookup. The criteria
-      // narrows the requested dataset to the matching record itself; this is
-      // distinct from a filtered collection query such as "all Closed Won".
-      strategy: RETRIEVAL_STRATEGIES.PAGINATED_LIST,
-      fetchAll: false,
+      strategy: RETRIEVAL_STRATEGIES.FULL_DATASET,
+      fetchAll: true,
       params: {
-        page: 1,
-        per_page: SINGLE_RECORD_PER_PAGE,
         ...(criteria ? { criteria } : {}),
       },
-      reason: 'specific_record_search',
+      reason: 'specific_record_complete_search',
       retrievalMode,
     };
   }
