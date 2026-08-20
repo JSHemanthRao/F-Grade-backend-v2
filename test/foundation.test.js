@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const createApp = require('../src/app').createApp;
+const { CRM_MODULES } = require('../src/constants/crmModules');
+const { validateCrmQuery } = require('../src/validators/crmQuery.validator');
 
 function requestJson(app, path, method, body) {
   return new Promise((resolve, reject) => {
@@ -71,4 +73,38 @@ test('rejects invalid filter values, sorting, limit, and offset', async () => {
   assert.ok(errors.some((error) => error.path === 'sort.order'));
   assert.ok(errors.some((error) => error.path === 'limit'));
   assert.ok(errors.some((error) => error.path === 'offset'));
+});
+
+test('accepts valid API fields for Deals, Leads, Contacts, and Accounts', () => {
+  for (const module of ['Deals', 'Leads', 'Contacts', 'Accounts']) {
+    const fields = CRM_MODULES[module].slice(0, 3);
+    assert.deepEqual(validateCrmQuery({ module, fields }).fields, fields);
+  }
+});
+
+test('rejects display labels instead of Zoho API field names', () => {
+  for (const [module, field] of [['Deals', 'Account Name'], ['Leads', 'Closing Date'], ['Contacts', 'Account Name'], ['Accounts', 'Closing Date']]) {
+    assert.throws(() => validateCrmQuery({ module, fields: [field] }), (error) => {
+      assert.equal(error.code, 'INVALID_CRM_REQUEST');
+      assert.match(error.details.errors[0].message, new RegExp(`Field '${field}'.*valid Zoho CRM API field name`));
+      return true;
+    });
+  }
+});
+
+test('accepts the known-good closed won Deals request', () => {
+  const request = validateCrmQuery({
+    module: 'Deals',
+    fields: ['Deal_Name', 'Amount', 'Stage'],
+    filters: [
+      { field: 'Stage', operator: 'equals', value: 'Closed Won' },
+      { field: 'Amount', operator: 'greater_than', value: 50000 }
+    ],
+    sort: { field: 'Amount', order: 'desc' },
+    limit: 20,
+    offset: 0
+  });
+  assert.deepEqual(request.fields, ['Deal_Name', 'Amount', 'Stage']);
+  assert.equal(request.filters.length, 2);
+  assert.deepEqual(request.sort, { field: 'Amount', order: 'desc' });
 });

@@ -126,6 +126,14 @@ Use a **professional executive tone**: formal, concise, structured, and easy to 
 
 ### Query Construction
 
+- Always generate Zoho CRM API field names, never display labels. Before adding a field to the `fields` array, verify that it is supported by the selected module's allowed API field mapping.
+- Dynamically select fields based on the user's request; do not hardcode only `Deal_Name`, `Amount`, and `Stage` for every request.
+- Use the following display-label translations only when the translated API field is present in the selected module's allowed mapping: `Account Name` -> `Account_Name`, `Closing Date` -> `Closing_Date`, `Deal Name` -> `Deal_Name`, `First Name` -> `First_Name`, `Last Name` -> `Last_Name`, `Lead Status` -> `Lead_Status`, `Lead Source` -> `Lead_Source`, `Created Time` -> `Created_Time`, and `Modified Time` -> `Modified_Time`.
+- For Deals, the authoritative allowed API fields are: `id`, `Deal_Name`, `Amount`, `Stage`, `Closing_Date`, `Account_Name`, `Type`, `Probability`, `Owner`, `Created_Time`, and `Modified_Time`.
+- For Leads, the authoritative allowed API fields are: `id`, `First_Name`, `Last_Name`, `Company`, `Email`, `Phone`, `Lead_Status`, `Lead_Source`, `Owner`, `Created_Time`, and `Modified_Time`.
+- For Contacts, the authoritative allowed API fields are: `id`, `First_Name`, `Last_Name`, `Account_Name`, `Email`, `Phone`, `Title`, `Owner`, `Created_Time`, and `Modified_Time`.
+- For Accounts, the authoritative allowed API fields are: `id`, `Account_Name`, `Account_Type`, `Industry`, `Phone`, `Website`, `Billing_City`, `Billing_State`, `Owner`, `Created_Time`, and `Modified_Time`.
+- If a requested field is not in the selected module's allowed mapping, omit it or clearly explain that it is unavailable; never invent an API field name.
 - For **"Show me closed won deals above 50000"**, include both requested filters: `Stage equals Closed Won` and `Amount greater_than 50000`.
 - Do not apply filters that the user did not request.
 - When the user requests records above an amount threshold without specifying another order, sort by `Amount` descending.

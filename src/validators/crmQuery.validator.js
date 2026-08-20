@@ -19,6 +19,7 @@ function validateCrmQuery(body) {
   const { module, fields, filters = [], sort, limit = 20, offset = 0 } = body;
   const supportedFields = CRM_MODULES[module];
   const addError = (path, message) => errors.push({ path, message });
+  const invalidFieldMessage = (field) => `Field '${field}' is not supported for module '${module}'. Use a valid Zoho CRM API field name. Allowed fields: ${supportedFields ? supportedFields.join(', ') : 'none'}.`;
 
   if (typeof module !== 'string' || !supportedFields) addError('module', `module must be one of: ${Object.keys(CRM_MODULES).join(', ')}.`);
   if (!Array.isArray(fields) || fields.length === 0) addError('fields', 'fields must be a non-empty array.');
@@ -27,7 +28,7 @@ function validateCrmQuery(body) {
     if (duplicates.length > 0) addError('fields', `fields must not contain duplicates: ${[...new Set(duplicates)].join(', ')}.`);
     fields.forEach((field, index) => {
       if (typeof field !== 'string' || field.length === 0) addError(`fields[${index}]`, 'Field names must be non-empty strings.');
-      else if (supportedFields && !supportedFields.includes(field)) addError(`fields[${index}]`, `Field '${field}' is not supported for module '${module}'.`);
+      else if (supportedFields && !supportedFields.includes(field)) addError(`fields[${index}]`, invalidFieldMessage(field));
     });
   }
 
@@ -38,7 +39,7 @@ function validateCrmQuery(body) {
       addError(path, 'Each filter must be an object.');
       return;
     }
-    if (!supportedFields || typeof filter.field !== 'string' || !supportedFields.includes(filter.field)) addError(`${path}.field`, `Filter field must be supported for module '${module}'.`);
+    if (!supportedFields || typeof filter.field !== 'string' || !supportedFields.includes(filter.field)) addError(`${path}.field`, invalidFieldMessage(filter.field));
     if (typeof filter.operator !== 'string' || !OPERATOR_SET.has(filter.operator)) {
       addError(`${path}.operator`, `Operator must be one of: ${CRM_OPERATORS.join(', ')}.`);
       return;
@@ -57,7 +58,7 @@ function validateCrmQuery(body) {
   if (sort !== undefined) {
     if (!sort || typeof sort !== 'object' || Array.isArray(sort)) addError('sort', 'sort must be an object.');
     else {
-      if (!supportedFields || !supportedFields.includes(sort.field)) addError('sort.field', `Sort field must be supported for module '${module}'.`);
+      if (!supportedFields || !supportedFields.includes(sort.field)) addError('sort.field', invalidFieldMessage(sort.field));
       if (!['asc', 'desc'].includes(sort.order)) addError('sort.order', "sort.order must be either 'asc' or 'desc'.");
     }
   }
