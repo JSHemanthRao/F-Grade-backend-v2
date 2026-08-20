@@ -108,8 +108,17 @@
             "$ref": "#/definitions/CrmFilter"
           }
         },
-        "sort": {
-          "$ref": "#/definitions/CrmSort"
+        "sort_field": {
+          "type": "string",
+          "description": "Zoho CRM API field used to sort the returned records."
+        },
+        "sort_order": {
+          "type": "string",
+          "description": "Sort direction: asc for ascending or desc for descending.",
+          "enum": [
+            "asc",
+            "desc"
+          ]
         },
         "limit": {
           "type": "integer",
@@ -161,28 +170,6 @@
         "value": {
           "description": "Scalar value for most operators, exactly two scalar values for between, or a non-empty scalar array for in. The value is not required for is_null and is_not_null.",
           "x-ms-summary": "Filter value"
-        }
-      }
-    },
-    "CrmSort": {
-      "type": "object",
-      "required": [
-        "field",
-        "order"
-      ],
-      "properties": {
-        "field": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Zoho CRM API field used to sort the returned records."
-        },
-        "order": {
-          "type": "string",
-          "description": "Sort direction: asc for ascending or desc for descending.",
-          "enum": [
-            "asc",
-            "desc"
-          ]
         }
       }
     },

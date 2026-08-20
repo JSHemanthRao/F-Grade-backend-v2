@@ -100,7 +100,8 @@ test('accepts the known-good closed won Deals request', () => {
       { field: 'Stage', operator: 'equals', value: 'Closed Won' },
       { field: 'Amount', operator: 'greater_than', value: 50000 }
     ],
-    sort: { field: 'Amount', order: 'desc' },
+    sort_field: 'Amount',
+    sort_order: 'desc',
     limit: 20,
     offset: 0
   });

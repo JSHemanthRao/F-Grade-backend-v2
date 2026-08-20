@@ -79,9 +79,13 @@ test('authenticates, calls Zoho COQL, and normalizes the CRM response', async ()
   const crmService = new CrmService(new ZohoCrmService(fakeClient, () => config));
   const result = await crmService.query({
     module: 'Deals',
-    fields: ['Deal_Name', 'Amount', 'Stage'],
-    filters: [{ field: 'Stage', operator: 'equals', value: 'Closed Won' }],
-    sort: { field: 'Amount', order: 'desc' },
+    fields: ['Deal_Name', 'Account_Name', 'Amount', 'Stage', 'Closing_Date', 'Owner'],
+    filters: [
+      { field: 'Stage', operator: 'equals', value: 'Closed Won' },
+      { field: 'Amount', operator: 'greater_than', value: 50000 }
+    ],
+    sort_field: 'Amount',
+    sort_order: 'desc',
     limit: 20,
     offset: 0
   });
@@ -89,7 +93,7 @@ test('authenticates, calls Zoho COQL, and normalizes the CRM response', async ()
   assert.equal(calls.length, 2);
   assert.equal(calls[0].body, null);
   assert.equal(calls[1].url, 'https://www.zohoapis.com/crm/v8/coql');
-  assert.equal(calls[1].body.select_query, "select Deal_Name, Amount, Stage from Deals where (Stage = 'Closed Won') order by Amount desc limit 0, 20");
+  assert.equal(calls[1].body.select_query, "select Deal_Name, Account_Name, Amount, Stage, Closing_Date, Owner from Deals where ((Stage = 'Closed Won') and (Amount > 50000)) order by Amount desc limit 0, 20");
   assert.equal(calls[1].options.headers.Authorization, 'Zoho-oauthtoken server-token');
   assert.deepEqual(result, {
     module: 'Deals',

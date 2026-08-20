@@ -16,7 +16,7 @@ function validateCrmQuery(body) {
     throw createAppError('INVALID_CRM_REQUEST', 'CRM request validation failed.', 400, { errors: [{ path: 'body', message: 'Request body must be a JSON object.' }] });
   }
 
-  const { module, fields, filters = [], sort, limit = 20, offset = 0 } = body;
+  const { module, fields, filters = [], sort, sort_field, sort_order, limit = 20, offset = 0 } = body;
   const supportedFields = CRM_MODULES[module];
   const addError = (path, message) => errors.push({ path, message });
   const invalidFieldMessage = (field) => `Field '${field}' is not supported for module '${module}'. Use a valid Zoho CRM API field name. Allowed fields: ${supportedFields ? supportedFields.join(', ') : 'none'}.`;
@@ -55,7 +55,20 @@ function validateCrmQuery(body) {
     }
   });
 
-  if (sort !== undefined) {
+  let normalizedSort = sort;
+  const hasFlatSort = sort_field !== undefined || sort_order !== undefined;
+  if (hasFlatSort) {
+    if (sort !== undefined) addError('sort', 'Use sort_field and sort_order instead of the nested sort object.');
+    if (sort_field === undefined) addError('sort_field', 'sort_field is required when sort_order is provided.');
+    else if (typeof sort_field !== 'string' || !supportedFields || !supportedFields.includes(sort_field)) addError('sort_field', invalidFieldMessage(sort_field));
+    if (sort_order === undefined) addError('sort_order', 'sort_order is required when sort_field is provided.');
+    else if (!['asc', 'desc'].includes(sort_order)) addError('sort_order', "sort_order must be either 'asc' or 'desc'.");
+    if (sort_field !== undefined && sort_order !== undefined && typeof sort_field === 'string' && supportedFields?.includes(sort_field) && ['asc', 'desc'].includes(sort_order)) {
+      normalizedSort = { field: sort_field, order: sort_order };
+    } else {
+      normalizedSort = undefined;
+    }
+  } else if (sort !== undefined) {
     if (!sort || typeof sort !== 'object' || Array.isArray(sort)) addError('sort', 'sort must be an object.');
     else {
       if (!supportedFields || !supportedFields.includes(sort.field)) addError('sort.field', invalidFieldMessage(sort.field));
@@ -66,7 +79,7 @@ function validateCrmQuery(body) {
   if (!Number.isInteger(offset) || offset < 0) addError('offset', 'offset must be a non-negative integer.');
 
   if (errors.length > 0) throw createAppError('INVALID_CRM_REQUEST', 'CRM request validation failed.', 400, { errors });
-  return { module, fields, filters, sort, limit, offset };
+  return { module, fields, filters, sort: normalizedSort, limit, offset };
 }
 
 module.exports = { validateCrmQuery };
