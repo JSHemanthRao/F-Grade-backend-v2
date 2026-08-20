@@ -95,7 +95,7 @@ test('rejects display labels instead of Zoho API field names', () => {
 test('accepts the known-good closed won Deals request', () => {
   const request = validateCrmQuery({
     module: 'Deals',
-    fields: ['Deal_Name', 'Amount', 'Stage'],
+    fields: ['Deal_Name', 'Account_Name', 'Amount', 'Stage', 'Closing_Date', 'Owner'],
     filters: [
       { field: 'Stage', operator: 'equals', value: 'Closed Won' },
       { field: 'Amount', operator: 'greater_than', value: 50000 }
@@ -104,7 +104,7 @@ test('accepts the known-good closed won Deals request', () => {
     limit: 20,
     offset: 0
   });
-  assert.deepEqual(request.fields, ['Deal_Name', 'Amount', 'Stage']);
+  assert.deepEqual(request.fields, ['Deal_Name', 'Account_Name', 'Amount', 'Stage', 'Closing_Date', 'Owner']);
   assert.equal(request.filters.length, 2);
   assert.deepEqual(request.sort, { field: 'Amount', order: 'desc' });
 });
