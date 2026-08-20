@@ -169,7 +169,7 @@
         },
         "value": {
           "type": "string",
-          "description": "Filter value. Numeric comparison values such as 50000 are passed as strings; the backend interprets them for numeric comparisons. Use a string representation for scalar values and preserve the requested filter semantics.",
+          "description": "Filter value. Numeric comparison values such as 50000 may be sent as strings by Copilot Studio and are interpreted by the backend for numeric comparisons. Use a scalar string for equals, contains, and comparisons; use the backend-supported scalar array for in and exactly two scalar values for between. Omit value for is_null and is_not_null.",
           "x-ms-summary": "Filter value"
         }
       }

@@ -144,6 +144,81 @@ test('does not quote numeric COQL values and rejects invalid date values', () =>
   }), /YYYY-MM-DD/);
 });
 
+test('keeps numeric filter strings unquoted for comparison operators', () => {
+  const query = buildCoqlQuery({
+    module: 'Deals',
+    fields: ['Deal_Name', 'Amount'],
+    filters: [
+      { field: 'Amount', operator: 'greater_than', value: '50000' },
+      { field: 'Amount', operator: 'less_than', value: '100000' },
+      { field: 'Amount', operator: 'greater_equal', value: '50000' },
+      { field: 'Amount', operator: 'less_equal', value: '100000' },
+      { field: 'Amount', operator: 'between', value: ['50000', '100000'] }
+    ]
+  });
+  assert.match(query, /Amount > 50000/);
+  assert.match(query, /Amount < 100000/);
+  assert.match(query, /Amount >= 50000 and Amount <= 100000/);
+  assert.doesNotMatch(query, /Amount [<>]=? '\d+'/);
+});
+
+test('supports Accounts filtered by Industry', () => {
+  const query = buildCoqlQuery({
+    module: 'Accounts',
+    fields: ['Account_Name', 'Industry'],
+    filters: [{ field: 'Industry', operator: 'equals', value: 'Technology' }]
+  });
+  assert.equal(query, "select Account_Name, Industry from Accounts where (Industry = 'Technology')");
+});
+
+test('supports Contacts filtered by Account_Name', () => {
+  const query = buildCoqlQuery({
+    module: 'Contacts',
+    fields: ['First_Name', 'Last_Name', 'Account_Name'],
+    filters: [{ field: 'Account_Name', operator: 'equals', value: 'Acme Corporation' }]
+  });
+  assert.equal(query, "select First_Name, Last_Name, Account_Name from Contacts where (Account_Name = 'Acme Corporation')");
+});
+
+test('supports Meetings filtered by date', () => {
+  const query = buildCoqlQuery({
+    module: 'Meetings',
+    fields: ['Event_Title', 'Start_DateTime'],
+    filters: [{ field: 'Start_DateTime', operator: 'greater_equal', value: '2026-08-20' }]
+  });
+  assert.equal(query, "select Event_Title, Start_DateTime from Events where (Start_DateTime >= '2026-08-20')");
+});
+
+test('supports Tasks filtered by due date', () => {
+  const query = buildCoqlQuery({
+    module: 'Tasks',
+    fields: ['Subject', 'Due_Date'],
+    filters: [{ field: 'Due_Date', operator: 'equals', value: '2026-08-20' }]
+  });
+  assert.equal(query, "select Subject, Due_Date from Tasks where (Due_Date = '2026-08-20')");
+});
+
+test('preserves pagination offsets 0 and 20 in Zoho requests', async () => {
+  const queries = [];
+  const fakeClient = {
+    post: async (url, body) => {
+      if (url.includes('/oauth/v2/token')) return { data: { access_token: 'test-token', expires_in: 3600 } };
+      queries.push(body.select_query);
+      return { data: { data: [], info: { count: 0, more_records: false } } };
+    }
+  };
+  const service = new ZohoCrmService(fakeClient, () => ({
+    accountsUrl: 'https://accounts.zoho.com',
+    apiBaseUrl: 'https://www.zohoapis.com/crm/v8',
+    clientId: 'id', clientSecret: 'secret', refreshToken: 'refresh', timeoutMs: 15000
+  }));
+  const request = { module: 'Deals', fields: ['Deal_Name'], filters: [], limit: 20 };
+  await service.query({ ...request, offset: 0 });
+  await service.query({ ...request, offset: 20 });
+  assert.match(queries[0], /limit 0, 20$/);
+  assert.match(queries[1], /limit 20, 20$/);
+});
+
 test('concurrent requests share one OAuth refresh request', async () => {
   let tokenCalls = 0;
   const fakeClient = {

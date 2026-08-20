@@ -16,6 +16,11 @@ function formatValue(field, value) {
   return `'${String(normalized).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 }
 
+function formatComparisonValue(field, value) {
+  if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value)) return value;
+  return formatValue(field, value);
+}
+
 function buildFilterClauses(filters) {
   return filters.flatMap(({ field, operator, value }) => {
     if (operator === 'is_null') return [`${field} is null`];
@@ -24,12 +29,12 @@ function buildFilterClauses(filters) {
     if (operator === 'not_equals') return [`${field} != ${formatValue(field, value)}`];
     if (operator === 'contains') return [`${field} like ${formatValue(field, `%${value}%`)}`];
     if (operator === 'starts_with') return [`${field} like ${formatValue(field, `${value}%`)}`];
-    if (operator === 'greater_than') return [`${field} > ${formatValue(field, value)}`];
-    if (operator === 'less_than') return [`${field} < ${formatValue(field, value)}`];
-    if (operator === 'greater_equal') return [`${field} >= ${formatValue(field, value)}`];
-    if (operator === 'less_equal') return [`${field} <= ${formatValue(field, value)}`];
+    if (operator === 'greater_than') return [`${field} > ${formatComparisonValue(field, value)}`];
+    if (operator === 'less_than') return [`${field} < ${formatComparisonValue(field, value)}`];
+    if (operator === 'greater_equal') return [`${field} >= ${formatComparisonValue(field, value)}`];
+    if (operator === 'less_equal') return [`${field} <= ${formatComparisonValue(field, value)}`];
     if (operator === 'in') return [`${field} in (${value.map((item) => formatValue(field, item)).join(', ')})`];
-    if (operator === 'between') return [`${field} >= ${formatValue(field, value[0])} and ${field} <= ${formatValue(field, value[1])}`];
+    if (operator === 'between') return [`${field} >= ${formatComparisonValue(field, value[0])} and ${field} <= ${formatComparisonValue(field, value[1])}`];
     return [];
   });
 }
@@ -52,4 +57,4 @@ function buildWhereClause(clauses) {
   return expression;
 }
 
-module.exports = { buildCoqlQuery, buildFilterClauses, buildWhereClause, formatValue };
+module.exports = { buildCoqlQuery, buildFilterClauses, buildWhereClause, formatValue, formatComparisonValue };
