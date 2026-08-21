@@ -198,7 +198,7 @@ test('supports Tasks filtered by due date', () => {
   assert.equal(query, "select Subject, Due_Date from Tasks where (Due_Date = '2026-08-20')");
 });
 
-test('preserves pagination offsets 0 and 20 in Zoho requests', async () => {
+test('preserves first, second, and third pagination offsets in Zoho requests', async () => {
   const queries = [];
   const fakeClient = {
     post: async (url, body) => {
@@ -215,8 +215,57 @@ test('preserves pagination offsets 0 and 20 in Zoho requests', async () => {
   const request = { module: 'Deals', fields: ['Deal_Name'], filters: [], limit: 20 };
   await service.query({ ...request, offset: 0 });
   await service.query({ ...request, offset: 20 });
+  await service.query({ ...request, offset: 40 });
   assert.match(queries[0], /limit 0, 20$/);
   assert.match(queries[1], /limit 20, 20$/);
+  assert.match(queries[2], /limit 40, 20$/);
+});
+
+test('returns more_records false when Zoho reports no additional page', async () => {
+  const zohoService = new ZohoCrmService({
+    post: async (url) => url.includes('/oauth/v2/token')
+      ? { data: { access_token: 'test-token', expires_in: 3600 } }
+      : { data: { data: [{ id: '1' }], info: { count: 1, more_records: false } } }
+  }, () => ({
+    accountsUrl: 'https://accounts.zoho.com',
+    apiBaseUrl: 'https://www.zohoapis.com/crm/v8',
+    clientId: 'id', clientSecret: 'secret', refreshToken: 'refresh', timeoutMs: 15000
+  }));
+  const service = new CrmService(zohoService);
+  const result = await service.query({ module: 'Deals', fields: ['Deal_Name'], filters: [], limit: 20, offset: 20 });
+  assert.equal(result.pagination.more_records, false);
+});
+
+test('preserves the original filters when requesting the next page', async () => {
+  const queries = [];
+  const zohoService = new ZohoCrmService({
+    post: async (url, body) => {
+      if (url.includes('/oauth/v2/token')) return { data: { access_token: 'test-token', expires_in: 3600 } };
+      queries.push(body.select_query);
+      return { data: { data: [], info: { count: 20, more_records: true } } };
+    }
+  }, () => ({
+    accountsUrl: 'https://accounts.zoho.com',
+    apiBaseUrl: 'https://www.zohoapis.com/crm/v8',
+    clientId: 'id', clientSecret: 'secret', refreshToken: 'refresh', timeoutMs: 15000
+  }));
+  const service = new CrmService(zohoService);
+  const request = {
+    module: 'Deals',
+    fields: ['Deal_Name', 'Amount', 'Stage'],
+    filters: [
+      { field: 'Stage', operator: 'equals', value: 'Closed Won' },
+      { field: 'Amount', operator: 'greater_than', value: '50000' }
+    ],
+    sort_field: 'Amount',
+    sort_order: 'desc',
+    limit: 20
+  };
+  await service.query({ ...request, offset: 0 });
+  await service.query({ ...request, offset: 20 });
+  const expectedQuery = "select Deal_Name, Amount, Stage from Deals where ((Stage = 'Closed Won') and (Amount > 50000)) order by Amount desc";
+  assert.equal(queries[0], `${expectedQuery} limit 0, 20`);
+  assert.equal(queries[1], `${expectedQuery} limit 20, 20`);
 });
 
 test('concurrent requests share one OAuth refresh request', async () => {
