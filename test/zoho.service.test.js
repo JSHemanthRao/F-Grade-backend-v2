@@ -116,6 +116,16 @@ test('converts date between filters into parenthesized inclusive COQL bounds', (
   assert.equal(query, "select Deal_Name, Amount, Stage, Closing_Date from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) order by Amount desc");
 });
 
+test('generates the correct COQL for a normalized comma-separated between value', () => {
+  const { validateCrmQuery } = require('../src/validators/crmQuery.validator');
+  const request = validateCrmQuery({
+    module: 'Deals',
+    fields: ['Closing_Date'],
+    filters: [{ field: 'Closing_Date', operator: 'between', value: '2026-07-01,2026-07-31' }]
+  });
+  assert.equal(buildCoqlQuery(request), "select Closing_Date from Deals where (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')");
+});
+
 test('retrieves only Closed Won Deals within the requested Closing_Date range', async () => {
   const calls = [];
   const fakeClient = {

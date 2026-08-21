@@ -109,3 +109,29 @@ test('accepts the known-good closed won Deals request', () => {
   assert.equal(request.filters.length, 2);
   assert.deepEqual(request.sort, { field: 'Amount', order: 'desc' });
 });
+
+test('normalizes a comma-separated between value into exactly two values', () => {
+  const request = validateCrmQuery({
+    module: 'Deals',
+    fields: ['Closing_Date'],
+    filters: [{ field: 'Closing_Date', operator: 'between', value: '2026-07-01,2026-07-31' }]
+  });
+  assert.deepEqual(request.filters[0].value, ['2026-07-01', '2026-07-31']);
+});
+
+test('continues accepting an array between value and rejects invalid ranges', () => {
+  const request = validateCrmQuery({
+    module: 'Deals',
+    fields: ['Closing_Date'],
+    filters: [{ field: 'Closing_Date', operator: 'between', value: ['2026-07-01', '2026-07-31'] }]
+  });
+  assert.deepEqual(request.filters[0].value, ['2026-07-01', '2026-07-31']);
+  assert.throws(() => validateCrmQuery({
+    module: 'Deals',
+    fields: ['Closing_Date'],
+    filters: [{ field: 'Closing_Date', operator: 'between', value: '2026-07-01,,2026-07-31' }]
+  }), (error) => {
+    assert.match(error.details.errors[0].message, /between requires exactly two non-empty scalar values/);
+    return true;
+  });
+});

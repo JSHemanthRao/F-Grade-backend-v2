@@ -10,6 +10,16 @@ function isValue(value) {
   return value !== null && value !== undefined && ['string', 'number', 'boolean'].includes(typeof value);
 }
 
+function normalizeBetweenValue(value) {
+  if (typeof value === 'string') return value.split(',').map((part) => part.trim());
+  if (Array.isArray(value)) return value;
+  return null;
+}
+
+function hasNonEmptyValue(value) {
+  return isValue(value) && (typeof value !== 'string' || value.trim().length > 0);
+}
+
 function validateCrmQuery(body) {
   const errors = [];
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -32,6 +42,7 @@ function validateCrmQuery(body) {
     });
   }
 
+  const normalizedFilters = Array.isArray(filters) ? filters.map((filter) => ({ ...filter })) : filters;
   if (!Array.isArray(filters)) addError('filters', 'filters must be an array.');
   else filters.forEach((filter, index) => {
     const path = `filters[${index}]`;
@@ -50,7 +61,14 @@ function validateCrmQuery(body) {
     } else if (VALUE_OPERATORS.has(filter.operator)) {
       if (!hasValue) addError(`${path}.value`, `Operator '${filter.operator}' requires a value.`);
       else if (filter.operator === 'in' && (!Array.isArray(filter.value) || filter.value.length === 0 || filter.value.some((value) => !isValue(value)))) addError(`${path}.value`, 'in requires a non-empty array of scalar values.');
-      else if (filter.operator === 'between' && (!Array.isArray(filter.value) || filter.value.length !== 2 || filter.value.some((value) => !isValue(value)))) addError(`${path}.value`, 'between requires exactly two scalar values.');
+      else if (filter.operator === 'between') {
+        const betweenValue = normalizeBetweenValue(filter.value);
+        if (!betweenValue || betweenValue.length !== 2 || betweenValue.some((value) => !hasNonEmptyValue(value))) {
+          addError(`${path}.value`, 'between requires exactly two non-empty scalar values, provided as an array or comma-separated string.');
+        } else {
+          normalizedFilters[index] = { ...filter, value: betweenValue };
+        }
+      }
       else if (!['in', 'between'].includes(filter.operator) && !isValue(filter.value)) addError(`${path}.value`, `Operator '${filter.operator}' requires a scalar value.`);
     }
   });
@@ -79,7 +97,7 @@ function validateCrmQuery(body) {
   if (!Number.isInteger(offset) || offset < 0) addError('offset', 'offset must be a non-negative integer.');
 
   if (errors.length > 0) throw createAppError('INVALID_CRM_REQUEST', 'CRM request validation failed.', 400, { errors });
-  return { module, fields, filters, sort: normalizedSort, limit, offset };
+  return { module, fields, filters: normalizedFilters, sort: normalizedSort, limit, offset };
 }
 
 module.exports = { validateCrmQuery };

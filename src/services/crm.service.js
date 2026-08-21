@@ -11,6 +11,7 @@ class CrmService {
   async query(input) {
     log('info', `[CRM filters received] ${JSON.stringify(Array.isArray(input?.filters) ? input.filters : [])}`);
     const request = validateCrmQuery(input);
+    log('info', `[CRM filters normalized] ${JSON.stringify(request.filters)}`);
     const result = await this.zohoService.query(request);
     const data = result.records.map(sanitizeZohoRecord);
     const info = result.info || {};
