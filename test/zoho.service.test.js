@@ -116,6 +116,48 @@ test('converts date between filters into parenthesized inclusive COQL bounds', (
   assert.equal(query, "select Deal_Name, Amount, Stage, Closing_Date from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) order by Amount desc");
 });
 
+test('retrieves only Closed Won Deals within the requested Closing_Date range', async () => {
+  const calls = [];
+  const fakeClient = {
+    post: async (url, body) => {
+      if (url.includes('/oauth/v2/token')) return { data: { access_token: 'test-token', expires_in: 3600 } };
+      calls.push(body.select_query);
+      return {
+        data: {
+          data: [
+            { Deal_Name: 'July deal', Stage: 'Closed Won', Closing_Date: '2026-07-31' },
+            { Deal_Name: 'Earlier July deal', Stage: 'Closed Won', Closing_Date: '2026-07-03' }
+          ],
+          info: { count: 2, more_records: false }
+        }
+      };
+    }
+  };
+  const service = new CrmService(new ZohoCrmService(fakeClient, () => ({
+    accountsUrl: 'https://accounts.zoho.com',
+    apiBaseUrl: 'https://www.zohoapis.com/crm/v8',
+    clientId: 'id', clientSecret: 'secret', refreshToken: 'refresh', timeoutMs: 15000
+  })));
+  const result = await service.query({
+    module: 'Deals',
+    fields: ['Deal_Name', 'Stage', 'Closing_Date', 'Amount'],
+    filters: [
+      { field: 'Stage', operator: 'equals', value: 'Closed Won' },
+      { field: 'Closing_Date', operator: 'between', value: ['2026-07-01', '2026-07-31'] }
+    ],
+    sort_field: 'Closing_Date',
+    sort_order: 'desc',
+    limit: 20,
+    offset: 0
+  });
+
+  assert.equal(calls[0], "select Deal_Name, Stage, Closing_Date, Amount from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) order by Closing_Date desc limit 0, 20");
+  assert.equal(result.count, 2);
+  assert.equal(result.pagination.more_records, false);
+  assert.ok(result.data.every((record) => record.Stage === 'Closed Won'));
+  assert.ok(result.data.every((record) => record.Closing_Date >= '2026-07-01' && record.Closing_Date <= '2026-07-31'));
+});
+
 test('keeps additional filters outside the compound date group for Zoho COQL', () => {
   const query = buildCoqlQuery({
     module: 'Deals',
