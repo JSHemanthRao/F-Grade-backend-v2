@@ -1,6 +1,7 @@
 const { validateCrmQuery } = require('../validators/crmQuery.validator');
 const { ZohoCrmService } = require('./zohoCrm.service');
 const { sanitizeZohoRecord } = require('../utils/zohoRecord');
+const { log } = require('../utils/logger');
 
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
@@ -8,6 +9,7 @@ class CrmService {
   }
 
   async query(input) {
+    log('info', `[CRM filters received] ${JSON.stringify(Array.isArray(input?.filters) ? input.filters : [])}`);
     const request = validateCrmQuery(input);
     const result = await this.zohoService.query(request);
     const data = result.records.map(sanitizeZohoRecord);
