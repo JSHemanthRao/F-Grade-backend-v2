@@ -118,7 +118,7 @@ async def run_owner_resolution_check():
     result = await service.query_module(
         "deals",
         fields="Deal_Name,Stage",
-        filter='{"Stage":"Closed Won","Owner":"Laya"}',
+        filter=[{"field": "Owner", "operator": "equals", "value": "Laya"}],
         page=1,
         per_page=10,
     )

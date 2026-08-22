@@ -261,22 +261,61 @@ def _today_range(timezone_name: str = DEFAULT_TIMEZONE) -> Dict[str, str]:
 
 
 def _dict_to_criteria(filters: Any) -> Optional[str]:
-    """Translate ``{"Field": value}`` / list filters into Zoho criteria."""
+    """Translate plain dict filters or structured field/operator/value objects into Zoho criteria."""
     if filters is None:
         return None
     if isinstance(filters, str):
         return filters
-    if not isinstance(filters, dict):
-        return None
 
     clauses: List[str] = []
-    for field, value in filters.items():
-        field = str(field)
-        if isinstance(value, (list, tuple, set)):
-            values = ",".join(f'"{v}"' for v in value if v is not None)
-            clauses.append(f"({field}:in:[{values}])")
+
+    def add_clause(field: Any, operator: str, value: Any) -> None:
+        field_name = str(field)
+        if operator in {"equals", "equal"}:
+            clauses.append(f"({field_name}:equals:{value})")
+        elif operator in {"not_equals", "not_equal"}:
+            clauses.append(f"({field_name}:not_equals:{value})")
+        elif operator == "in":
+            items = value if isinstance(value, (list, tuple, set)) else [value]
+            values = ",".join(f'"{item}"' for item in items if item is not None)
+            clauses.append(f"({field_name}:in:[{values}])")
+        elif operator == "contains":
+            clauses.append(f"({field_name}:contains:{value})")
+        elif operator == "starts_with":
+            clauses.append(f"({field_name}:starts_with:{value})")
+        elif operator == "greater_than":
+            clauses.append(f"({field_name}:greater_than:{value})")
+        elif operator == "less_than":
+            clauses.append(f"({field_name}:less_than:{value})")
+        elif operator == "greater_equal":
+            clauses.append(f"({field_name}:greater_equal:{value})")
+        elif operator == "less_equal":
+            clauses.append(f"({field_name}:less_equal:{value})")
+        elif operator == "between":
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                clauses.append(f"({field_name}:greater_equal:{value[0]})and({field_name}:less_than:{value[1]})")
+        elif operator in {"is_null", "is_not_null"}:
+            clauses.append(f"({field_name}:{operator}:{value})")
+
+    if isinstance(filters, dict):
+        if {"field", "operator", "value"}.issubset(filters.keys()):
+            add_clause(filters.get("field"), filters.get("operator", "equals"), filters.get("value"))
         else:
-            clauses.append(f"({field}:equals:{value})")
+            for field, value in filters.items():
+                field_name = str(field)
+                if isinstance(value, (list, tuple, set)):
+                    values = ",".join(f'"{v}"' for v in value if v is not None)
+                    clauses.append(f"({field_name}:in:[{values}])")
+                else:
+                    clauses.append(f"({field_name}:equals:{value})")
+    elif isinstance(filters, list):
+        for item in filters:
+            if isinstance(item, dict) and {"field", "operator", "value"}.issubset(item.keys()):
+                add_clause(item.get("field"), item.get("operator", "equals"), item.get("value"))
+            elif isinstance(item, dict):
+                for field, value in item.items():
+                    add_clause(field, "equals", value)
+
     return "and".join(clauses) if clauses else None
 
 
@@ -618,7 +657,9 @@ class ZohoCRMService:
                     resolved_id = user.get("user_id")
                 if resolved_id is None:
                     continue
-                logger.info("[Zoho owner lookup] owner_name=%s resolved_user_id=%s", text, resolved_id)
+                logger.info("Owner requested: %s", text)
+                logger.info("Owner resolved ID: %s", resolved_id)
+                logger.info("Final CRM criteria: (Owner:equals:%s)", resolved_id)
                 return str(resolved_id)
 
         raise CRMServiceError(
@@ -646,7 +687,36 @@ class ZohoCRMService:
         parsed = self._parse_filter_payload(raw_filters)
         if parsed is None:
             return parsed
+
+        if isinstance(parsed, list):
+            resolved: List[Dict[str, Any]] = []
+            for item in parsed:
+                if not isinstance(item, dict):
+                    resolved.append(item)
+                    continue
+                if {"field", "operator", "value"}.issubset(item.keys()):
+                    field_name = item.get("field")
+                    value = item.get("value")
+                    if self._is_owner_field(field_name):
+                        if isinstance(value, (list, tuple, set)):
+                            item = {**item, "value": [await self._resolve_owner_value(v) for v in value]}
+                        else:
+                            item = {**item, "value": await self._resolve_owner_value(value)}
+                    resolved.append(item)
+                else:
+                    resolved.append(item)
+            return resolved
+
         if isinstance(parsed, dict):
+            if {"field", "operator", "value"}.issubset(parsed.keys()):
+                field_name = parsed.get("field")
+                value = parsed.get("value")
+                if self._is_owner_field(field_name):
+                    if isinstance(value, (list, tuple, set)):
+                        return {**parsed, "value": [await self._resolve_owner_value(v) for v in value]}
+                    return {**parsed, "value": await self._resolve_owner_value(value)}
+                return parsed
+
             resolved: Dict[str, Any] = {}
             for field_name, field_value in parsed.items():
                 if self._is_owner_field(field_name):
