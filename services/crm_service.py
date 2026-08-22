@@ -17,6 +17,7 @@ Responsibilities:
 import asyncio
 import csv
 import io
+import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -40,6 +41,7 @@ IST_OFFSET = "+05:30"
 EXPORT_MAX_POLLS = 10
 EXPORT_POLL_MS = 2.0  # seconds
 
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Supported CRM modules (module key -> Zoho API endpoint + display label)
@@ -567,6 +569,79 @@ class ZohoCRMService:
 
     # -- data endpoints ----------------------------------------------------
 
+    @staticmethod
+    def _owner_field_name(field_name: Any) -> str:
+        return str(field_name or "").strip().lower().replace("_", " ").replace("-", " ")
+
+    @staticmethod
+    def _is_owner_field(field_name: Any) -> bool:
+        normalized = ZohoCRMService._owner_field_name(field_name)
+        return normalized in {"owner", "deal owner"}
+
+    async def _resolve_owner_value(self, raw_value: Any) -> Any:
+        if raw_value is None:
+            return raw_value
+
+        text = str(raw_value).strip()
+        if not text:
+            return raw_value
+        if re.fullmatch(r"\d+", text):
+            return text
+
+        users_payload = await self.get_users()
+        users = users_payload.get("data") or []
+        requested = text.casefold()
+        for user in users:
+            if not isinstance(user, dict):
+                continue
+            candidates: List[str] = []
+            name = user.get("name") or user.get("full_name") or user.get("display_name")
+            if name:
+                candidates.append(str(name))
+
+            first_name = user.get("first_name")
+            last_name = user.get("last_name")
+            if first_name:
+                candidates.append(str(first_name))
+            if last_name:
+                candidates.append(str(last_name))
+            if first_name and last_name:
+                candidates.append(f"{first_name} {last_name}")
+            email = user.get("email")
+            if email:
+                candidates.append(str(email))
+
+            if any(candidate.casefold() == requested for candidate in candidates):
+                resolved_id = user.get("id")
+                if resolved_id is None and isinstance(user.get("user_id"), (str, int)):
+                    resolved_id = user.get("user_id")
+                if resolved_id is None:
+                    continue
+                logger.info("[Zoho owner lookup] owner_name=%s resolved_user_id=%s", text, resolved_id)
+                return str(resolved_id)
+
+        raise CRMServiceError(
+            f"No Zoho CRM user matches the owner name '{text}'. Use a valid user name or user ID.",
+            status_code=400,
+            code="OWNER_NOT_FOUND",
+        )
+
+    async def _resolve_owner_filters(self, raw_filters: Any) -> Any:
+        if raw_filters is None:
+            return raw_filters
+        if isinstance(raw_filters, dict):
+            resolved: Dict[str, Any] = {}
+            for field_name, field_value in raw_filters.items():
+                if self._is_owner_field(field_name):
+                    if isinstance(field_value, (list, tuple, set)):
+                        resolved[field_name] = [await self._resolve_owner_value(value) for value in field_value]
+                    else:
+                        resolved[field_name] = await self._resolve_owner_value(field_value)
+                else:
+                    resolved[field_name] = field_value
+            return resolved
+        return raw_filters
+
     async def query_module(
         self,
         module: str,
@@ -588,6 +663,8 @@ class ZohoCRMService:
         """List records from a module (``/search`` when filtering, else list)."""
         key = self.resolve_module(module)
         endpoint = MODULE_ENDPOINTS[key]
+        resolved_filter = await self._resolve_owner_filters(filter)
+        resolved_filters = await self._resolve_owner_filters(filters)
 
         params: Dict[str, Any] = {}
         page_value = int(page) if isinstance(page, (int, str)) and str(page).isdigit() and int(page) > 0 else DEFAULT_PAGE
@@ -614,8 +691,8 @@ class ZohoCRMService:
 
         query = build_criteria(
             criteria=criteria,
-            filter=filter,
-            filters=filters,
+            filter=resolved_filter,
+            filters=resolved_filters,
             date_field=date_field,
             from_value=from_value,
             to_value=to_value,
@@ -666,10 +743,12 @@ class ZohoCRMService:
         """Count matching records via the count API, falling back to COQL."""
         key = self.resolve_module(module)
         endpoint = MODULE_ENDPOINTS[key]
+        resolved_filter = await self._resolve_owner_filters(filter)
+        resolved_filters = await self._resolve_owner_filters(filters)
         query = build_criteria(
             criteria=criteria,
-            filter=filter,
-            filters=filters,
+            filter=resolved_filter,
+            filters=resolved_filters,
             date_field=date_field,
             from_value=from_value,
             to_value=to_value,

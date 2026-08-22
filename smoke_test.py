@@ -98,6 +98,36 @@ check(
     crit,
 )
 
+# 8b. Owner-name filters resolve to Zoho user IDs before the CRM search runs.
+from services.crm_service import ZohoCRMService
+
+async def run_owner_resolution_check():
+    service = ZohoCRMService()
+    seen = []
+
+    async def fake_request(method, url_path, params=None, json_body=None):
+        seen.append((method, url_path, params, json_body))
+        if url_path == "/crm/v8/users":
+            return {"users": [{"id": "user-42", "first_name": "Laya", "last_name": "K"}]}
+        if url_path == "/crm/v8/Deals/search":
+            assert "Owner:equals:user-42" in (params or {}).get("criteria", "")
+            return {"data": [{"id": "d-1", "Deal_Name": "Test deal"}], "info": {"count": 1}}
+        raise AssertionError(f"unexpected request: {method} {url_path}")
+
+    service._request = fake_request
+    result = await service.query_module(
+        "deals",
+        fields="Deal_Name,Stage",
+        filter={"Stage": "Closed Won", "Owner": "Laya"},
+        page=1,
+        per_page=10,
+    )
+    check("owner filter resolves to Zoho user ID", result["data"][0]["id"] == "d-1" and result["count"] == 1, result)
+    check("owner lookup calls users API before CRM query", any(url == "/crm/v8/users" for _, url, _, _ in seen), seen)
+
+import asyncio
+asyncio.run(run_owner_resolution_check())
+
 # 9. Module normalization
 check("normalize aliases opportunity -> deals", normalize_module_key("opportunity") == "deals")
 check("normalize sales order -> sales-orders", normalize_module_key("sales order") == "sales-orders")
