@@ -118,11 +118,16 @@ async def run_owner_resolution_check():
     result = await service.query_module(
         "deals",
         fields="Deal_Name,Stage",
-        filter=[{"field": "Owner", "operator": "equals", "value": "Laya"}],
+        filters=[
+            {"field": "Stage", "operator": "equals", "value": "Closed Won"},
+            {"field": "Owner", "operator": "equals", "value": "Laya"},
+        ],
         page=1,
         per_page=10,
     )
+    query_criteria = next((params.get("criteria") for _, _, params, _ in seen if params and "criteria" in params), "")
     check("owner filter resolves to Zoho user ID", result["data"][0]["id"] == "d-1" and result["count"] == 1, result)
+    check("final criteria uses resolved user id", "Owner:equals:user-42" in query_criteria and "Owner:equals:Laya" not in query_criteria, query_criteria)
     check("owner lookup calls users API before CRM query", any(url == "/crm/v8/users" for _, url, _, _ in seen), seen)
 
 import asyncio
