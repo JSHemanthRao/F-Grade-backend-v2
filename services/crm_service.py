@@ -17,6 +17,7 @@ Responsibilities:
 import asyncio
 import csv
 import io
+import json
 import logging
 import re
 import time
@@ -626,12 +627,28 @@ class ZohoCRMService:
             code="OWNER_NOT_FOUND",
         )
 
-    async def _resolve_owner_filters(self, raw_filters: Any) -> Any:
+    @staticmethod
+    def _parse_filter_payload(raw_filters: Any) -> Any:
         if raw_filters is None:
-            return raw_filters
-        if isinstance(raw_filters, dict):
+            return None
+        if isinstance(raw_filters, str):
+            text = raw_filters.strip()
+            if not text:
+                return None
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                return raw_filters
+            return parsed
+        return raw_filters
+
+    async def _resolve_owner_filters(self, raw_filters: Any) -> Any:
+        parsed = self._parse_filter_payload(raw_filters)
+        if parsed is None:
+            return parsed
+        if isinstance(parsed, dict):
             resolved: Dict[str, Any] = {}
-            for field_name, field_value in raw_filters.items():
+            for field_name, field_value in parsed.items():
                 if self._is_owner_field(field_name):
                     if isinstance(field_value, (list, tuple, set)):
                         resolved[field_name] = [await self._resolve_owner_value(value) for value in field_value]
@@ -640,7 +657,7 @@ class ZohoCRMService:
                 else:
                     resolved[field_name] = field_value
             return resolved
-        return raw_filters
+        return parsed
 
     async def query_module(
         self,
