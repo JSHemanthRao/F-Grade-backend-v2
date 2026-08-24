@@ -354,6 +354,89 @@ def build_criteria(
     return merged
 
 
+def _coql_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
+def _dict_to_coql(filters: Any) -> Optional[str]:
+    if filters is None:
+        return None
+    if isinstance(filters, str):
+        return filters
+
+    clauses: List[str] = []
+
+    def add_clause(field: Any, operator: str, value: Any) -> None:
+        field_name = str(field)
+        if operator in {"equals", "equal"}:
+            clauses.append(f"{field_name} = {_coql_value(value)}")
+        elif operator in {"not_equals", "not_equal"}:
+            clauses.append(f"{field_name} != {_coql_value(value)}")
+        elif operator == "contains":
+            clauses.append(f"{field_name} like {_coql_value(f'%{value}%')}")
+        elif operator == "starts_with":
+            clauses.append(f"{field_name} like {_coql_value(f'{value}%')}")
+        elif operator == "greater_than":
+            clauses.append(f"{field_name} > {_coql_value(value)}")
+        elif operator == "less_than":
+            clauses.append(f"{field_name} < {_coql_value(value)}")
+        elif operator == "greater_equal":
+            clauses.append(f"{field_name} >= {_coql_value(value)}")
+        elif operator == "less_equal":
+            clauses.append(f"{field_name} <= {_coql_value(value)}")
+        elif operator == "is_null":
+            clauses.append(f"{field_name} is null")
+        elif operator == "is_not_null":
+            clauses.append(f"{field_name} is not null")
+
+    if isinstance(filters, dict):
+        if {"field", "operator", "value"}.issubset(filters.keys()):
+            add_clause(filters.get("field"), filters.get("operator", "equals"), filters.get("value"))
+        else:
+            for field, value in filters.items():
+                add_clause(field, "equals", value)
+    elif isinstance(filters, list):
+        for item in filters:
+            if isinstance(item, dict) and {"field", "operator", "value"}.issubset(item.keys()):
+                add_clause(item.get("field"), item.get("operator", "equals"), item.get("value"))
+            elif isinstance(item, dict):
+                for field, value in item.items():
+                    add_clause(field, "equals", value)
+
+    return " and ".join(f"({clause})" for clause in clauses) if clauses else None
+
+
+def build_coql_criteria(
+    *,
+    criteria: Optional[str] = None,
+    filter: Optional[Any] = None,
+    filters: Optional[Any] = None,
+    date_field: Optional[str] = None,
+    from_value: Optional[str] = None,
+    to_value: Optional[str] = None,
+    timezone_name: str = DEFAULT_TIMEZONE,
+) -> Optional[str]:
+    """Build valid COQL predicates from the same supported filter inputs."""
+    parts: List[str] = []
+    if criteria and str(criteria).strip():
+        parts.append(str(criteria).strip())
+    filter_query = _dict_to_coql(filter) or _dict_to_coql(filters)
+    if filter_query:
+        parts.append(filter_query)
+    if date_field and from_value and to_value:
+        start = _to_ist_string(from_value, timezone_name)
+        end = _to_ist_string(to_value, timezone_name)
+        parts.append(
+            f"({date_field} >= {_coql_value(start)} and {date_field} < {_coql_value(end)})"
+        )
+    return " and ".join(f"({part})" for part in parts) if parts else None
+
+
 # ---------------------------------------------------------------------------
 # Zoho CRM service
 # ---------------------------------------------------------------------------
@@ -862,6 +945,42 @@ class ZohoCRMService:
                 "count": int(rows[0].get("count") or 0) if rows else 0,
             }
 
+        rows = payload.get("data") or []
+        return {
+            "module": key,
+            "label": self.module_label(key),
+            "count": int(rows[0].get("count") or 0) if rows else 0,
+        }
+
+    async def get_aggregate_count(
+        self,
+        module: str,
+        *,
+        criteria: Optional[str] = None,
+        filter: Any = None,
+        filters: Any = None,
+        date_field: Optional[str] = None,
+        from_value: Optional[str] = None,
+        to_value: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Count records with a server-side COQL aggregate query."""
+        key = self.resolve_module(module)
+        endpoint = MODULE_ENDPOINTS[key]
+        resolved_filter = await self._resolve_owner_filters(filter)
+        resolved_filters = await self._resolve_owner_filters(filters)
+        query = build_coql_criteria(
+            criteria=criteria,
+            filter=resolved_filter,
+            filters=resolved_filters,
+            date_field=date_field,
+            from_value=from_value,
+            to_value=to_value,
+        )
+        select_query = f"select count(id) as count from {endpoint}"
+        if query:
+            select_query += f" where {query}"
+        logger.info("Final COQL: %s", select_query)
+        payload = await self.coql_query(select_query)
         rows = payload.get("data") or []
         return {
             "module": key,

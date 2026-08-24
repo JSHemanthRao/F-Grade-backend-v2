@@ -133,6 +133,27 @@ async def run_owner_resolution_check():
 import asyncio
 asyncio.run(run_owner_resolution_check())
 
+async def run_aggregate_count_check():
+    service = ZohoCRMService()
+    seen = []
+
+    async def fake_request(method, url_path, params=None, json_body=None):
+        seen.append((method, url_path, params, json_body))
+        if url_path == "/crm/v8/coql":
+            assert json_body["select_query"].startswith("select count(id) as count from Deals")
+            assert "Stage = 'Closed Won'" in json_body["select_query"]
+            return {"data": [{"count": 7}]}
+        raise AssertionError(f"unexpected request: {method} {url_path}")
+
+    service._request = fake_request
+    result = await service.get_aggregate_count(
+        "deals",
+        filters=[{"field": "Stage", "operator": "equals", "value": "Closed Won"}],
+    )
+    check("aggregate count uses COQL", result["count"] == 7 and len(seen) == 1, seen)
+
+asyncio.run(run_aggregate_count_check())
+
 # 9. Module normalization
 check("normalize aliases opportunity -> deals", normalize_module_key("opportunity") == "deals")
 check("normalize sales order -> sales-orders", normalize_module_key("sales order") == "sales-orders")
@@ -151,6 +172,7 @@ check(
     plan["filters"],
 )
 check("assistant plan: no Converted filter", all(item["field"] != "Converted" for item in plan["filters"]), plan["filters"])
+check("assistant plan: metric path", plan["metric"] is True)
 
 conversion_plan = _resolve_assistant_plan("Count how many leads converted into Closed Won deals this month")
 check(
@@ -159,11 +181,18 @@ check(
     conversion_plan,
 )
 
+rate_plan = _resolve_assistant_plan("Tell me the lead to deal conversion rate this month")
+check(
+    "assistant plan: conversion rate limitation",
+    rate_plan["metric"] is True and rate_plan["limitation"] is not None,
+    rate_plan,
+)
+
 converted_leads_plan = _resolve_assistant_plan("How many converted leads this month?")
 check(
-    "assistant plan: converted leads date field",
-    converted_leads_plan["module"] == "leads"
-    and converted_leads_plan["date_field"] == "Converted_Date_Time",
+    "assistant plan: unsupported converted leads metric",
+    converted_leads_plan["limitation"] is not None
+    and converted_leads_plan["date_field"] != "Converted_Date_Time",
     converted_leads_plan,
 )
 

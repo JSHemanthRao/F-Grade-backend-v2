@@ -406,6 +406,10 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
         and ("converted" in lowered or "conversion" in lowered)
         and ("closed won" in lowered or "won deal" in lowered or "deal" in lowered)
     )
+    asks_for_conversion_rate = "conversion rate" in lowered
+    asks_for_converted_leads = (
+        "lead" in lowered and ("converted" in lowered or "conversion" in lowered)
+    )
 
     module = None
     for candidate, keywords in _MODULE_KEYWORDS.items():
@@ -417,19 +421,18 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
     date_range = _resolve_date_range(question)
     if module == "deals" and ("won" in lowered or "closed" in lowered):
         date_field = "Closing_Date"
-    elif module == "leads" and ("converted" in lowered or "conversion" in lowered):
-        date_field = "Converted_Date_Time"
     elif date_range:
         date_field = "Created_Time"
 
     filters = None
     limitation = None
-    if asks_for_lead_deal_relationship:
+    if asks_for_lead_deal_relationship or asks_for_conversion_rate or asks_for_converted_leads:
         # The exposed fields do not include a lead-origin lookup on Deals.
         limitation = (
-            "Zoho CRM cannot represent the lead-to-deal conversion relationship "
-            "with the fields currently exposed. I cannot accurately count leads "
-            "that became Closed Won deals from this endpoint."
+            "Zoho CRM cannot represent the requested converted-lead metric with the "
+            "fields currently exposed. Converted_Date_Time, Is_Converted, and "
+            "Converted_Deal are not confirmed in this backend's supported field "
+            "list, and there is no exposed lead-origin lookup on Deals."
         )
     elif module == "deals" and ("won" in lowered or "closed" in lowered):
         filters = [{"field": "Stage", "operator": "equals", "value": "Closed Won"}]
@@ -441,6 +444,7 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
         "date_range": date_range,
         "filters": filters,
         "limitation": limitation,
+        "metric": intent == "count" or asks_for_conversion_rate,
     }
 
 
@@ -487,8 +491,8 @@ async def assistant(payload: AssistantRequest) -> AssistantResponse:
             "to_value": plan["date_range"]["to"] if plan["date_range"] else None,
         }
 
-        if plan["intent"] == "count":
-            result = await zoho_service.get_count(module=plan["module"], **common)
+        if plan["metric"]:
+            result = await zoho_service.get_aggregate_count(module=plan["module"], **common)
             return AssistantResponse(
                 question=question,
                 intent="count",
