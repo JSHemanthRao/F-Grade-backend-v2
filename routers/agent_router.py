@@ -401,6 +401,12 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
     lowered = question.lower()
     intent = "count" if any(hint in lowered for hint in _COUNT_HINTS) else "query"
 
+    asks_for_lead_deal_relationship = (
+        "lead" in lowered
+        and ("converted" in lowered or "conversion" in lowered)
+        and ("closed won" in lowered or "won deal" in lowered or "deal" in lowered)
+    )
+
     module = None
     for candidate, keywords in _MODULE_KEYWORDS.items():
         if any(keyword in lowered for keyword in keywords):
@@ -414,11 +420,25 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
     elif date_range:
         date_field = "Created_Time"
 
+    filters = None
+    limitation = None
+    if asks_for_lead_deal_relationship:
+        # The exposed fields do not include a lead-origin lookup on Deals.
+        limitation = (
+            "Zoho CRM cannot represent the lead-to-deal conversion relationship "
+            "with the fields currently exposed. I cannot accurately count leads "
+            "that became Closed Won deals from this endpoint."
+        )
+    elif module == "deals" and ("won" in lowered or "closed" in lowered):
+        filters = [{"field": "Stage", "operator": "equals", "value": "Closed Won"}]
+
     return {
         "intent": intent,
         "module": module,
         "date_field": date_field,
         "date_range": date_range,
+        "filters": filters,
+        "limitation": limitation,
     }
 
 
@@ -448,8 +468,18 @@ async def assistant(payload: AssistantRequest) -> AssistantResponse:
             execution_time_ms=_elapsed_ms(start),
         )
 
+    if plan["limitation"]:
+        return _error_response(
+            CRMServiceError(
+                plan["limitation"],
+                status_code=400,
+                code="LEAD_DEAL_RELATIONSHIP_UNSUPPORTED",
+            )
+        )
+
     try:
         common = {
+            "filters": plan["filters"],
             "date_field": plan["date_field"],
             "from_value": plan["date_range"]["from"] if plan["date_range"] else None,
             "to_value": plan["date_range"]["to"] if plan["date_range"] else None,

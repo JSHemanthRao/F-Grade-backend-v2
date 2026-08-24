@@ -145,6 +145,19 @@ check("assistant plan: count intent", plan["intent"] == "count")
 check("assistant plan: deals module", plan["module"] == "deals")
 check("assistant plan: Closing_Date field", plan["date_field"] == "Closing_Date")
 check("assistant plan: date range resolved", plan["date_range"] is not None)
+check(
+    "assistant plan: Closed Won filter",
+    plan["filters"] == [{"field": "Stage", "operator": "equals", "value": "Closed Won"}],
+    plan["filters"],
+)
+check("assistant plan: no Converted filter", all(item["field"] != "Converted" for item in plan["filters"]), plan["filters"])
+
+conversion_plan = _resolve_assistant_plan("Count how many leads converted into Closed Won deals this month")
+check(
+    "assistant plan: unsupported lead-deal relationship",
+    conversion_plan["limitation"] is not None and conversion_plan["filters"] is None,
+    conversion_plan,
+)
 
 plan2 = _resolve_assistant_plan("Show me the leads created this month")
 check("assistant plan: query intent", plan2["intent"] == "query")
