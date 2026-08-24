@@ -417,6 +417,8 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
     date_range = _resolve_date_range(question)
     if module == "deals" and ("won" in lowered or "closed" in lowered):
         date_field = "Closing_Date"
+    elif module == "leads" and ("converted" in lowered or "conversion" in lowered):
+        date_field = "Converted_Date_Time"
     elif date_range:
         date_field = "Created_Time"
 

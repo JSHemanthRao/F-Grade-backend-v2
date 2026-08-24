@@ -159,6 +159,14 @@ check(
     conversion_plan,
 )
 
+converted_leads_plan = _resolve_assistant_plan("How many converted leads this month?")
+check(
+    "assistant plan: converted leads date field",
+    converted_leads_plan["module"] == "leads"
+    and converted_leads_plan["date_field"] == "Converted_Date_Time",
+    converted_leads_plan,
+)
+
 plan2 = _resolve_assistant_plan("Show me the leads created this month")
 check("assistant plan: query intent", plan2["intent"] == "query")
 check("assistant plan: leads module", plan2["module"] == "leads")
