@@ -404,11 +404,17 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
     asks_for_lead_deal_relationship = (
         "lead" in lowered
         and ("converted" in lowered or "conversion" in lowered)
-        and ("closed won" in lowered or "won deal" in lowered or "deal" in lowered)
+        and ("closed won" in lowered or "won deal" in lowered)
     )
     asks_for_conversion_rate = "conversion rate" in lowered
     asks_for_converted_leads = (
         "lead" in lowered and ("converted" in lowered or "conversion" in lowered)
+    )
+    asks_for_lead_conversion_metric = (
+        "lead" in lowered
+        and "deal" in lowered
+        and ("converted" in lowered or "conversion" in lowered)
+        and ("created" in lowered or asks_for_conversion_rate)
     )
 
     module = None
@@ -426,13 +432,21 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
 
     filters = None
     limitation = None
-    if asks_for_lead_deal_relationship or asks_for_conversion_rate or asks_for_converted_leads:
+    if asks_for_lead_deal_relationship:
         # The exposed fields do not include a lead-origin lookup on Deals.
         limitation = (
             "Zoho CRM cannot represent the requested converted-lead metric with the "
             "fields currently exposed. Converted_Date_Time, Is_Converted, and "
             "Converted_Deal are not confirmed in this backend's supported field "
             "list, and there is no exposed lead-origin lookup on Deals."
+        )
+    elif asks_for_lead_conversion_metric:
+        limitation = None
+    elif asks_for_conversion_rate or asks_for_converted_leads:
+        limitation = (
+            "Zoho CRM cannot represent the requested converted-lead metric with the "
+            "fields currently exposed. Use a lead-created and converted-deal metric "
+            "request so both counts can be calculated from confirmed fields."
         )
     elif module == "deals" and ("won" in lowered or "closed" in lowered):
         filters = [{"field": "Stage", "operator": "equals", "value": "Closed Won"}]
@@ -445,6 +459,7 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
         "filters": filters,
         "limitation": limitation,
         "metric": intent == "count" or asks_for_conversion_rate,
+        "lead_conversion_metric": asks_for_lead_conversion_metric,
     }
 
 
@@ -484,6 +499,33 @@ async def assistant(payload: AssistantRequest) -> AssistantResponse:
         )
 
     try:
+        if plan["lead_conversion_metric"]:
+            if not plan["date_range"]:
+                raise CRMServiceError(
+                    "A date range is required for lead conversion metrics.",
+                    status_code=400,
+                    code="METRIC_DATE_RANGE_REQUIRED",
+                )
+            metrics = await zoho_service.get_lead_conversion_metrics(
+                from_value=plan["date_range"]["from"],
+                to_value=plan["date_range"]["to"],
+            )
+            return AssistantResponse(
+                question=question,
+                intent="metric",
+                module="Leads to Deals",
+                count=metrics["converted_deals"],
+                leads_created=metrics["leads_created"],
+                converted_deals=metrics["converted_deals"],
+                conversion_rate=metrics["conversion_rate"],
+                message=(
+                    f"{metrics['leads_created']} leads created, {metrics['converted_deals']} "
+                    f"deals created through lead conversion, conversion rate "
+                    f"{metrics['conversion_rate']}%."
+                ),
+                execution_time_ms=_elapsed_ms(start),
+            )
+
         common = {
             "filters": plan["filters"],
             "date_field": plan["date_field"],

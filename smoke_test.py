@@ -154,6 +154,35 @@ async def run_aggregate_count_check():
 
 asyncio.run(run_aggregate_count_check())
 
+async def run_lead_conversion_metrics_check():
+    service = ZohoCRMService()
+    seen = []
+
+    async def fake_request(method, url_path, params=None, json_body=None):
+        seen.append(json_body["select_query"])
+        if "from Leads" in json_body["select_query"]:
+            return {"data": [{"count": 20}]}
+        if "from Deals" in json_body["select_query"]:
+            return {"data": [{"count": 5}]}
+        raise AssertionError(f"unexpected COQL: {json_body}")
+
+    service._request = fake_request
+    metrics = await service.get_lead_conversion_metrics(
+        from_value="2026-08-01T00:00:00+05:30",
+        to_value="2026-08-25T00:00:00+05:30",
+    )
+    check(
+        "lead conversion metric uses two COQL counts",
+        metrics == {"leads_created": 20, "converted_deals": 5, "conversion_rate": 25.0}
+        and len(seen) == 2
+        and "Created_Time >= '2026-08-01T00:00:00+05:30'" in seen[0]
+        and "Lead_Conversion_Time >= '2026-08-01T00:00:00+05:30'" in seen[1]
+        and all("Converted" not in query for query in seen),
+        seen,
+    )
+
+asyncio.run(run_lead_conversion_metrics_check())
+
 # 9. Module normalization
 check("normalize aliases opportunity -> deals", normalize_module_key("opportunity") == "deals")
 check("normalize sales order -> sales-orders", normalize_module_key("sales order") == "sales-orders")
@@ -184,8 +213,15 @@ check(
 rate_plan = _resolve_assistant_plan("Tell me the lead to deal conversion rate this month")
 check(
     "assistant plan: conversion rate limitation",
-    rate_plan["metric"] is True and rate_plan["limitation"] is not None,
+    rate_plan["lead_conversion_metric"] is True and rate_plan["limitation"] is None,
     rate_plan,
+)
+
+combined_plan = _resolve_assistant_plan("Count leads created this month and how many converted to deals")
+check(
+    "assistant plan: lead conversion metric",
+    combined_plan["lead_conversion_metric"] is True and combined_plan["limitation"] is None,
+    combined_plan,
 )
 
 converted_leads_plan = _resolve_assistant_plan("How many converted leads this month?")

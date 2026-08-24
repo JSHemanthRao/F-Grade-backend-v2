@@ -91,7 +91,7 @@ DEFAULT_FIELDS: Dict[str, List[str]] = {
     "leads": ["First_Name", "Last_Name", "Company", "Email", "Phone", "Lead_Source", "Created_Time"],
     "contacts": ["First_Name", "Last_Name", "Email", "Phone", "Mailing_City", "Mailing_Country"],
     "accounts": ["Account_Name", "Website", "Phone", "Industry", "Annual_Revenue", "Billing_Country"],
-    "deals": ["Deal_Name", "Amount", "Stage", "Closing_Date", "Account_Name", "Deal_Source", "Owner"],
+    "deals": ["Deal_Name", "Amount", "Stage", "Closing_Date", "Lead_Conversion_Time", "Account_Name", "Deal_Source", "Owner"],
     "tasks": ["Subject", "Status", "Due_Date", "Owner", "Priority"],
     "events": ["Subject", "Start_DateTime", "End_DateTime", "Owner", "Location"],
     "calls": ["Subject", "Call_Type", "Call_Duration", "Call_Start_Time", "Status"],
@@ -986,6 +986,34 @@ class ZohoCRMService:
             "module": key,
             "label": self.module_label(key),
             "count": int(rows[0].get("count") or 0) if rows else 0,
+        }
+
+    async def get_lead_conversion_metrics(
+        self,
+        *,
+        from_value: str,
+        to_value: str,
+    ) -> Dict[str, Any]:
+        """Count created leads and converted deals for one shared time range."""
+        leads = await self.get_aggregate_count(
+            "leads",
+            date_field="Created_Time",
+            from_value=from_value,
+            to_value=to_value,
+        )
+        converted_deals = await self.get_aggregate_count(
+            "deals",
+            date_field="Lead_Conversion_Time",
+            from_value=from_value,
+            to_value=to_value,
+        )
+        leads_created = leads["count"]
+        converted_count = converted_deals["count"]
+        rate = round((converted_count / leads_created) * 100, 2) if leads_created else 0.0
+        return {
+            "leads_created": leads_created,
+            "converted_deals": converted_count,
+            "conversion_rate": rate,
         }
 
     async def coql_query(self, select_query: str) -> Dict[str, Any]:

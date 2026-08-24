@@ -152,6 +152,9 @@ class AssistantResponse(BaseModel):
     module: Optional[str] = None
     count: int = 0
     message: Optional[str] = None
+    leads_created: Optional[int] = None
+    converted_deals: Optional[int] = None
+    conversion_rate: Optional[float] = None
     data: List[CRMRecord] = Field(default_factory=list)
     execution_time_ms: Optional[float] = None
     source: str = "Zoho CRM"
