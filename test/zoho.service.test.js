@@ -43,8 +43,10 @@ test('executes count metrics without paginating record retrieval', async () => {
 test('executes lead conversion analysis as two aggregate queries', async () => {
   const queries = [];
   const service = new CrmService({
+    getFieldMetadata: async (module) => ({ fields: module === 'Deals' ? ['Lead_Conversion_Time'] : ['Converted__s', 'Converted_Date_Time'] }),
     aggregate: async (query) => {
       queries.push(query);
+      if (query.includes('Converted__s')) return { rows: [{ value: 8 }] };
       return { rows: [{ value: query.includes('from Leads') ? 20 : 5 }] };
     }
   });
@@ -57,16 +59,19 @@ test('executes lead conversion analysis as two aggregate queries', async () => {
   assert.equal(result.summary.leads_created, 20);
   assert.equal(result.summary.converted_to_deals, 5);
   assert.equal(result.summary.conversion_rate, 25);
+  assert.equal(result.metrics.leads_converted, 8);
   assert.equal(result.metrics.leads_converted_to_deals, 5);
-  assert.equal(queries.length, 2);
-  assert.match(queries[1], /Lead_Conversion_Time >= '2026-08-01'/);
+  assert.equal(queries.length, 3);
+  assert.match(queries[2], /Lead_Conversion_Time >= '2026-08-01'/);
 });
 
 test('translates the Copilot Converted semantic field into conversion analysis', async () => {
   const queries = [];
   const service = new CrmService({
+    getFieldMetadata: async (module) => ({ fields: module === 'Deals' ? ['Lead_Conversion_Time'] : ['Converted__s', 'Converted_Date_Time'] }),
     aggregate: async (query) => {
       queries.push(query);
+      if (query.includes('Converted__s')) return { rows: [{ value: 8 }] };
       return { rows: [{ value: query.includes('from Leads') ? 20 : 5 }] };
     },
     query: async () => { throw new Error('semantic conversion must not retrieve records'); }
@@ -78,14 +83,45 @@ test('translates the Copilot Converted semantic field into conversion analysis',
   });
   assert.deepEqual(result.metrics, {
     leads_created: 20,
-    leads_converted: 5,
+    leads_converted: 8,
     leads_converted_to_deals: 5,
     conversion_rate: 25
   });
   assert.deepEqual(result.date_range, { start: '2026-08-01', end: '2026-08-25' });
-  assert.equal(queries.length, 2);
-  assert.ok(queries.every((query) => !query.includes('Converted')));
-  assert.match(queries[1], /Lead_Conversion_Time >= '2026-08-01'/);
+  assert.equal(result.data_source, 'Zoho CRM');
+  assert.match(result.calculation_basis, /Converted__s=true/);
+  assert.equal(queries.length, 3);
+  assert.ok(queries.every((query) => !/(^|[^_])Converted\b/.test(query)));
+  assert.ok(queries.some((query) => query.includes('Converted__s = true')));
+  assert.ok(queries.some((query) => query.includes('Converted_Date_Time')));
+  assert.match(queries[2], /Lead_Conversion_Time >= '2026-08-01'/);
+});
+
+test('fails conversion analysis when Zoho metadata lacks conversion fields', async () => {
+  const service = new CrmService({
+    getFieldMetadata: async () => ({ fields: ['Created_Time'] }),
+    aggregate: async () => { throw new Error('aggregate must not run'); }
+  });
+  await assert.rejects(
+    service.query({
+      module: 'Leads',
+      request_type: 'analysis',
+      analysis: { type: 'lead_conversion' },
+      filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-08-25'] }]
+    }),
+    (error) => error.code === 'ZOHO_CONVERSION_FIELDS_UNAVAILABLE' && error.statusCode === 502
+  );
+});
+
+test('gates explicit conversion fields on Zoho metadata', async () => {
+  const service = new CrmService({
+    getFieldMetadata: async () => ({ fields: ['Created_Time'] }),
+    query: async () => ({ records: [], info: {} })
+  });
+  await assert.rejects(
+    service.query({ module: 'Leads', fields: ['Converted__s'] }),
+    (error) => error.code === 'ZOHO_FIELD_UNAVAILABLE' && error.statusCode === 502
+  );
 });
 
 test('refreshes when the cached token enters the expiry buffer', async () => {

@@ -1,5 +1,5 @@
 const CRM_MODULES = Object.freeze({
-  Leads: ['id', 'First_Name', 'Last_Name', 'Company', 'Email', 'Phone', 'Lead_Status', 'Lead_Source', 'Owner', 'Created_Time', 'Modified_Time'],
+  Leads: ['id', 'First_Name', 'Last_Name', 'Company', 'Email', 'Phone', 'Lead_Status', 'Lead_Source', 'Owner', 'Created_Time', 'Modified_Time', 'Converted__s', 'Converted_Date_Time'],
   Contacts: ['id', 'First_Name', 'Last_Name', 'Account_Name', 'Email', 'Phone', 'Title', 'Owner', 'Created_Time', 'Modified_Time'],
   Accounts: ['id', 'Account_Name', 'Account_Type', 'Industry', 'Phone', 'Website', 'Billing_City', 'Billing_State', 'Owner', 'Created_Time', 'Modified_Time'],
   Deals: ['id', 'Deal_Name', 'Amount', 'Stage', 'Closing_Date', 'Lead_Conversion_Time', 'Account_Name', 'Type', 'Probability', 'Owner', 'Created_Time', 'Modified_Time'],

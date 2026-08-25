@@ -61,9 +61,56 @@ class ZohoCrmService {
       return { rows };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
-      throw createAppError('ZOHO_AGGREGATE_ERROR', 'Unable to execute the CRM aggregate query.', error.response?.status === 429 ? 429 : 502);
+      throw createAppError(
+        'ZOHO_AGGREGATE_ERROR',
+        'Unable to execute the CRM aggregate query.',
+        mapZohoStatus(error.response?.status),
+        safeZohoDetails(error)
+      );
     }
   }
+
+  async getFieldMetadata(module) {
+    let config;
+    try {
+      config = this.configLoader();
+    } catch (_error) {
+      throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502);
+    }
+    const token = await this.authService.getAccessToken();
+    const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
+    try {
+      const response = await this.httpClient.get(`${apiBaseUrl}/settings/fields`, {
+        params: { module },
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        timeout: config.timeoutMs
+      });
+      const fields = Array.isArray(response.data?.fields) ? response.data.fields : [];
+      return { fields: fields.map((field) => field.api_name).filter(Boolean) };
+    } catch (error) {
+      if (error.response?.status === 401) this.authService.clearToken();
+      throw createAppError(
+        'ZOHO_METADATA_ERROR',
+        'Unable to verify Zoho CRM field metadata.',
+        mapZohoStatus(error.response?.status),
+        safeZohoDetails(error)
+      );
+    }
+  }
+}
+
+function mapZohoStatus(status) {
+  return [401, 403, 404, 429].includes(status) ? status : 502;
+}
+
+function safeZohoDetails(error) {
+  const response = error.response;
+  const payload = response?.data;
+  return {
+    upstream_status: response?.status,
+    upstream_code: typeof payload?.code === 'string' ? payload.code : undefined,
+    upstream_message: typeof payload?.message === 'string' ? payload.message : undefined
+  };
 }
 
 function normalizeCrmBaseUrl(value) {
