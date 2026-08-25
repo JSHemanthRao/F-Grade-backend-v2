@@ -54,8 +54,37 @@ test('executes lead conversion analysis as two aggregate queries', async () => {
     analysis: { type: 'lead_conversion' },
     filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-09-01'] }]
   });
-  assert.deepEqual(result.summary, { leads_created: 20, converted_to_deals: 5, conversion_rate: 25 });
+  assert.equal(result.summary.leads_created, 20);
+  assert.equal(result.summary.converted_to_deals, 5);
+  assert.equal(result.summary.conversion_rate, 25);
+  assert.equal(result.metrics.leads_converted_to_deals, 5);
   assert.equal(queries.length, 2);
+  assert.match(queries[1], /Lead_Conversion_Time >= '2026-08-01'/);
+});
+
+test('translates the Copilot Converted semantic field into conversion analysis', async () => {
+  const queries = [];
+  const service = new CrmService({
+    aggregate: async (query) => {
+      queries.push(query);
+      return { rows: [{ value: query.includes('from Leads') ? 20 : 5 }] };
+    },
+    query: async () => { throw new Error('semantic conversion must not retrieve records'); }
+  });
+  const result = await service.query({
+    module: 'Leads',
+    fields: ['First_Name', 'Last_Name', 'Created_Time', 'Converted'],
+    filters: [{ field: 'Created_Time', operator: 'between', value: '2026-08-01,2026-08-25' }]
+  });
+  assert.deepEqual(result.metrics, {
+    leads_created: 20,
+    leads_converted: 5,
+    leads_converted_to_deals: 5,
+    conversion_rate: 25
+  });
+  assert.deepEqual(result.date_range, { start: '2026-08-01', end: '2026-08-25' });
+  assert.equal(queries.length, 2);
+  assert.ok(queries.every((query) => !query.includes('Converted')));
   assert.match(queries[1], /Lead_Conversion_Time >= '2026-08-01'/);
 });
 

@@ -13,9 +13,10 @@ class CrmService {
   async query(input) {
     log('info', `[CRM filters received] ${JSON.stringify(Array.isArray(input?.filters) ? input.filters : [])}`);
     log('info', `[CRM request received] ${JSON.stringify({ module: input?.module, fields: input?.fields, filters: input?.filters, limit: input?.limit, offset: input?.offset, sort_field: input?.sort_field || input?.sort?.field, sort_order: input?.sort_order || input?.sort?.order, request_type: input?.request_type || 'records' })}`);
+    const normalizedInput = normalizeSemanticRequest(input);
     let request;
     try {
-      request = validateCrmQuery(input);
+      request = validateCrmQuery(normalizedInput);
     } catch (error) {
       log('warn', `[CRM validation failure] ${JSON.stringify(error.details || { message: error.message })}`);
       throw error;
@@ -24,7 +25,7 @@ class CrmService {
     log('info', `[CRM filters normalized] ${JSON.stringify(request.filters)}`);
     if (request.request_type === 'count') return this.aggregate(request, { operation: 'count', field: 'id' });
     if (request.request_type === 'aggregate') return this.aggregate(request, request.aggregate);
-    if (request.request_type === 'analysis' && input.analysis?.type === 'lead_conversion') return this.leadConversionAnalysis(request);
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_conversion') return this.leadConversionAnalysis(request);
     const result = await this.zohoService.query(request);
     const data = result.records.map(sanitizeZohoRecord);
     const info = result.info || {};
@@ -70,8 +71,43 @@ class CrmService {
     const leadsCreated = Number(created.data[0]?.value || 0);
     const convertedToDeals = Number(converted.data[0]?.value || 0);
     const conversionRate = leadsCreated ? Number(((convertedToDeals / leadsCreated) * 100).toFixed(2)) : 0;
-    return { ...converted, request_type: 'analysis', summary: { leads_created: leadsCreated, converted_to_deals: convertedToDeals, conversion_rate: conversionRate } };
+    return {
+      success: true,
+      module: 'Leads',
+      request_type: 'analysis',
+      date_range: dateFilter ? { start: dateFilter.value[0], end: dateFilter.value[1] } : {},
+      summary: {
+        leads_created: leadsCreated,
+        leads_converted: convertedToDeals,
+        leads_converted_to_deals: convertedToDeals,
+        converted_to_deals: convertedToDeals,
+        conversion_rate: conversionRate
+      },
+      metrics: { leads_created: leadsCreated, leads_converted: convertedToDeals, leads_converted_to_deals: convertedToDeals, conversion_rate: conversionRate },
+      calculations: ['conversion_rate = leads_converted_to_deals / leads_created * 100'],
+      data: [],
+      pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false }
+    };
   }
+}
+
+function normalizeSemanticRequest(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const fields = Array.isArray(input.fields) ? input.fields : [];
+  const hasSemanticConversion = input.module === 'Leads'
+    && fields.includes('Converted')
+    && Array.isArray(input.filters)
+    && input.filters.some((filter) => filter?.field === 'Created_Time');
+  if (!hasSemanticConversion) return input;
+
+  const validFields = fields.filter((field) => field !== 'Converted');
+  log('info', '[CRM semantic translation] Converted -> lead conversion analysis using Deals.Lead_Conversion_Time');
+  return {
+    ...input,
+    fields: validFields.length > 0 ? validFields : ['id'],
+    request_type: 'analysis',
+    analysis: { type: 'lead_conversion' }
+  };
 }
 
 module.exports = { CrmService };
