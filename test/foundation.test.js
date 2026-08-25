@@ -4,6 +4,7 @@ const http = require('node:http');
 const createApp = require('../src/app').createApp;
 const { CRM_MODULES } = require('../src/constants/crmModules');
 const { validateCrmQuery } = require('../src/validators/crmQuery.validator');
+const openApi = require('../openapi.json');
 
 function requestJson(app, path, method, body) {
   return new Promise((resolve, reject) => {
@@ -60,6 +61,15 @@ test('rejects unsupported Converted Lead fields with the exact field error', () 
     () => validateCrmQuery({ module: 'Leads', fields: ['id', 'Converted'] }),
     (error) => error.details.errors.some((item) => item.path === 'fields[1]' && item.message.includes("Field 'Converted' is not supported"))
   );
+});
+
+test('Copilot schema treats conversion as an operation, not the invalid Converted field', () => {
+  const guidance = openApi.info['x-copilot-studio-tool-description'];
+  assert.match(guidance, /never emit a Leads field named Converted/i);
+  assert.match(guidance, /Converted__s/);
+  assert.match(guidance, /Converted_Date_Time/);
+  assert.deepEqual(openApi.info['x-copilot-studio-field-mappings'].Leads.includes('Converted'), false);
+  assert.deepEqual(openApi.info['x-copilot-studio-field-mappings'].Leads.includes('Converted_Deal'), true);
 });
 
 test('module-specific CRM routes remain unavailable', async () => {

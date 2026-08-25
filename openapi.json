@@ -3,8 +3,15 @@
   "info": {
     "title": "F-Grade Corporate AI CRM API",
     "version": "1.0.0",
-    "description": "Single CRM data retrieval API for the F-Grade Corporate AI Agent. Receives a structured request generated from the user's natural-language CRM request and retrieves live Zoho CRM records. The API is the only CRM API exposed to Copilot Studio. Activity Reports and Audit Logs are not implemented in Phase 1.",
-    "x-copilot-studio-tool-description": "Use this API whenever current or live Zoho CRM information is required, including filtering, sorting, counting, comparing, and retrieving CRM records. First understand the user's question, select the correct CRM module and required Zoho CRM API fields, convert every user condition into structured filters, and send the structured request to this API. Treat the returned data array as authoritative and analyze every record in it. Never return only the first matching record and never invent CRM records. For every new CRM request, use limit 20 and offset 0. If pagination.more_records is true, show the available records from the returned page and explain that additional records are available; for an explicit continuation such as give me the next 20, show me more, next page, continue, or give me the next set, call this same endpoint again with the exact previous module, fields, filters, sort_field, and sort_order and change only offset to previous offset plus previous limit. Calculate offsets as previous offset 0 plus limit 20 equals next offset 20, then previous offset 20 plus limit 20 equals next offset 40. Never restart an explicit continuation at offset 0 or issue an unfiltered continuation request. If there is no previous CRM query/page context, ask the user which query to continue instead of guessing. If pagination.more_records is false, no more records are available. Activity Reports and Audit Logs are not implemented in Phase 1 and must not be exposed as separate operations."
+    "description": "Live Zoho CRM records and server-side metrics for the F-Grade Corporate AI Agent. Semantic concepts such as converted, conversion rate, revenue, pipeline, and top owner are business operations, not CRM field names.",
+    "x-copilot-studio-tool-description": "Use this API for live Zoho CRM records and metrics. For records, use the exact module field mappings and limit 20 offset 0. For count or analysis questions, set request_type to count or analysis and let the backend execute server-side count/relationship queries; do not retrieve records for counting. For lead conversion questions, never emit a Leads field named Converted. Converted is invalid. Use analysis with module Leads and filters on Created_Time, or use only the verified fields Converted__s and Converted_Date_Time when a conversion field is explicitly required. The backend resolves owner names to Zoho user IDs. Never send a raw owner name as a lookup value. Preserve filters and sorting for pagination; change only offset for next-page requests."
+    ,
+    "x-copilot-studio-field-mappings": {
+      "Leads": ["id", "First_Name", "Last_Name", "Company", "Email", "Phone", "Lead_Status", "Lead_Source", "Owner", "Created_Time", "Modified_Time", "Converted__s", "Converted_Date_Time", "Converted_Account", "Converted_Contact", "Converted_Deal"],
+      "Deals": ["id", "Deal_Name", "Amount", "Stage", "Closing_Date", "Lead_Conversion_Time", "Account_Name", "Contact_Name", "Lead_Source", "Type", "Probability", "Owner", "Created_Time", "Modified_Time"],
+      "Contacts": ["id", "First_Name", "Last_Name", "Account_Name", "Email", "Phone", "Title", "Owner", "Created_Time", "Modified_Time"],
+      "Accounts": ["id", "Account_Name", "Account_Type", "Industry", "Phone", "Website", "Billing_City", "Billing_State", "Owner", "Created_Time", "Modified_Time"]
+    }
   },
   "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",
@@ -162,7 +169,7 @@
         },
         "fields": {
           "type": "array",
-          "description": "Fields for record requests. Metric requests may omit fields; the backend uses id for aggregate counting. Never use human-readable display labels.",
+            "description": "Fields for record requests. Metric requests may omit fields. For Leads, NEVER use 'Converted'; it is not a CRM API field. Use the analysis operation for conversion questions, or only verified fields Converted__s, Converted_Date_Time, Converted_Account, Converted_Contact, and Converted_Deal.",
           "minItems": 1,
           "items": {
             "type": "string",
@@ -194,7 +201,7 @@
         },
         "filters": {
           "type": "array",
-          "description": "Optional structured conditions used to filter CRM records. Multiple filters are combined as AND conditions.",
+            "description": "Optional structured conditions. Multiple filters are combined as AND conditions. Semantic concepts such as converted, revenue, pipeline, and conversion rate must be translated into operations, never invented field names.",
           "default": [],
           "items": {
             "$ref": "#/definitions/CrmFilter"
