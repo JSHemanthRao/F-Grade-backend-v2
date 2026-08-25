@@ -149,7 +149,11 @@ class AssistantResponse(BaseModel):
     success: bool = True
     question: str
     intent: str
+    request_type: Optional[str] = None
     module: Optional[str] = None
+    criteria: List[Dict[str, Any]] = Field(default_factory=list)
+    summary: Dict[str, Any] = Field(default_factory=dict)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
     count: int = 0
     message: Optional[str] = None
     leads_created: Optional[int] = None
@@ -157,6 +161,9 @@ class AssistantResponse(BaseModel):
     conversion_rate: Optional[float] = None
     date_range: Optional[Dict[str, str]] = None
     data: List[CRMRecord] = Field(default_factory=list)
+    pagination: Dict[str, Any] = Field(default_factory=dict)
+    calculations: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
     execution_time_ms: Optional[float] = None
     source: str = "Zoho CRM"
 

@@ -10,6 +10,7 @@ Every handler catches ``CRMServiceError`` and returns a clean JSON error body.
 """
 
 import time
+import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -83,7 +84,7 @@ async def get_query(
     filter: Optional[str] = Query(None, description='Filter, e.g. {"Stage":"Closed Won"}'),
     filters: Optional[str] = Query(None, alias="filters"),
     page: int = Query(1, ge=1),
-    per_page: int = Query(200, ge=1, le=200),
+    per_page: int = Query(20, ge=1, le=200),
     limit: Optional[int] = Query(None, ge=1, le=200),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query(None),
@@ -344,6 +345,8 @@ _COUNT_HINTS = (
     "aggregate",
 )
 
+_AGGREGATE_HINTS = ("sum", "total", "average", "avg", "minimum", "maximum", "max", "by owner", "by stage", "group")
+
 
 def _resolve_date_range(text: str, timezone_name: str = DEFAULT_TIMEZONE) -> Optional[Dict[str, str]]:
     """Map a relative time phrase to a Zoho-friendly from/to pair."""
@@ -358,6 +361,10 @@ def _resolve_date_range(text: str, timezone_name: str = DEFAULT_TIMEZONE) -> Opt
             "from": start.isoformat(timespec="seconds"),
             "to": end.isoformat(timespec="seconds"),
         }
+
+    relative_days = re.search(r"(?:last|past|previous)\s+(\d+)\s+days?", lowered)
+    if relative_days:
+        return iso_range(now - timedelta(days=int(relative_days.group(1))), tomorrow)
 
     if "last 7 days" in lowered or "past 7 days" in lowered:
         return iso_range(now - timedelta(days=7), tomorrow)
@@ -400,6 +407,30 @@ def _resolve_date_range(text: str, timezone_name: str = DEFAULT_TIMEZONE) -> Opt
 def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
     lowered = question.lower()
     intent = "count" if any(hint in lowered for hint in _COUNT_HINTS) else "query"
+    aggregate_operation = None
+    aggregate_field = None
+    group_by = None
+    if any(hint in lowered for hint in _AGGREGATE_HINTS):
+        intent = "aggregate"
+    if any(token in lowered for token in ("sum", "total", "revenue")):
+        aggregate_operation = "sum"
+        aggregate_field = "Amount"
+    elif any(token in lowered for token in ("average", "avg")):
+        aggregate_operation = "avg"
+        aggregate_field = "Amount"
+    elif "minimum" in lowered or "min(" in lowered:
+        aggregate_operation = "min"
+        aggregate_field = "Amount"
+    elif "maximum" in lowered or "max(" in lowered or "highest" in lowered:
+        aggregate_operation = "max"
+        aggregate_field = "Amount"
+    if "by owner" in lowered or "owner-wise" in lowered:
+        group_by = "Owner"
+    elif "by stage" in lowered or "stage-wise" in lowered:
+        group_by = "Stage"
+    if group_by and not aggregate_operation:
+        aggregate_operation = "count"
+        aggregate_field = "id"
 
     asks_for_lead_deal_relationship = (
         "lead" in lowered
@@ -412,9 +443,8 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
     )
     asks_for_lead_conversion_metric = (
         "lead" in lowered
-        and "deal" in lowered
         and ("converted" in lowered or "conversion" in lowered)
-        and ("created" in lowered or asks_for_conversion_rate)
+        and ("created" in lowered or asks_for_conversion_rate or "converted" in lowered)
     )
 
     module = None
@@ -451,6 +481,11 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
     elif module == "deals" and ("won" in lowered or "closed" in lowered):
         filters = [{"field": "Stage", "operator": "equals", "value": "Closed Won"}]
 
+    owner_match = re.search(r"(?:owned? by|owner(?: is|:)?)\s+([a-z][a-z .'-]*?)(?=\s+(?:last|this|previous|past|today|yesterday|with|and)\b|$)", lowered)
+    if owner_match:
+        owner_name = owner_match.group(1).strip()
+        filters = (filters or []) + [{"field": "Owner", "operator": "equals", "value": owner_name}]
+
     return {
         "intent": intent,
         "module": module,
@@ -460,6 +495,9 @@ def _resolve_assistant_plan(question: str) -> Dict[str, Any]:
         "limitation": limitation,
         "metric": intent == "count" or asks_for_conversion_rate,
         "lead_conversion_metric": asks_for_lead_conversion_metric,
+        "aggregate_operation": aggregate_operation,
+        "aggregate_field": aggregate_field,
+        "group_by": group_by,
     }
 
 
@@ -513,17 +551,57 @@ async def assistant(payload: AssistantRequest) -> AssistantResponse:
             return AssistantResponse(
                 question=question,
                 intent="metric",
+                request_type="analysis",
                 module="Leads to Deals",
+                criteria=[],
                 count=metrics["converted_deals"],
+                summary={
+                    "leads_created": metrics["leads_created"],
+                    "converted_to_deals": metrics["converted_deals"],
+                },
+                metrics={"conversion_rate": metrics["conversion_rate"]},
                 leads_created=metrics["leads_created"],
                 converted_deals=metrics["converted_deals"],
                 conversion_rate=metrics["conversion_rate"],
                 date_range=metrics["date_range"],
+                calculations=["converted_to_deals / leads_created * 100"],
                 message=(
                     f"{metrics['leads_created']} leads created, {metrics['converted_deals']} "
                     f"deals created through lead conversion, conversion rate "
                     f"{metrics['conversion_rate']}%."
                 ),
+                execution_time_ms=_elapsed_ms(start),
+            )
+
+        if plan["aggregate_operation"]:
+            if not plan["aggregate_field"]:
+                raise CRMServiceError(
+                    "An aggregate field could not be determined from the question.",
+                    status_code=400,
+                    code="AGGREGATE_FIELD_REQUIRED",
+                )
+            aggregate = await zoho_service.get_aggregate(
+                module=plan["module"],
+                operation=plan["aggregate_operation"],
+                field=plan["aggregate_field"],
+                group_by=plan["group_by"],
+                date_field=plan["date_field"],
+                from_value=plan["date_range"]["from"] if plan["date_range"] else None,
+                to_value=plan["date_range"]["to"] if plan["date_range"] else None,
+                filters=plan["filters"],
+            )
+            rows = aggregate["rows"]
+            return AssistantResponse(
+                question=question,
+                intent="aggregate",
+                request_type="aggregate",
+                module=aggregate["label"],
+                criteria=plan["filters"] or [],
+                summary={"operation": aggregate["operation"], "rows": rows},
+                metrics={aggregate["operation"]: rows[0].get("value") if len(rows) == 1 else rows},
+                date_range=plan["date_range"],
+                calculations=[f"{aggregate['operation']}({aggregate['field']})"],
+                message=f"Computed {aggregate['operation']} for {aggregate['label'].lower()}.",
                 execution_time_ms=_elapsed_ms(start),
             )
 
@@ -539,8 +617,11 @@ async def assistant(payload: AssistantRequest) -> AssistantResponse:
             return AssistantResponse(
                 question=question,
                 intent="count",
+                request_type="count",
                 module=result["label"],
+                criteria=plan["filters"] or [],
                 count=result["count"],
+                metrics={"count": result["count"]},
                 message=f"Found {result['count']} {result['label'].lower()} in Zoho CRM.",
                 execution_time_ms=_elapsed_ms(start),
             )
@@ -554,8 +635,16 @@ async def assistant(payload: AssistantRequest) -> AssistantResponse:
         return AssistantResponse(
             question=question,
             intent="query",
+            request_type="records",
             module=result["label"],
+            criteria=plan["filters"] or [],
             count=result["count"],
+            pagination={
+                "limit": result["per_page"],
+                "offset": (result["page"] - 1) * result["per_page"],
+                "returned": len(result["data"]),
+                "more_records": result["more_records"],
+            },
             message=f"Retrieved {len(result['data'])} of {result['count']} matching "
             f"{result['label'].lower()} records.",
             data=result["data"],

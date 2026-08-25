@@ -133,6 +133,27 @@ async def run_owner_resolution_check():
 import asyncio
 asyncio.run(run_owner_resolution_check())
 
+async def run_ambiguous_owner_check():
+    service = ZohoCRMService()
+
+    async def fake_request(method, url_path, params=None, json_body=None):
+        return {
+            "users": [
+                {"id": "user-1", "first_name": "Alex", "last_name": "K"},
+                {"id": "user-2", "first_name": "Alex", "last_name": "P"},
+            ]
+        }
+
+    service._request = fake_request
+    try:
+        await service._resolve_owner_value("Alex")
+    except Exception as exc:
+        check("ambiguous owner returns explicit error", getattr(exc, "code", None) == "OWNER_AMBIGUOUS", exc)
+    else:
+        check("ambiguous owner returns explicit error", False)
+
+asyncio.run(run_ambiguous_owner_check())
+
 async def run_aggregate_count_check():
     service = ZohoCRMService()
     seen = []
@@ -153,6 +174,33 @@ async def run_aggregate_count_check():
     check("aggregate count uses COQL", result["count"] == 7 and len(seen) == 1, seen)
 
 asyncio.run(run_aggregate_count_check())
+
+async def run_aggregate_analysis_check():
+    service = ZohoCRMService()
+    seen = []
+
+    async def fake_request(method, url_path, params=None, json_body=None):
+        seen.append(json_body["select_query"])
+        return {"data": [{"Owner": {"name": "Laya"}, "value": 125000}]}
+
+    service._request = fake_request
+    result = await service.get_aggregate(
+        "deals",
+        operation="sum",
+        field="Amount",
+        group_by="Owner",
+        filters=[{"field": "Stage", "operator": "equals", "value": "Closed Won"}],
+    )
+    check(
+        "grouped aggregate uses server-side sum",
+        result["rows"][0]["value"] == 125000
+        and "sum(Amount) as value" in seen[0]
+        and "group by Owner" in seen[0]
+        and "Stage = 'Closed Won'" in seen[0],
+        seen,
+    )
+
+asyncio.run(run_aggregate_analysis_check())
 
 async def run_lead_conversion_metrics_check():
     service = ZohoCRMService()
@@ -293,9 +341,9 @@ check(
 
 converted_leads_plan = _resolve_assistant_plan("How many converted leads this month?")
 check(
-    "assistant plan: unsupported converted leads metric",
-    converted_leads_plan["limitation"] is not None
-    and converted_leads_plan["date_field"] != "Converted_Date_Time",
+    "assistant plan: converted leads metric",
+    converted_leads_plan["lead_conversion_metric"] is True
+    and converted_leads_plan["limitation"] is None,
     converted_leads_plan,
 )
 
@@ -303,6 +351,25 @@ plan2 = _resolve_assistant_plan("Show me the leads created this month")
 check("assistant plan: query intent", plan2["intent"] == "query")
 check("assistant plan: leads module", plan2["module"] == "leads")
 check("assistant plan: Created_Time range", plan2["date_field"] == "Created_Time" and plan2["date_range"] is not None)
+
+owner_plan = _resolve_assistant_plan("Give me Closed Won deals owned by Laya last month")
+check(
+    "assistant plan: owner and stage filters",
+    owner_plan["filters"] == [
+        {"field": "Stage", "operator": "equals", "value": "Closed Won"},
+        {"field": "Owner", "operator": "equals", "value": "laya"},
+    ],
+    owner_plan,
+)
+
+aggregate_plan = _resolve_assistant_plan("Total Closed Won revenue this month")
+check(
+    "assistant plan: revenue aggregate",
+    aggregate_plan["intent"] == "aggregate"
+    and aggregate_plan["aggregate_operation"] == "sum"
+    and aggregate_plan["aggregate_field"] == "Amount",
+    aggregate_plan,
+)
 
 print()
 if failures:

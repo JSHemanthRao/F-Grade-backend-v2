@@ -715,6 +715,7 @@ class ZohoCRMService:
         users_payload = await self.get_users()
         users = users_payload.get("data") or []
         requested = text.casefold()
+        matches: List[str] = []
         for user in users:
             if not isinstance(user, dict):
                 continue
@@ -741,10 +742,20 @@ class ZohoCRMService:
                     resolved_id = user.get("user_id")
                 if resolved_id is None:
                     continue
-                logger.info("Owner requested: %s", text)
-                logger.info("Owner resolved ID: %s", resolved_id)
-                logger.info("Final CRM criteria: (Owner:equals:%s)", resolved_id)
-                return str(resolved_id)
+                matches.append(str(resolved_id))
+
+        if len(matches) > 1:
+            raise CRMServiceError(
+                f"Owner name '{text}' matches multiple Zoho CRM users. Use a user ID or full name.",
+                status_code=400,
+                code="OWNER_AMBIGUOUS",
+                details={"owner": text, "matching_user_ids": matches},
+            )
+        if matches:
+            logger.info("Owner requested: %s", text)
+            logger.info("Owner resolved ID: %s", matches[0])
+            logger.info("Final CRM criteria: (Owner:equals:%s)", matches[0])
+            return matches[0]
 
         raise CRMServiceError(
             f"No Zoho CRM user matches the owner name '{text}'. Use a valid user name or user ID.",
@@ -839,7 +850,7 @@ class ZohoCRMService:
 
         params: Dict[str, Any] = {}
         page_value = int(page) if isinstance(page, (int, str)) and str(page).isdigit() and int(page) > 0 else DEFAULT_PAGE
-        per_page_value = limit or per_page or MAX_PER_PAGE
+        per_page_value = limit or per_page or 20
         try:
             per_page_value = min(max(int(per_page_value), 1), MAX_PER_PAGE)
         except (TypeError, ValueError):
@@ -987,6 +998,75 @@ class ZohoCRMService:
             "module": key,
             "label": self.module_label(key),
             "count": int(rows[0].get("count") or 0) if rows else 0,
+        }
+
+    async def get_aggregate(
+        self,
+        module: str,
+        *,
+        operation: str,
+        field: str,
+        group_by: Optional[str] = None,
+        criteria: Optional[str] = None,
+        filter: Any = None,
+        filters: Any = None,
+        date_field: Optional[str] = None,
+        from_value: Optional[str] = None,
+        to_value: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run a validated server-side COQL aggregate without retrieving records."""
+        key = self.resolve_module(module)
+        endpoint = MODULE_ENDPOINTS[key]
+        operation = str(operation or "").lower()
+        allowed_operations = {"sum", "avg", "min", "max", "count"}
+        if operation not in allowed_operations:
+            raise CRMServiceError(
+                f"Unsupported aggregate operation: {operation}.",
+                status_code=400,
+                code="INVALID_AGGREGATE_OPERATION",
+            )
+
+        allowed_fields = set(DEFAULT_FIELDS.get(key, [])) | {"id"}
+        if field not in allowed_fields:
+            raise CRMServiceError(
+                f"Field '{field}' is not supported for aggregate queries on {key}.",
+                status_code=400,
+                code="INVALID_AGGREGATE_FIELD",
+            )
+        if group_by and group_by not in allowed_fields:
+            raise CRMServiceError(
+                f"Group field '{group_by}' is not supported for {key}.",
+                status_code=400,
+                code="INVALID_GROUP_FIELD",
+            )
+
+        resolved_filter = await self._resolve_owner_filters(filter)
+        resolved_filters = await self._resolve_owner_filters(filters)
+        query = build_coql_criteria(
+            criteria=criteria,
+            filter=resolved_filter,
+            filters=resolved_filters,
+            date_field=date_field,
+            from_value=from_value,
+            to_value=to_value,
+        )
+        expression = f"{operation}({field}) as value"
+        select_query = f"select {group_by + ', ' if group_by else ''}{expression} from {endpoint}"
+        if query:
+            select_query += f" where {query}"
+        if group_by:
+            select_query += f" group by {group_by}"
+        logger.info("[AGGREGATE QUERY] %s", select_query)
+        payload = await self.coql_query(select_query)
+        rows = payload.get("data") or []
+        return {
+            "module": key,
+            "label": self.module_label(key),
+            "operation": operation,
+            "field": field,
+            "group_by": group_by,
+            "rows": rows if isinstance(rows, list) else [],
+            "criteria": query,
         }
 
     async def get_lead_conversion_metrics(

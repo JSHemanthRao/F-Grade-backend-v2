@@ -60,9 +60,79 @@
           }
         }
       }
+    },
+    "/api/crm/assistant": {
+      "post": {
+        "operationId": "askCrmAssistant",
+        "summary": "Answer a natural-language CRM question",
+        "description": "Resolves record, count, aggregate, grouped, and lead-conversion questions and executes the required filtered Zoho CRM query or queries.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AssistantRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Structured CRM answer.",
+            "schema": {
+              "$ref": "#/definitions/AssistantResponse"
+            }
+          },
+          "400": {
+            "description": "Invalid question, field, date, owner, or aggregate request.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "502": {
+            "description": "Zoho CRM configuration, authentication, or query failure.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
     }
   },
   "definitions": {
+    "AssistantRequest": {
+      "type": "object",
+      "description": "Natural-language CRM question. Use one of question, prompt, or message.",
+      "properties": {
+        "question": { "type": "string" },
+        "prompt": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    },
+    "AssistantResponse": {
+      "type": "object",
+      "required": ["success", "question", "intent", "source"],
+      "properties": {
+        "success": { "type": "boolean" },
+        "question": { "type": "string" },
+        "intent": { "type": "string", "enum": ["query", "count", "metric", "aggregate"] },
+        "request_type": { "type": "string", "enum": ["records", "count", "aggregate", "analysis", "comparison"] },
+        "module": { "type": "string" },
+        "criteria": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "date_range": { "type": "object", "additionalProperties": { "type": "string" } },
+        "summary": { "type": "object", "additionalProperties": true },
+        "metrics": { "type": "object", "additionalProperties": true },
+        "count": { "type": "integer", "minimum": 0 },
+        "leads_created": { "type": "integer", "minimum": 0 },
+        "converted_deals": { "type": "integer", "minimum": 0 },
+        "conversion_rate": { "type": "number", "minimum": 0 },
+        "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "pagination": { "$ref": "#/definitions/Pagination" },
+        "calculations": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "source": { "type": "string", "example": "Zoho CRM" }
+      }
+    },
     "CrmQueryRequest": {
       "type": "object",
       "required": [
