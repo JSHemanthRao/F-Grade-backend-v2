@@ -1,6 +1,34 @@
 const { CRM_API_NAMES } = require('../constants/crmModules');
 
-const DATE_FIELDS = new Set(['Created_Time', 'Modified_Time', 'Lead_Conversion_Time', 'Closing_Date', 'Due_Date', 'Valid_Till', 'Start_Date', 'End_Date', 'Renewal_Date']);
+const DATE_FIELDS = new Set(['Created_Time', 'Modified_Time', 'Converted_Date_Time', 'Lead_Conversion_Time', 'Closing_Date', 'Due_Date', 'Valid_Till', 'Start_Date', 'End_Date', 'Renewal_Date']);
+
+function buildModuleCriteria(filters) {
+  return filters.map(({ field, operator, value }) => {
+    if (operator === 'is_null' || operator === 'is_not_null') return `(${field}:${operator})`;
+    if (operator === 'between') return `(${field}:between:${formatSearchDate(field, value[0], false)},${formatSearchDate(field, value[1], true)})`;
+    if (operator === 'in') return `(${field}:in:[${value.map((item) => formatSearchValue(field, item)).join(',')}])`;
+    return `(${field}:${operator}:${formatSearchValue(field, value)})`;
+  }).join('and');
+}
+
+function buildCriteria(filters) {
+  return filters.map(({ field, operator, value }) => {
+    if (operator === 'between') return `(${field}:between:${formatSearchDate(field, value[0], false)},${formatSearchDate(field, value[1], true)})`;
+    if (operator === 'is_null' || operator === 'is_not_null') return `(${field}:${operator}:true)`;
+    return `(${field}:${operator}:${formatSearchValue(field, value)})`;
+  }).join('and');
+}
+
+function formatSearchDate(field, value, endOfDay = false) {
+  if (!DATE_FIELDS.has(field)) return String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return `${value}T${endOfDay ? '23:59:59' : '00:00:00'}+05:30`;
+  return String(value);
+}
+
+function formatSearchValue(field, value) {
+  if (DATE_FIELDS.has(field)) return formatSearchDate(field, value);
+  return String(value).replace(/([\\,:()])/g, '\\$1');
+}
 
 function normalizeDateValue(field, value) {
   if (!DATE_FIELDS.has(field)) return value;
@@ -57,4 +85,4 @@ function buildWhereClause(clauses) {
   return expression;
 }
 
-module.exports = { buildCoqlQuery, buildFilterClauses, buildWhereClause, formatValue, formatComparisonValue };
+module.exports = { buildCoqlQuery, buildFilterClauses, buildWhereClause, buildModuleCriteria, buildCriteria, formatValue, formatComparisonValue };

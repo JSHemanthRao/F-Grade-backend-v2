@@ -2,6 +2,7 @@ const axios = require('axios');
 const { getZohoConfig } = require('../config/zoho.config');
 const { ZohoAuthService } = require('./zohoAuth.service');
 const { buildCoqlQuery } = require('./coql.service');
+const { buildModuleCriteria } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
 
@@ -70,6 +71,87 @@ class ZohoCrmService {
     }
   }
 
+  async count(module, filters = []) {
+    let config;
+    try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
+    const token = await this.authService.getAccessToken();
+    const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
+    const criteria = buildModuleCriteria(filters);
+    log('info', `[CRM count API] module=${module} criteria=${criteria || '(none)'}`);
+    try {
+      const response = await this.httpClient.get(`${apiBaseUrl}/${module}/actions/count`, {
+        params: criteria ? { criteria } : undefined,
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        timeout: config.timeoutMs
+      });
+      return { count: Number(response.data?.count || 0), criteria };
+    } catch (error) {
+      if (error.response?.status === 401) this.authService.clearToken();
+      throw createAppError('ZOHO_COUNT_ERROR', 'Unable to count CRM records.', mapZohoStatus(error.response?.status), safeZohoDetails(error));
+    }
+  }
+
+  async getUsers() {
+    let config;
+    try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
+    const token = await this.authService.getAccessToken();
+    const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
+    const response = await this.httpClient.get(`${apiBaseUrl}/users`, { params: { type: 'AllUsers' }, headers: { Authorization: `Zoho-oauthtoken ${token}` }, timeout: config.timeoutMs });
+    return Array.isArray(response.data?.users) ? response.data.users : [];
+  }
+
+  async getRecordsByIds(module, ids, fields) {
+    let config;
+    try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
+    const token = await this.authService.getAccessToken();
+    const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
+    const response = await this.httpClient.get(`${apiBaseUrl}/${module}`, {
+      params: { ids: ids.join(','), fields: fields.join(',') },
+      headers: { Authorization: `Zoho-oauthtoken ${token}` },
+      timeout: config.timeoutMs
+    });
+    return Array.isArray(response.data?.data) ? response.data.data : [];
+  }
+
+  async searchRecords(module, fields, filters, page = 1, perPage = 200) {
+    let config;
+    try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
+    const token = await this.authService.getAccessToken();
+    const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
+    const { buildCriteria } = require('./coql.service');
+    const criteria = buildCriteria(filters);
+    const response = await this.httpClient.get(`${apiBaseUrl}/${module}/search`, {
+      params: { criteria, fields: fields.join(','), page, per_page: perPage },
+      headers: { Authorization: `Zoho-oauthtoken ${token}` },
+      timeout: config.timeoutMs
+    });
+    return { records: Array.isArray(response.data?.data) ? response.data.data : [], info: response.data?.info || {} };
+  }
+
+  async resolveOwnerFilters(filters) {
+    const ownerFields = new Set(['Owner', 'Deal_Owner', 'Lead_Owner']);
+    const resolved = [];
+    for (const filter of filters) {
+      if (!ownerFields.has(filter.field) || !['equals', 'in'].includes(filter.operator)) { resolved.push(filter); continue; }
+      const users = await this.getUsers();
+      const values = filter.operator === 'in' ? filter.value : [filter.value];
+      const ids = values.map((value) => this.resolveUserId(users, value));
+      resolved.push({ ...filter, value: filter.operator === 'in' ? ids : ids[0] });
+    }
+    return resolved;
+  }
+
+  resolveUserId(users, value) {
+    const requested = String(value).trim().toLowerCase();
+    if (/^\d+$/.test(requested)) return String(value);
+    const matches = users.filter((user) => [user.name, user.full_name, user.first_name, user.last_name, `${user.first_name || ''} ${user.last_name || ''}`.trim(), user.email].filter(Boolean).some((candidate) => String(candidate).toLowerCase() === requested));
+    if (matches.length > 1) throw createAppError('OWNER_AMBIGUOUS', `Owner name '${value}' matches multiple Zoho CRM users.`, 400);
+    if (matches.length === 0) throw createAppError('OWNER_NOT_FOUND', `No Zoho CRM user matches owner '${value}'.`, 400);
+    const id = matches[0].id || matches[0].user_id;
+    log('info', `[OWNER RESOLVED] requested=${value} id=${id}`);
+    return String(id);
+  }
+
   async getFieldMetadata(module) {
     let config;
     try {
@@ -86,7 +168,10 @@ class ZohoCrmService {
         timeout: config.timeoutMs
       });
       const fields = Array.isArray(response.data?.fields) ? response.data.fields : [];
-      return { fields: fields.map((field) => field.api_name).filter(Boolean) };
+      return {
+        fields: fields.map((field) => field.api_name).filter(Boolean),
+        metadata: fields
+      };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
       throw createAppError(

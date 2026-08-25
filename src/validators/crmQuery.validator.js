@@ -73,6 +73,7 @@ function validateCrmQuery(body) {
       addError(`${path}.operator`, `Operator must be one of: ${CRM_OPERATORS.join(', ')}.`);
       return;
     }
+    if (['Owner', 'Deal_Owner', 'Lead_Owner'].includes(filter.field) && ['contains', 'starts_with'].includes(filter.operator)) addError(`${path}.operator`, 'Lookup owner fields support only equals, not_equals, and in operators.');
     const hasValue = Object.prototype.hasOwnProperty.call(filter, 'value');
     if (NULL_OPERATORS.has(filter.operator)) {
       if (hasValue) addError(`${path}.value`, `${filter.operator} must not include a value.`);
