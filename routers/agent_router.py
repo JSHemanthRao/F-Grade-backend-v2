@@ -518,6 +518,7 @@ async def assistant(payload: AssistantRequest) -> AssistantResponse:
                 leads_created=metrics["leads_created"],
                 converted_deals=metrics["converted_deals"],
                 conversion_rate=metrics["conversion_rate"],
+                date_range=metrics["date_range"],
                 message=(
                     f"{metrics['leads_created']} leads created, {metrics['converted_deals']} "
                     f"deals created through lead conversion, conversion rate "

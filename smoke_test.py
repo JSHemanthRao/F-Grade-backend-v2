@@ -173,7 +173,15 @@ async def run_lead_conversion_metrics_check():
     )
     check(
         "lead conversion metric uses two COQL counts",
-        metrics == {"leads_created": 20, "converted_deals": 5, "conversion_rate": 25.0}
+        metrics == {
+            "leads_created": 20,
+            "converted_deals": 5,
+            "conversion_rate": 25.0,
+            "date_range": {
+                "from": "2026-08-01T00:00:00+05:30",
+                "to": "2026-08-25T00:00:00+05:30",
+            },
+        }
         and len(seen) == 2
         and "Created_Time >= '2026-08-01T00:00:00+05:30'" in seen[0]
         and "Lead_Conversion_Time >= '2026-08-01T00:00:00+05:30'" in seen[1]
@@ -182,6 +190,65 @@ async def run_lead_conversion_metrics_check():
     )
 
 asyncio.run(run_lead_conversion_metrics_check())
+
+async def run_zero_lead_metric_check():
+    service = ZohoCRMService()
+
+    async def fake_request(method, url_path, params=None, json_body=None):
+        if "from Leads" in json_body["select_query"]:
+            return {"data": [{"count": 0}]}
+        return {"data": [{"count": 2}]}
+
+    service._request = fake_request
+    metrics = await service.get_lead_conversion_metrics(
+        from_value="2026-08-01T00:00:00+05:30",
+        to_value="2026-08-25T00:00:00+05:30",
+    )
+    check("zero leads return a zero conversion rate", metrics["conversion_rate"] == 0.0, metrics)
+
+asyncio.run(run_zero_lead_metric_check())
+
+async def run_assistant_metric_route_check():
+    from routers import agent_router
+
+    original_metric_method = agent_router.zoho_service.get_lead_conversion_metrics
+    original_query_method = agent_router.zoho_service.query_module
+
+    async def fake_metric_method(*, from_value, to_value):
+        return {
+            "leads_created": 20,
+            "converted_deals": 5,
+            "conversion_rate": 25.0,
+            "date_range": {"from": from_value, "to": to_value},
+        }
+
+    async def unexpected_record_query(**_kwargs):
+        raise AssertionError("metric request must not retrieve records")
+
+    agent_router.zoho_service.get_lead_conversion_metrics = fake_metric_method
+    agent_router.zoho_service.query_module = unexpected_record_query
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/crm/assistant",
+                json={"question": "count leads created this month and how many converted to deals"},
+            )
+        body = response.json()
+        check(
+            "exact lead conversion request returns structured metric",
+            response.status_code == 200
+            and body["leads_created"] == 20
+            and body["converted_deals"] == 5
+            and body["conversion_rate"] == 25.0
+            and body["date_range"]["from"].endswith("T00:00:00+05:30")
+            and body["date_range"]["to"].endswith("T00:00:00+05:30"),
+            body,
+        )
+    finally:
+        agent_router.zoho_service.get_lead_conversion_metrics = original_metric_method
+        agent_router.zoho_service.query_module = original_query_method
+
+asyncio.run(run_assistant_metric_route_check())
 
 # 9. Module normalization
 check("normalize aliases opportunity -> deals", normalize_module_key("opportunity") == "deals")

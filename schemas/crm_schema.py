@@ -155,6 +155,7 @@ class AssistantResponse(BaseModel):
     leads_created: Optional[int] = None
     converted_deals: Optional[int] = None
     conversion_rate: Optional[float] = None
+    date_range: Optional[Dict[str, str]] = None
     data: List[CRMRecord] = Field(default_factory=list)
     execution_time_ms: Optional[float] = None
     source: str = "Zoho CRM"

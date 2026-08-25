@@ -43,6 +43,7 @@ EXPORT_MAX_POLLS = 10
 EXPORT_POLL_MS = 2.0  # seconds
 
 logger = logging.getLogger(__name__)
+DEAL_CONVERSION_TIME_FIELD = "Lead_Conversion_Time"
 
 # ---------------------------------------------------------------------------
 # Supported CRM modules (module key -> Zoho API endpoint + display label)
@@ -994,7 +995,9 @@ class ZohoCRMService:
         from_value: str,
         to_value: str,
     ) -> Dict[str, Any]:
-        """Count created leads and converted deals for one shared time range."""
+        """Count created leads and Lead-conversion Deals for one time range."""
+        logger.info("[METRIC QUERY] leads created and converted to deals")
+        logger.info("[DATE RANGE] from=%s to=%s", from_value, to_value)
         leads = await self.get_aggregate_count(
             "leads",
             date_field="Created_Time",
@@ -1003,17 +1006,21 @@ class ZohoCRMService:
         )
         converted_deals = await self.get_aggregate_count(
             "deals",
-            date_field="Lead_Conversion_Time",
+            date_field=DEAL_CONVERSION_TIME_FIELD,
             from_value=from_value,
             to_value=to_value,
         )
         leads_created = leads["count"]
         converted_count = converted_deals["count"]
         rate = round((converted_count / leads_created) * 100, 2) if leads_created else 0.0
+        logger.info("[LEADS COUNT] %s", leads_created)
+        logger.info("[CONVERTED TO DEALS COUNT] %s", converted_count)
+        logger.info("[CONVERSION RATE] %s%%", rate)
         return {
             "leads_created": leads_created,
             "converted_deals": converted_count,
             "conversion_rate": rate,
+            "date_range": {"from": from_value, "to": to_value},
         }
 
     async def coql_query(self, select_query: str) -> Dict[str, Any]:
