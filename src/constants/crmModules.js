@@ -2,7 +2,7 @@ const CRM_MODULES = Object.freeze({
   Leads: ['id', 'First_Name', 'Last_Name', 'Company', 'Email', 'Phone', 'Lead_Status', 'Lead_Source', 'Owner', 'Created_Time', 'Modified_Time'],
   Contacts: ['id', 'First_Name', 'Last_Name', 'Account_Name', 'Email', 'Phone', 'Title', 'Owner', 'Created_Time', 'Modified_Time'],
   Accounts: ['id', 'Account_Name', 'Account_Type', 'Industry', 'Phone', 'Website', 'Billing_City', 'Billing_State', 'Owner', 'Created_Time', 'Modified_Time'],
-  Deals: ['id', 'Deal_Name', 'Amount', 'Stage', 'Closing_Date', 'Account_Name', 'Type', 'Probability', 'Owner', 'Created_Time', 'Modified_Time'],
+  Deals: ['id', 'Deal_Name', 'Amount', 'Stage', 'Closing_Date', 'Lead_Conversion_Time', 'Account_Name', 'Type', 'Probability', 'Owner', 'Created_Time', 'Modified_Time'],
   Tasks: ['id', 'Subject', 'Status', 'Due_Date', 'Priority', 'Who_Id', 'What_Id', 'Owner', 'Created_Time', 'Modified_Time'],
   Calls: ['id', 'Subject', 'Call_Type', 'Call_Start_Time', 'Call_Duration', 'Call_Result', 'Status', 'Who_Id', 'What_Id', 'Owner', 'Created_Time', 'Modified_Time'],
   Meetings: ['id', 'Event_Title', 'Subject', 'Start_DateTime', 'End_DateTime', 'Location', 'Who_Id', 'What_Id', 'Owner', 'Created_Time', 'Modified_Time'],

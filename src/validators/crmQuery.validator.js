@@ -26,13 +26,18 @@ function validateCrmQuery(body) {
     throw createAppError('INVALID_CRM_REQUEST', 'CRM request validation failed.', 400, { errors: [{ path: 'body', message: 'Request body must be a JSON object.' }] });
   }
 
-  const { module, fields, filters = [], sort, sort_field, sort_order, limit = 20, offset = 0 } = body;
+  const { module, fields, filters = [], sort, sort_field, sort_order, limit = 20, offset = 0, request_type = 'records', aggregate, group_by } = body;
   const supportedFields = CRM_MODULES[module];
   const addError = (path, message) => errors.push({ path, message });
   const invalidFieldMessage = (field) => `Field '${field}' is not supported for module '${module}'. Use a valid Zoho CRM API field name. Allowed fields: ${supportedFields ? supportedFields.join(', ') : 'none'}.`;
 
+  const requestTypes = new Set(['records', 'count', 'aggregate', 'analysis']);
+  const metricRequest = request_type !== 'records';
   if (typeof module !== 'string' || !supportedFields) addError('module', `module must be one of: ${Object.keys(CRM_MODULES).join(', ')}.`);
-  if (!Array.isArray(fields) || fields.length === 0) addError('fields', 'fields must be a non-empty array.');
+  if (!requestTypes.has(request_type)) addError('request_type', 'request_type must be one of: records, count, aggregate, analysis.');
+  if (!Array.isArray(fields) || fields.length === 0) {
+    if (!metricRequest) addError('fields', 'fields must be a non-empty array for record requests.');
+  }
   else {
     const duplicates = fields.filter((field, index) => fields.indexOf(field) !== index);
     if (duplicates.length > 0) addError('fields', `fields must not contain duplicates: ${[...new Set(duplicates)].join(', ')}.`);
@@ -41,6 +46,19 @@ function validateCrmQuery(body) {
       else if (supportedFields && !supportedFields.includes(field)) addError(`fields[${index}]`, invalidFieldMessage(field));
     });
   }
+
+  const normalizedFields = Array.isArray(fields) && fields.length > 0
+    ? fields
+    : (metricRequest ? ['id'] : fields);
+  if (request_type === 'aggregate') {
+    if (!aggregate || typeof aggregate !== 'object' || Array.isArray(aggregate)) {
+      addError('aggregate', 'aggregate is required for aggregate requests and must be an object.');
+    } else {
+      if (!['sum', 'avg', 'min', 'max', 'count'].includes(aggregate.operation)) addError('aggregate.operation', 'aggregate.operation must be one of: sum, avg, min, max, count.');
+      if (typeof aggregate.field !== 'string' || !supportedFields?.includes(aggregate.field)) addError('aggregate.field', invalidFieldMessage(aggregate.field));
+    }
+  }
+  if (group_by !== undefined && (typeof group_by !== 'string' || !supportedFields?.includes(group_by))) addError('group_by', invalidFieldMessage(group_by));
 
   const normalizedFilters = Array.isArray(filters) ? filters.map((filter) => ({ ...filter })) : filters;
   if (!Array.isArray(filters)) addError('filters', 'filters must be an array.');
@@ -96,8 +114,13 @@ function validateCrmQuery(body) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) addError('limit', 'limit must be an integer between 1 and 200.');
   if (!Number.isInteger(offset) || offset < 0) addError('offset', 'offset must be a non-negative integer.');
 
-  if (errors.length > 0) throw createAppError('INVALID_CRM_REQUEST', 'CRM request validation failed.', 400, { errors });
-  return { module, fields, filters: normalizedFilters, sort: normalizedSort, limit, offset };
+  if (errors.length > 0) throw createAppError(
+    'INVALID_CRM_REQUEST',
+    `CRM request validation failed: ${errors.map((error) => `${error.path}: ${error.message}`).join('; ')}`,
+    400,
+    { errors }
+  );
+  return { module, fields: normalizedFields, filters: normalizedFilters, sort: normalizedSort, limit, offset, request_type, aggregate, group_by };
 }
 
 module.exports = { validateCrmQuery };

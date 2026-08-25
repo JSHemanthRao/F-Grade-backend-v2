@@ -1,6 +1,6 @@
 const { CRM_API_NAMES } = require('../constants/crmModules');
 
-const DATE_FIELDS = new Set(['Closing_Date', 'Due_Date', 'Valid_Till', 'Start_Date', 'End_Date', 'Renewal_Date']);
+const DATE_FIELDS = new Set(['Created_Time', 'Modified_Time', 'Lead_Conversion_Time', 'Closing_Date', 'Due_Date', 'Valid_Till', 'Start_Date', 'End_Date', 'Renewal_Date']);
 
 function normalizeDateValue(field, value) {
   if (!DATE_FIELDS.has(field)) return value;

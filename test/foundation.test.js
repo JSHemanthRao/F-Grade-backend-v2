@@ -44,6 +44,24 @@ test('POST /api/crm/query returns the CRM service response', async () => {
   assert.equal(response.body.count, 1);
 });
 
+test('accepts Copilot count requests without record fields', () => {
+  const request = validateCrmQuery({
+    module: 'Leads',
+    request_type: 'count',
+    filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-09-01'] }]
+  });
+  assert.deepEqual(request.fields, ['id']);
+  assert.equal(request.request_type, 'count');
+  assert.deepEqual(request.filters[0].value, ['2026-08-01', '2026-09-01']);
+});
+
+test('rejects unsupported Converted Lead fields with the exact field error', () => {
+  assert.throws(
+    () => validateCrmQuery({ module: 'Leads', fields: ['id', 'Converted'] }),
+    (error) => error.details.errors.some((item) => item.path === 'fields[1]' && item.message.includes("Field 'Converted' is not supported"))
+  );
+});
+
 test('module-specific CRM routes remain unavailable', async () => {
   const response = await requestJson(createApp(), '/api/crm/deals', 'GET');
   assert.equal(response.status, 404);

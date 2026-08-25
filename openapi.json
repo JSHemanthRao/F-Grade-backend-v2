@@ -136,8 +136,7 @@
     "CrmQueryRequest": {
       "type": "object",
       "required": [
-        "module",
-        "fields"
+        "module"
       ],
       "properties": {
         "module": {
@@ -163,11 +162,34 @@
         },
         "fields": {
           "type": "array",
-          "description": "Non-empty list of actual Zoho CRM API field names required to answer the user's question. Never use human-readable display labels and select fields dynamically from the configured module mapping.",
+          "description": "Fields for record requests. Metric requests may omit fields; the backend uses id for aggregate counting. Never use human-readable display labels.",
           "minItems": 1,
           "items": {
             "type": "string",
             "minLength": 1
+          }
+        },
+        "request_type": {
+          "type": "string",
+          "description": "Execution mode. Records use the existing paginated contract; count, aggregate, and analysis use server-side CRM queries.",
+          "enum": ["records", "count", "aggregate", "analysis"],
+          "default": "records"
+        },
+        "aggregate": {
+          "type": "object",
+          "properties": {
+            "operation": { "type": "string", "enum": ["sum", "avg", "min", "max", "count"] },
+            "field": { "type": "string" }
+          }
+        },
+        "group_by": {
+          "type": "string",
+          "description": "Valid Zoho field used to group aggregate rows."
+        },
+        "analysis": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["lead_conversion"] }
           }
         },
         "filters": {

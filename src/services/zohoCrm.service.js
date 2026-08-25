@@ -40,6 +40,30 @@ class ZohoCrmService {
       throw createAppError('ZOHO_QUERY_ERROR', 'Unable to retrieve CRM data.', 502);
     }
   }
+
+  async aggregate(selectQuery) {
+    let config;
+    try {
+      config = this.configLoader();
+    } catch (_error) {
+      throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502);
+    }
+    const token = await this.authService.getAccessToken();
+    const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
+    log('info', `[COQL aggregate query] ${selectQuery}`);
+    try {
+      const response = await this.httpClient.post(`${apiBaseUrl}/coql`, { select_query: selectQuery }, {
+        headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
+        timeout: config.timeoutMs
+      });
+      const rows = Array.isArray(response.data?.data) ? response.data.data : [];
+      log('info', `[COQL aggregate result] count=${rows.length}`);
+      return { rows };
+    } catch (error) {
+      if (error.response?.status === 401) this.authService.clearToken();
+      throw createAppError('ZOHO_AGGREGATE_ERROR', 'Unable to execute the CRM aggregate query.', error.response?.status === 429 ? 429 : 502);
+    }
+  }
 }
 
 function normalizeCrmBaseUrl(value) {

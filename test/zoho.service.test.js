@@ -20,6 +20,45 @@ test('obtains and caches the Zoho access token and stores api_domain internally'
   assert.ok(auth.expiresAt > Date.now() + EXPIRY_BUFFER_MS);
 });
 
+test('executes count metrics without paginating record retrieval', async () => {
+  const queries = [];
+  const service = new CrmService({
+    aggregate: async (query) => {
+      queries.push(query);
+      return { rows: [{ value: 12 }] };
+    },
+    query: async () => { throw new Error('record retrieval must not run for count'); }
+  });
+  const result = await service.query({
+    module: 'Leads',
+    request_type: 'count',
+    filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-09-01'] }]
+  });
+  assert.equal(result.count, 12);
+  assert.equal(result.pagination.more_records, false);
+  assert.match(queries[0], /select count\(id\) as value from Leads/);
+  assert.match(queries[0], /Created_Time >= '2026-08-01'/);
+});
+
+test('executes lead conversion analysis as two aggregate queries', async () => {
+  const queries = [];
+  const service = new CrmService({
+    aggregate: async (query) => {
+      queries.push(query);
+      return { rows: [{ value: query.includes('from Leads') ? 20 : 5 }] };
+    }
+  });
+  const result = await service.query({
+    module: 'Leads',
+    request_type: 'analysis',
+    analysis: { type: 'lead_conversion' },
+    filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-09-01'] }]
+  });
+  assert.deepEqual(result.summary, { leads_created: 20, converted_to_deals: 5, conversion_rate: 25 });
+  assert.equal(queries.length, 2);
+  assert.match(queries[1], /Lead_Conversion_Time >= '2026-08-01'/);
+});
+
 test('refreshes when the cached token enters the expiry buffer', async () => {
   let calls = 0;
   const auth = new ZohoAuthService({
