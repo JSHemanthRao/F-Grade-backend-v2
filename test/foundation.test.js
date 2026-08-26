@@ -45,6 +45,35 @@ test('POST /api/crm/query returns the CRM service response', async () => {
   assert.equal(response.body.count, 1);
 });
 
+test('POST /api/crm/assistant accepts question, prompt, and message', async () => {
+  const calls = [];
+  const app = createApp({ crmService: { query: async (input) => {
+    calls.push(input);
+    return { module: input.module, count: 0, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } };
+  } } });
+  for (const key of ['question', 'prompt', 'message']) {
+    const response = await requestJson(app, '/api/crm/assistant', 'POST', { [key]: 'Show me deals' });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.success, true);
+    assert.equal(response.body.question, 'Show me deals');
+  }
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].module, 'Deals');
+});
+
+test('POST /api/crm/assistant routes conversion questions to analysis', async () => {
+  let request;
+  const app = createApp({ crmService: { query: async (input) => {
+    request = input;
+    return { module: 'Leads', request_type: 'analysis', summary: { leads_created: 0 }, data: [], pagination: { limit: 20, offset: 0, more_records: false } };
+  } } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Give me the count of leads created this month and how many converted to deals.' });
+  assert.equal(response.status, 200);
+  assert.equal(request.request_type, 'analysis');
+  assert.equal(request.analysis.type, 'lead_conversion');
+  assert.equal(request.fields.includes('Converted'), false);
+});
+
 test('accepts Copilot count requests without record fields', () => {
   const request = validateCrmQuery({
     module: 'Leads',
@@ -54,6 +83,61 @@ test('accepts Copilot count requests without record fields', () => {
   assert.deepEqual(request.fields, ['id']);
   assert.equal(request.request_type, 'count');
   assert.deepEqual(request.filters[0].value, ['2026-08-01', '2026-09-01']);
+});
+
+test('plans a general-purpose count question for this month leads', async () => {
+  const app = createApp({ crmService: { query: async (input) => ({ module: input.module, request_type: input.request_type, count: 7, pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'How many leads were created this month?' });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.module, 'Leads');
+  assert.equal(response.body.request_type, 'count');
+  assert.equal(response.body.count, 7);
+});
+
+test('plans a general-purpose aggregate question for average deal value', async () => {
+  const app = createApp({ crmService: { query: async (input) => ({ module: input.module, request_type: input.request_type, aggregate: input.aggregate, count: 1, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'What is the average deal value?' });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.module, 'Deals');
+  assert.equal(response.body.request_type, 'aggregate');
+  assert.equal(response.body.aggregate.operation, 'avg');
+  assert.equal(response.body.aggregate.field, 'Amount');
+});
+
+test('plans a general-purpose owner and amount filter question', async () => {
+  const app = createApp({ crmService: { query: async (input) => ({ module: input.module, filters: input.filters, pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Show me deals owned by Laya above ₹50,000.' });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.module, 'Deals');
+  assert.ok(response.body.filters.some((filter) => filter.field === 'Owner' && filter.value === 'Laya'));
+  assert.ok(response.body.filters.some((filter) => filter.field === 'Amount' && filter.operator === 'greater_than'));
+});
+
+test('plans lead conversion analysis for a natural-language conversion question', async () => {
+  const app = createApp({ crmService: { query: async (input) => ({ module: input.module, request_type: input.request_type, analysis: input.analysis, pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'How many of those leads became deals?' });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.module, 'Leads');
+  assert.equal(response.body.request_type, 'analysis');
+  assert.equal(response.body.analysis.type, 'lead_conversion');
+});
+
+test('returns a natural-language answer for CRM count questions', async () => {
+  const app = createApp({ crmService: { query: async () => ({ module: 'Leads', request_type: 'count', count: 42, pagination: { limit: 20, offset: 0, more_records: false } }) } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'How many leads were created this month?' });
+  assert.equal(response.status, 200);
+  assert.ok(typeof response.body.answer === 'string');
+  assert.match(response.body.answer, /42/i);
+  assert.match(response.body.answer, /Leads/i);
+});
+
+test('returns a natural-language summary for conversion analysis', async () => {
+  const app = createApp({ crmService: { query: async () => ({ module: 'Leads', request_type: 'analysis', summary: { leads_created: 120, leads_converted: 30, leads_converted_to_deals: 24, conversion_rate: 20 }, pagination: { limit: 20, offset: 0, more_records: false } }) } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'What is the lead conversion rate?' });
+  assert.equal(response.status, 200);
+  assert.match(response.body.answer, /20\.00%|20%|20 percent/i);
+  assert.match(response.body.answer, /24/i);
 });
 
 test('rejects unsupported Converted Lead fields with the exact field error', () => {

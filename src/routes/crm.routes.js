@@ -6,6 +6,7 @@ function createCrmRoutes(crmService) {
 	const controller = createCrmController(crmService);
 
 	router.post('/query', controller.query);
+	router.post('/assistant', controller.assistant);
 	return router;
 }
 
