@@ -22,7 +22,8 @@ const env = Object.freeze({
   zohoMaxRetries: numberFromEnv('ZOHO_MAX_RETRIES', 2),
   zohoCircuitFailureThreshold: numberFromEnv('ZOHO_CIRCUIT_FAILURE_THRESHOLD', 3),
   zohoCircuitResetTimeoutMs: numberFromEnv('ZOHO_CIRCUIT_RESET_TIMEOUT_MS', 30000),
-  zohoMaxConcurrency: numberFromEnv('ZOHO_MAX_CONCURRENCY', 4)
+  zohoMaxConcurrency: numberFromEnv('ZOHO_MAX_CONCURRENCY', 4),
+  zohoMetadataTtlMs: numberFromEnv('ZOHO_METADATA_TTL_MS', 300000)
 });
 
 module.exports = { env };

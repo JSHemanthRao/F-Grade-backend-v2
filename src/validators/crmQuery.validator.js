@@ -66,6 +66,8 @@ function validateCrmQuery(body) {
     }
   }
   if (group_by !== undefined && (typeof group_by !== 'string' || !supportedFields?.includes(group_by))) addError('group_by', invalidFieldMessage(group_by));
+  if (Array.isArray(fields) && fields.length > 500) addError('fields', 'A COQL query cannot select more than 500 fields.');
+  if (Array.isArray(filters) && filters.length > 25) addError('filters', 'A COQL query cannot contain more than 25 criteria.');
 
   const normalizedFilters = Array.isArray(filters) ? filters.map((filter) => ({ ...filter })) : filters;
   if (!Array.isArray(filters)) addError('filters', 'filters must be an array.');

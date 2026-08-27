@@ -5,15 +5,12 @@ const { buildCoqlQuery } = require('../src/services/coql.service');
 const { ZohoAuthService, EXPIRY_BUFFER_MS } = require('../src/services/zohoAuth.service');
 const { CrmService } = require('../src/services/crm.service');
 
-test('calculates aggregate values from filtered CRM records', async () => {
-  const calls = [];
+test('uses server-side aggregate values for filtered CRM records', async () => {
+  let selectQuery;
   const service = new CrmService({
-    query: async (request) => {
-      calls.push(request);
-      return {
-        records: [{ Amount: '125000' }, { Amount: 25000 }, { Amount: null }],
-        info: { more_records: false }
-      };
+    aggregate: async (query) => {
+      selectQuery = query;
+      return { rows: [{ 'SUM(Amount)': 150000 }] };
     }
   });
 
@@ -24,9 +21,7 @@ test('calculates aggregate values from filtered CRM records', async () => {
     offset: 0
   }, { operation: 'sum', field: 'Amount' });
 
-  assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].fields, ['Amount']);
-  assert.equal(calls[0].limit, 200);
+  assert.equal(selectQuery, "select SUM(Amount) from Deals where (Stage = 'Closed Won')");
   assert.equal(result.data[0].value, 150000);
 });
 
@@ -71,19 +66,18 @@ test('builds a Lead Source report from filtered records', async () => {
 
 test('normalizes lookup objects when grouping dashboard aggregates', async () => {
   const service = new CrmService({
-    query: async () => ({
-      records: [
-        { Owner: { name: 'Laya', id: '1' }, Amount: 100 },
-        { Owner: { name: 'Laya', id: '1' }, Amount: 50 },
-        { Owner: { name: 'Raj', id: '2' }, Amount: 25 }
-      ],
-      info: { more_records: false }
-    })
+    aggregate: async () => ({ rows: [
+      { Owner: { name: 'Laya', id: '1' }, 'SUM(Amount)': 150 },
+      { Owner: { name: 'Raj', id: '2' }, 'SUM(Amount)': 25 }
+    ] })
   });
 
   const result = await service.aggregate({ module: 'Deals', fields: ['Amount', 'Owner'], filters: [], group_by: 'Owner' }, { operation: 'sum', field: 'Amount' });
 
-  assert.deepEqual(result.data, [{ Owner: 'Laya', value: 150 }, { Owner: 'Raj', value: 25 }]);
+  assert.deepEqual(result.data, [
+    { Owner: 'Laya', 'SUM(Amount)': 150, value: 150 },
+    { Owner: 'Raj', 'SUM(Amount)': 25, value: 25 }
+  ]);
 });
 
 test('obtains and caches the Zoho access token and stores api_domain internally', async () => {

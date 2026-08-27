@@ -18,6 +18,7 @@ class ZohoCrmService {
     this.maxConcurrency = Math.max(1, env.zohoMaxConcurrency);
     this.activeRequests = 0;
     this.requestQueue = [];
+    this.metadataCache = new Map();
   }
 
   async acquireSlot() {
@@ -56,7 +57,11 @@ class ZohoCrmService {
           throw error;
         }
         this.executionStats.retries += 1;
-        await new Promise((resolve) => setTimeout(resolve, Math.min(250 * (2 ** (attempt - 1)), 2000)));
+        const retryAfter = Number(error.response?.headers?.['retry-after']);
+        const retryDelay = Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : Math.min(250 * (2 ** (attempt - 1)) + Math.floor(Math.random() * 100), 2000);
+        await new Promise((resolve) => setTimeout(resolve, retryDelay));
       } finally {
         this.releaseSlot();
       }
@@ -203,6 +208,8 @@ class ZohoCrmService {
   }
 
   async getFieldMetadata(module) {
+    const cached = this.metadataCache.get(module);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
     let config;
     try {
       config = this.configLoader();
@@ -218,10 +225,12 @@ class ZohoCrmService {
         timeout: config.timeoutMs
       }});
       const fields = Array.isArray(response.data?.fields) ? response.data.fields : [];
-      return {
+      const value = {
         fields: fields.map((field) => field.api_name).filter(Boolean),
         metadata: fields
       };
+      this.metadataCache.set(module, { value, expiresAt: Date.now() + env.zohoMetadataTtlMs });
+      return value;
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
       throw createAppError(

@@ -83,30 +83,16 @@ class CrmService {
   }
 
   async aggregate(request, aggregate) {
-    const fields = [aggregate.field, ...(request.group_by ? [request.group_by] : [])];
-    const records = [];
-    let offset = 0;
-    let moreRecords = true;
-
-    while (moreRecords) {
-      const result = await this.zohoService.query({
-        ...request,
-        fields: [...new Set(fields)],
-        limit: 200,
-        offset,
-        sort: undefined,
-        sort_field: undefined,
-        sort_order: undefined
-      });
-      records.push(...result.records);
-      moreRecords = Boolean(result.info?.more_records);
-      offset += 200;
-    }
-
-    const rows = request.group_by
-      ? buildGroupedAggregateRows(records, request.group_by, aggregate)
-      : [{ value: calculateAggregate(records, aggregate) }];
-    log('info', `[CRM aggregate from query] module=${request.module} records=${records.length} operation=${aggregate.operation} field=${aggregate.field}`);
+    const expression = `${aggregate.operation.toUpperCase()}(${aggregate.field})`;
+    const selectQuery = `select ${request.group_by ? `${request.group_by}, ` : ''}${expression} from ${CRM_API_NAMES[request.module]} where ${buildWhereClause(buildFilterClauses(request.filters))}${request.group_by ? ` group by ${request.group_by}` : ''}`;
+    const result = await this.zohoService.aggregate(selectQuery);
+    const aggregateKey = expression;
+    const rows = result.rows.map((row) => ({
+      ...row,
+      ...(request.group_by ? { [request.group_by]: normalizeGroupValue(row[request.group_by]) } : {}),
+      value: row.value ?? row[aggregateKey]
+    }));
+    log('info', `[CRM aggregate] module=${request.module} operation=${aggregate.operation} field=${aggregate.field} rows=${rows.length}`);
     return {
       module: request.module,
       count: aggregate.operation === 'count' ? Number(rows[0]?.value || 0) : rows.length,
@@ -308,33 +294,9 @@ class CrmService {
   }
 }
 
-function calculateAggregate(records, aggregate) {
-  if (aggregate.operation === 'count') return records.length;
-  const values = records
-    .map((record) => Number(record[aggregate.field]))
-    .filter((value) => Number.isFinite(value));
-  if (values.length === 0) return 0;
-  if (aggregate.operation === 'sum') return values.reduce((total, value) => total + value, 0);
-  if (aggregate.operation === 'avg') return values.reduce((total, value) => total + value, 0) / values.length;
-  if (aggregate.operation === 'min') return Math.min(...values);
-  if (aggregate.operation === 'max') return Math.max(...values);
-  return 0;
-}
-
-function buildGroupedAggregateRows(records, groupBy, aggregate) {
-  const groups = new Map();
-  for (const record of records) {
-    const rawKey = record[groupBy];
-    const key = rawKey && typeof rawKey === 'object'
-      ? rawKey.name || rawKey.full_name || rawKey.email || rawKey.id || null
-      : rawKey ?? null;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(record);
-  }
-  return [...groups.entries()].map(([key, groupRecords]) => ({
-    [groupBy]: key,
-    value: calculateAggregate(groupRecords, aggregate)
-  }));
+function normalizeGroupValue(value) {
+  if (!value || typeof value !== 'object') return value;
+  return value.name || value.full_name || value.email || value.id || null;
 }
 
 async function validateMetadataFields(zohoService, request) {
