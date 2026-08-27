@@ -36,7 +36,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Structured CRM answer.",
+            "description": "Complete answer and requested CRM data returned by the backend for the user's question.",
             "schema": {
               "$ref": "#/definitions/AssistantResponse"
             }
@@ -63,285 +63,35 @@
       "description": "Natural-language CRM question. Send the complete user request in question.",
       "required": ["question"],
       "properties": {
-        "question": { "type": "string", "minLength": 1 }
-      }
+        "question": {
+          "type": "string",
+          "description": "The complete natural-language CRM question provided by the user.",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
     },
     "AssistantResponse": {
       "type": "object",
-      "required": ["success", "question", "intent", "source"],
+      "required": ["response"],
       "properties": {
-        "success": { "type": "boolean" },
-        "question": { "type": "string" },
-        "intent": { "type": "string", "enum": ["query", "count", "metric", "aggregate"] },
-        "request_type": { "type": "string", "enum": ["records", "count", "aggregate", "analysis", "comparison"] },
-        "module": { "type": "string" },
-        "criteria": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-        "date_range": { "type": "object", "additionalProperties": { "type": "string" } },
-        "summary": { "type": "object", "additionalProperties": true },
-        "metrics": { "type": "object", "additionalProperties": true },
-        "count": { "type": "integer", "minimum": 0 },
-        "leads_created": { "type": "integer", "minimum": 0 },
-        "converted_deals": { "type": "integer", "minimum": 0 },
-        "conversion_rate": { "type": "number", "minimum": 0 },
-        "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-        "pagination": { "$ref": "#/definitions/Pagination" },
-        "calculations": { "type": "array", "items": { "type": "string" } },
-        "warnings": { "type": "array", "items": { "type": "string" } },
-        "source": { "type": "string", "example": "Zoho CRM" }
-      }
-    },
-    "CrmQueryRequest": {
-      "type": "object",
-      "required": [
-        "module"
-      ],
-      "properties": {
-        "module": {
+        "response": {
           "type": "string",
-          "description": "Supported Zoho CRM module name.",
-          "enum": [
-            "Leads",
-            "Contacts",
-            "Accounts",
-            "Deals",
-            "Tasks",
-            "Calls",
-            "Meetings",
-            "Notes",
-            "Products",
-            "Vendors",
-            "Quotes",
-            "Sales Orders",
-            "Purchase Orders",
-            "Campaigns",
-            "Renewal Accounts"
-          ]
-        },
-        "fields": {
-          "type": "array",
-            "description": "Fields for record requests. Metric requests may omit fields. If omitted or empty for a record request, the backend will use a safe default field set for the selected module. For Leads, NEVER use 'Converted'; it is not a CRM API field. Use the analysis operation for conversion questions, or only verified fields Converted__s, Converted_Date_Time, Converted_Account, Converted_Contact, and Converted_Deal.",
-          "minItems": 0,
-          "default": [],
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "request_type": {
-          "type": "string",
-          "description": "Execution mode. Records use the existing paginated contract; count, aggregate, and analysis use server-side CRM queries.",
-          "enum": ["records", "count", "aggregate", "analysis"],
-          "default": "records"
-        },
-        "aggregate": {
-          "type": "object",
-          "properties": {
-            "operation": { "type": "string", "enum": ["sum", "avg", "min", "max", "count"] },
-            "field": { "type": "string" }
-          }
-        },
-        "group_by": {
-          "type": "string",
-          "description": "Valid Zoho field used to group aggregate rows."
-        },
-        "analysis": {
-          "type": "object",
-          "properties": {
-            "type": { "type": "string", "enum": ["lead_conversion"] }
-          }
-        },
-        "filters": {
-          "type": "array",
-            "description": "Optional structured conditions. Multiple filters are combined as AND conditions. Semantic concepts such as converted, revenue, pipeline, and conversion rate must be translated into operations, never invented field names.",
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/CrmFilter"
-          }
-        },
-        "sort_field": {
-          "type": "string",
-          "description": "Zoho CRM API field used to sort the returned records."
-        },
-        "sort_order": {
-          "type": "string",
-          "description": "Sort direction: asc for ascending or desc for descending.",
-          "enum": [
-            "asc",
-            "desc"
-          ]
-        },
-        "limit": {
-          "type": "integer",
-          "format": "int32",
-          "description": "Maximum number of CRM records to return. The first request for a new question should normally use 20.",
-          "minimum": 1,
-          "maximum": 200,
-          "default": 20
-        },
-        "offset": {
-          "type": "integer",
-          "format": "int32",
-          "description": "Number of CRM records to skip for pagination. A new CRM question must start at 0; a continuation may use the next offset after the previous limit.",
-          "minimum": 0,
-          "default": 0
+          "description": "Complete answer and requested CRM data returned by the backend for the user's question."
         }
-      }
-    },
-    "CrmFilter": {
-      "type": "object",
-      "required": [
-        "field",
-        "operator"
-      ],
-      "properties": {
-        "field": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Zoho CRM API field on which the filter is applied."
-        },
-        "operator": {
-          "type": "string",
-          "description": "Comparison operator for the filter.",
-          "enum": [
-            "equals",
-            "not_equals",
-            "contains",
-            "starts_with",
-            "greater_than",
-            "less_than",
-            "greater_equal",
-            "less_equal",
-            "in",
-            "between",
-            "is_null",
-            "is_not_null"
-          ]
-        },
-        "value": {
-          "type": "string",
-          "description": "Filter value. Numeric comparison values such as 50000 may be sent as strings by Copilot Studio and are interpreted by the backend for numeric comparisons. Use a scalar string for equals, contains, and comparisons; use the backend-supported scalar array for in and exactly two scalar values for between. Omit value for is_null and is_not_null.",
-          "x-ms-summary": "Filter value"
-        }
-      }
-    },
-    "CrmQueryResponse": {
-      "type": "object",
-      "required": [
-        "success",
-        "status",
-        "module",
-        "count",
-        "data",
-        "pagination"
-      ],
-      "properties": {
-        "success": {
-          "type": "boolean",
-          "description": "Indicates whether the CRM request completed successfully.",
-          "example": true
-        },
-        "status": {
-          "type": "string",
-          "description": "Status of the backend request.",
-          "enum": [
-            "ok"
-          ]
-        },
-        "module": {
-          "type": "string",
-          "description": "The Zoho CRM module from which the records were retrieved."
-        },
-        "count": {
-          "type": "integer",
-          "format": "int32",
-          "description": "Number of CRM records returned in the current response.",
-          "minimum": 0
-        },
-        "data": {
-          "type": "array",
-          "description": "The actual CRM records returned by Zoho CRM. Use this data to answer the user's request.",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          }
-        },
-        "pagination": {
-          "$ref": "#/definitions/Pagination"
-        }
-      }
-    },
-    "Pagination": {
-      "type": "object",
-      "required": [
-        "limit",
-        "offset",
-        "more_records"
-      ],
-      "properties": {
-        "limit": {
-          "type": "integer",
-          "format": "int32",
-          "description": "Maximum number of CRM records returned in this response.",
-          "minimum": 1
-        },
-        "offset": {
-          "type": "integer",
-          "format": "int32",
-          "description": "Number of CRM records skipped before this response.",
-          "minimum": 0
-        },
-        "more_records": {
-          "type": "boolean",
-          "description": "Indicates whether additional CRM records are available beyond the current response."
-        }
-      }
+      },
+      "additionalProperties": false
     },
     "ErrorResponse": {
       "type": "object",
-      "required": [
-        "success",
-        "status",
-        "error"
-      ],
+      "required": ["response"],
       "properties": {
-        "success": {
-          "type": "boolean",
-          "description": "Indicates whether the CRM request completed successfully.",
-          "enum": [
-            false
-          ]
-        },
-        "status": {
+        "response": {
           "type": "string",
-          "description": "Status of the backend request.",
-          "enum": [
-            "error"
-          ]
-        },
-        "error": {
-          "type": "object",
-          "description": "Structured error information returned by the backend.",
-          "required": [
-            "code",
-            "message"
-          ],
-          "properties": {
-            "code": {
-              "type": "string",
-              "description": "Stable backend error code."
-            },
-            "message": {
-              "type": "string",
-              "description": "Human-readable explanation of the error."
-            },
-            "details": {
-              "type": "object",
-              "description": "Additional structured error details, when available.",
-              "additionalProperties": true
-            }
-          }
+          "description": "Complete answer explaining why the backend could not answer the user's question."
         }
-      }
+      },
+      "additionalProperties": false
     }
   }
 }

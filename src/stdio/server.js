@@ -30,6 +30,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
       required: ['question'],
       additionalProperties: false
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        response: {
+          type: 'string',
+          description: 'The complete answer and requested CRM data returned by the backend.'
+        }
+      },
+      required: ['response'],
+      additionalProperties: false
     }
   }]
 }));
@@ -45,19 +56,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const result = await crmTool.execute(args || {});
     return result;
   } catch (error) {
-    const message = error?.message || 'The CRM backend request failed.';
+    const message = error?.code === 'BACKEND_ENDPOINT_NOT_FOUND'
+      ? 'Unable to retrieve the requested CRM data because the backend endpoint was not found.'
+      : error?.code === 'BACKEND_UNAVAILABLE' || error?.code === 'BACKEND_TIMEOUT'
+        ? 'Unable to retrieve the requested CRM data because the backend service is unavailable.'
+        : 'Unable to retrieve the requested CRM data because the backend request failed.';
+    const response = { response: message };
+
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify({
-          success: false,
-          error: {
-            code: error?.code || 'TOOL_ERROR',
-            message,
-            statusCode: error?.statusCode || 500
-          }
-        }, null, 2)
+        text: JSON.stringify(response, null, 2)
       }],
+      structuredContent: response,
       isError: true
     };
   }

@@ -163,6 +163,21 @@ test('Copilot schema treats conversion as an operation, not the invalid Converte
   assert.equal(openApi.info['x-copilot-studio-field-mappings'], undefined);
 });
 
+test('OpenAPI exposes only question input and response output', () => {
+  const operation = openApi.paths['/api/crm/assistant'].post;
+  const request = openApi.definitions.AssistantRequest;
+  const response = openApi.definitions.AssistantResponse;
+
+  assert.equal(operation.operationId, 'askCrmAssistant');
+  assert.deepEqual(Object.keys(request.properties), ['question']);
+  assert.deepEqual(request.required, ['question']);
+  assert.equal(request.additionalProperties, false);
+  assert.deepEqual(Object.keys(response.properties), ['response']);
+  assert.deepEqual(response.required, ['response']);
+  assert.equal(response.additionalProperties, false);
+  assert.equal(response.properties.response.description, "Complete answer and requested CRM data returned by the backend for the user's question.");
+});
+
 test('module-specific CRM routes remain unavailable', async () => {
   const response = await requestJson(createApp(), '/api/crm/deals', 'GET');
   assert.equal(response.status, 404);

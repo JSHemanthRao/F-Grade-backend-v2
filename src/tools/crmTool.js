@@ -14,12 +14,16 @@ class CrmTool {
     }
 
     const response = await this.backendClient.ask(question);
+    const responseText = typeof response === 'string'
+      ? response
+      : JSON.stringify(response, null, 2);
+
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response, null, 2)
+        text: JSON.stringify({ response: responseText }, null, 2)
       }],
-      structuredContent: response
+      structuredContent: { response: responseText }
     };
   }
 }

@@ -43,6 +43,26 @@ test('BackendClient does not duplicate a path already present in the base URL', 
   assert.equal(endpoint, 'https://example.test/api/crm/assistant');
 });
 
+test('BackendClient preserves the complete question while validating whitespace-only input', async () => {
+  let requestBody;
+  const client = new BackendClient({
+    post: async (url, body) => {
+      requestBody = body;
+      return { status: 200, data: { success: true } };
+    }
+  }, {
+    backendApiUrl: 'https://example.test',
+    backendApiPath: '/api/crm/assistant',
+    backendRequestTimeoutMs: 1000,
+    backendDiagnostics: false
+  });
+
+  await client.ask('  Give me first 10 leads.  ');
+
+  assert.equal(requestBody.question, '  Give me first 10 leads.  ');
+  await assert.rejects(() => client.ask('   '), /non-empty string/);
+});
+
 test('BackendClient reports a sanitized endpoint-not-found error for HTTP 404', async () => {
   const client = new BackendClient({
     post: async () => {

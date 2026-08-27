@@ -51,7 +51,7 @@ class BackendClient {
     const timeout = setTimeout(() => controller.abort(), this.config.backendRequestTimeoutMs || 15000);
 
     try {
-      const response = await this.httpClient.post(endpoint, { question: question.trim() }, {
+      const response = await this.httpClient.post(endpoint, { question }, {
         headers: this.buildHeaders(),
         signal: controller.signal,
         timeout: this.config.backendRequestTimeoutMs || 15000
