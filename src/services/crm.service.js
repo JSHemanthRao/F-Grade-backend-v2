@@ -12,7 +12,7 @@ class CrmService {
     this.zohoService = zohoService;
   }
 
-  async query(input) {
+  async query(input, executionContext = createExecutionContext()) {
     const executionId = randomUUID();
     const startedAt = Date.now();
     const statsAtStart = { ...(this.zohoService.executionStats || {}) };
@@ -49,7 +49,7 @@ class CrmService {
       return result;
     }
     if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_source_report') {
-      const result = await this.leadSourceReport(request);
+      const result = await this.leadSourceReport(request, executionContext);
       this.logExecution(executionId, startedAt, statsAtStart, 'lead_source_report');
       return result;
     }
@@ -102,11 +102,11 @@ class CrmService {
     };
   }
 
-  async leadSourceReport(request) {
+  async leadSourceReport(request, executionContext = createExecutionContext()) {
     const whereClause = buildWhereClause(buildFilterClauses(request.filters));
     const groupingQuery = `select Lead_Source, COUNT(id) from ${CRM_API_NAMES.Leads} where ${whereClause} group by Lead_Source`;
     log('info', '[CRM lead source report] executing grouped source count');
-    const groupedResult = await this.zohoService.aggregate(groupingQuery);
+    const groupedResult = await executeCached(executionContext, `aggregate:${groupingQuery}`, () => this.zohoService.aggregate(groupingQuery));
     const counts = groupedResult.rows
       .map((row) => ({
         source: row.Lead_Source || row['Lead_Source'] || 'Unknown',
@@ -120,7 +120,7 @@ class CrmService {
     const topSource = sourceBreakdown[0]?.source;
     let topLeads = [];
     if (topSource) {
-      const topResult = await this.zohoService.query({
+      const topRequest = {
         ...request,
         fields: request.fields,
         filters: [...request.filters, { field: 'Lead_Source', operator: 'equals', value: topSource }],
@@ -129,18 +129,25 @@ class CrmService {
         sort: { field: 'Created_Time', order: 'desc' },
         sort_field: 'Created_Time',
         sort_order: 'desc'
-      });
+      };
+      const topResult = await executeCached(executionContext, `query:${JSON.stringify(topRequest)}`, () => this.zohoService.query(topRequest));
       topLeads = topResult.records
       .map((record) => ({
+        id: record.id || null,
         name: [record.First_Name, record.Last_Name].filter(Boolean).join(' ') || 'Unnamed lead',
         company: record.Company || null,
         email: record.Email || null,
         lead_status: record.Lead_Status || null,
         lead_source: record.Lead_Source,
         created_time: record.Created_Time || null
-      }));
+      }))
+      .filter((lead, index, leads) => !lead.id || leads.findIndex((item) => item.id === lead.id) === index);
     }
-    return { module: 'Leads', request_type: 'analysis', analysis: 'lead_source_report', total, source_breakdown: sourceBreakdown, top_source: topSource || null, top_leads: topLeads };
+    const uniqueIds = new Set(topLeads.map((lead) => lead.id).filter(Boolean));
+    const integrityWarnings = [];
+    if (topSource && topLeads.some((lead) => lead.lead_source !== topSource)) integrityWarnings.push('Top lead results did not all match the highest-volume source.');
+    if (uniqueIds.size !== topLeads.length && topLeads.some((lead) => lead.id)) integrityWarnings.push('Duplicate lead records were removed from the top-lead result.');
+    return { module: 'Leads', request_type: 'analysis', analysis: 'lead_source_report', total, source_breakdown: sourceBreakdown, top_source: topSource || null, top_leads: topLeads, warnings: integrityWarnings };
   }
 
   
@@ -297,6 +304,17 @@ class CrmService {
 function normalizeGroupValue(value) {
   if (!value || typeof value !== 'object') return value;
   return value.name || value.full_name || value.email || value.id || null;
+}
+
+function createExecutionContext() {
+  return { resultCache: new Map(), startedAt: Date.now() };
+}
+
+async function executeCached(context, key, operation) {
+  if (context.resultCache.has(key)) return context.resultCache.get(key);
+  const result = await operation();
+  context.resultCache.set(key, result);
+  return result;
 }
 
 async function validateMetadataFields(zohoService, request) {

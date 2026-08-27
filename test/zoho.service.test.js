@@ -37,8 +37,7 @@ test('builds a Lead Source report from filtered records', async () => {
       return {
       records: [
         { First_Name: 'A', Last_Name: 'One', Lead_Source: 'Website', Created_Time: '2026-06-01', Email: 'a@example.com' },
-        { First_Name: 'B', Last_Name: 'Two', Lead_Source: 'Website', Created_Time: '2026-05-01', Email: 'b@example.com' },
-        { First_Name: 'C', Last_Name: 'Three', Lead_Source: 'Referral', Created_Time: '2026-04-01', Email: 'c@example.com' }
+        { First_Name: 'B', Last_Name: 'Two', Lead_Source: 'Website', Created_Time: '2026-05-01', Email: 'b@example.com' }
       ],
       info: { more_records: false }
       };
@@ -56,8 +55,9 @@ test('builds a Lead Source report from filtered records', async () => {
     { source: 'Referral', count: 1, percentage: 33.33 }
   ]);
   assert.equal(result.top_source, 'Website');
-  assert.equal(result.top_leads.length, 3);
+  assert.equal(result.top_leads.length, 2);
   assert.equal(result.top_leads[0].name, 'A One');
+  assert.equal(result.warnings.length, 0);
   assert.equal(calls[0].type, 'aggregate');
   assert.equal(calls[1].type, 'query');
   assert.equal(calls[1].request.limit, 5);
