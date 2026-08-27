@@ -49,6 +49,11 @@ function formatComparisonValue(field, value) {
   return formatValue(field, value);
 }
 
+function formatDateComparisonValue(field, value, endOfDay = false) {
+  if (!DATE_FIELDS.has(field)) return formatComparisonValue(field, value);
+  return `'${formatSearchDate(field, normalizeDateValue(field, value), endOfDay)}'`;
+}
+
 function buildFilterClauses(filters) {
   return filters.flatMap(({ field, operator, value }) => {
     if (operator === 'is_null') return [`${field} is null`];
@@ -62,7 +67,7 @@ function buildFilterClauses(filters) {
     if (operator === 'greater_equal') return [`${field} >= ${formatComparisonValue(field, value)}`];
     if (operator === 'less_equal') return [`${field} <= ${formatComparisonValue(field, value)}`];
     if (operator === 'in') return [`${field} in (${value.map((item) => formatValue(field, item)).join(', ')})`];
-    if (operator === 'between') return [`${field} >= ${formatComparisonValue(field, value[0])} and ${field} <= ${formatComparisonValue(field, value[1])}`];
+    if (operator === 'between') return [`${field} >= ${formatDateComparisonValue(field, value[0])} and ${field} <= ${formatDateComparisonValue(field, value[1], true)}`];
     return [];
   });
 }

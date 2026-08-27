@@ -369,7 +369,7 @@ test('converts date between filters into parenthesized inclusive COQL bounds', (
     ],
     sort: { field: 'Amount', order: 'desc' }
   });
-  assert.equal(query, "select Deal_Name, Amount, Stage, Closing_Date from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) order by Amount desc");
+  assert.equal(query, "select Deal_Name, Amount, Stage, Closing_Date from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01T00:00:00+05:30' and Closing_Date <= '2026-07-31T23:59:59+05:30')) order by Amount desc");
 });
 
 test('generates the correct COQL for a normalized comma-separated between value', () => {
@@ -379,7 +379,7 @@ test('generates the correct COQL for a normalized comma-separated between value'
     fields: ['Closing_Date'],
     filters: [{ field: 'Closing_Date', operator: 'between', value: '2026-07-01,2026-07-31' }]
   });
-  assert.equal(buildCoqlQuery(request), "select Closing_Date from Deals where (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')");
+  assert.equal(buildCoqlQuery(request), "select Closing_Date from Deals where (Closing_Date >= '2026-07-01T00:00:00+05:30' and Closing_Date <= '2026-07-31T23:59:59+05:30')");
 });
 
 test('retrieves only Closed Won Deals within the requested Closing_Date range', async () => {
@@ -417,7 +417,7 @@ test('retrieves only Closed Won Deals within the requested Closing_Date range', 
     offset: 0
   });
 
-  assert.equal(calls[0], "select Deal_Name, Stage, Closing_Date, Amount from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) order by Closing_Date desc limit 0, 20");
+  assert.equal(calls[0], "select Deal_Name, Stage, Closing_Date, Amount from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01T00:00:00+05:30' and Closing_Date <= '2026-07-31T23:59:59+05:30')) order by Closing_Date desc limit 0, 20");
   assert.equal(result.count, 2);
   assert.equal(result.pagination.more_records, false);
   assert.ok(result.data.every((record) => record.Stage === 'Closed Won'));
@@ -435,7 +435,7 @@ test('keeps additional filters outside the compound date group for Zoho COQL', (
     ],
     sort: { field: 'Amount', order: 'desc' }
   });
-  assert.equal(query, "select Deal_Name, Amount, Stage, Closing_Date from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) and (Amount > 50000) order by Amount desc");
+  assert.equal(query, "select Deal_Name, Amount, Stage, Closing_Date from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01T00:00:00+05:30' and Closing_Date <= '2026-07-31T23:59:59+05:30')) and (Amount > 50000) order by Amount desc");
 });
 
 test('does not quote numeric COQL values and rejects invalid date values', () => {
