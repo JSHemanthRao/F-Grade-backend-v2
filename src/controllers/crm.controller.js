@@ -69,6 +69,18 @@ function planQuestion(question) {
     filters.push({ field: 'Lead_Source', operator: 'equals', value: 'LinkedIn' });
   }
 
+  if (module === 'Deals' && /(dashboard|report)/.test(lower) && /(by all persons|by all owners|per owner|by owner|each owner|all persons|all owners)/.test(lower)) {
+    return {
+      module,
+      request_type: 'aggregate',
+      aggregate: { operation: 'sum', field: 'Amount' },
+      group_by: 'Owner',
+      filters,
+      limit: 20,
+      offset: 0
+    };
+  }
+
   const aggregateOperation = detectAggregateOperation(lower);
   if (aggregateOperation) {
     return {
@@ -141,6 +153,14 @@ function buildAssistantAnswer(question, result) {
   const summary = result?.summary || {};
   const module = result?.module || 'CRM';
 
+  if (result?.request_type === 'aggregate') {
+    const rows = Array.isArray(result.data) ? result.data : [];
+    const lines = rows.map((row) => `${row.Owner ?? 'Unassigned'}: ${formatAmount(row.value)}`);
+    return lines.length > 0
+      ? `CRM dashboard for ${module}:\n${lines.join('\n')}\nTotal: ${formatAmount(rows.reduce((total, row) => total + Number(row.value || 0), 0))}`
+      : `CRM dashboard for ${module}: no matching records were found.`;
+  }
+
   if (result?.request_type === 'analysis' && summary.conversion_rate != null) {
     const convertedToDeals = summary.leads_converted_to_deals ?? summary.leads_converted ?? 0;
     const createdLeads = summary.leads_created ?? 0;
@@ -163,6 +183,10 @@ function formatPercent(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return '0%';
   return `${numeric.toFixed(2)}%`;
+}
+
+function formatAmount(value) {
+  return `₹ ${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function detectModule(lowerText) {
@@ -199,7 +223,7 @@ function extractOwnerName(text) {
     const match = text.match(pattern);
     if (match && match[1]) {
       const value = match[1].trim();
-      if (!/^(this|that|these|those|next|latest|month|week|quarter|year)$/i.test(value)) return value;
+      if (!/^(this|that|these|those|next|latest|month|week|quarter|year|all|all persons|all owners|persons|owners|owner)$/i.test(value)) return value;
     }
   }
   return null;

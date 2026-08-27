@@ -129,6 +129,15 @@ test('plans a general-purpose aggregate question for average deal value', async 
   assert.equal(response.body.aggregate.field, 'Amount');
 });
 
+test('plans a Closed Won dashboard by owner without an Owner name filter', () => {
+  const request = require('../src/controllers/crm.controller').planQuestion('Give me a report for all closed won deals by all persons like a dashboard');
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.request_type, 'aggregate');
+  assert.deepEqual(request.aggregate, { operation: 'sum', field: 'Amount' });
+  assert.equal(request.group_by, 'Owner');
+  assert.deepEqual(request.filters, [{ field: 'Stage', operator: 'equals', value: 'Closed Won' }]);
+});
+
 test('plans a general-purpose owner and amount filter question', async () => {
   const app = createApp({ crmService: { query: async (input) => ({ module: input.module, filters: input.filters, pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
   const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Show me deals owned by Laya above ₹50,000.' });
