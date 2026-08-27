@@ -5,12 +5,15 @@ const { buildCoqlQuery } = require('../src/services/coql.service');
 const { ZohoAuthService, EXPIRY_BUFFER_MS } = require('../src/services/zohoAuth.service');
 const { CrmService } = require('../src/services/crm.service');
 
-test('builds Zoho-supported aggregate COQL and normalizes the aggregate value', async () => {
-  let selectQuery;
+test('calculates aggregate values from filtered CRM records', async () => {
+  const calls = [];
   const service = new CrmService({
-    aggregate: async (query) => {
-      selectQuery = query;
-      return { rows: [{ 'SUM(Amount)': 125000 }] };
+    query: async (request) => {
+      calls.push(request);
+      return {
+        records: [{ Amount: '125000' }, { Amount: 25000 }, { Amount: null }],
+        info: { more_records: false }
+      };
     }
   });
 
@@ -21,8 +24,10 @@ test('builds Zoho-supported aggregate COQL and normalizes the aggregate value', 
     offset: 0
   }, { operation: 'sum', field: 'Amount' });
 
-  assert.equal(selectQuery, "select SUM(Amount) from Deals where (Stage = 'Closed Won')");
-  assert.equal(result.data[0].value, 125000);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].fields, ['Amount']);
+  assert.equal(calls[0].limit, 200);
+  assert.equal(result.data[0].value, 150000);
 });
 
 test('obtains and caches the Zoho access token and stores api_domain internally', async () => {
