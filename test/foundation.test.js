@@ -138,6 +138,19 @@ test('plans a Closed Won dashboard by owner without an Owner name filter', () =>
   assert.deepEqual(request.filters, [{ field: 'Stage', operator: 'equals', value: 'Closed Won' }]);
 });
 
+test('plans a complex Lead Source report without Deals-only aggregate fields', () => {
+  const request = require('../src/controllers/crm.controller').planQuestion('For all Leads created between January 1, 2026 and June 30, 2026, exclude leads with a blank Lead Source, group the leads by Lead Source, show the number of leads and the percentage each source contributes to the total, sort the results from highest to lowest number of leads, and identify the top 5 individual leads from the highest-volume source.');
+  assert.equal(request.module, 'Leads');
+  assert.equal(request.request_type, 'analysis');
+  assert.deepEqual(request.analysis, { type: 'lead_source_report' });
+  assert.equal(request.group_by, undefined);
+  assert.deepEqual(request.filters, [
+    { field: 'Created_Time', operator: 'between', value: ['2026-01-01', '2026-06-30'] },
+    { field: 'Lead_Source', operator: 'is_not_null' }
+  ]);
+  assert.deepEqual(request.fields, ['First_Name', 'Last_Name', 'Company', 'Email', 'Lead_Status', 'Lead_Source', 'Created_Time']);
+});
+
 test('plans a general-purpose owner and amount filter question', async () => {
   const app = createApp({ crmService: { query: async (input) => ({ module: input.module, filters: input.filters, pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
   const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Show me deals owned by Laya above ₹50,000.' });

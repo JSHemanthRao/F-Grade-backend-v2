@@ -30,6 +30,50 @@ test('calculates aggregate values from filtered CRM records', async () => {
   assert.equal(result.data[0].value, 150000);
 });
 
+test('builds a Lead Source report from filtered records', async () => {
+  const service = new CrmService({
+    query: async () => ({
+      records: [
+        { First_Name: 'A', Last_Name: 'One', Lead_Source: 'Website', Created_Time: '2026-06-01', Email: 'a@example.com' },
+        { First_Name: 'B', Last_Name: 'Two', Lead_Source: 'Website', Created_Time: '2026-05-01', Email: 'b@example.com' },
+        { First_Name: 'C', Last_Name: 'Three', Lead_Source: 'Referral', Created_Time: '2026-04-01', Email: 'c@example.com' }
+      ],
+      info: { more_records: false }
+    })
+  });
+
+  const result = await service.leadSourceReport({
+    module: 'Leads',
+    fields: ['First_Name', 'Last_Name', 'Company', 'Email', 'Lead_Status', 'Lead_Source', 'Created_Time'],
+    filters: [{ field: 'Lead_Source', operator: 'is_not_null' }]
+  });
+
+  assert.deepEqual(result.source_breakdown, [
+    { source: 'Website', count: 2, percentage: 66.67 },
+    { source: 'Referral', count: 1, percentage: 33.33 }
+  ]);
+  assert.equal(result.top_source, 'Website');
+  assert.equal(result.top_leads.length, 2);
+  assert.equal(result.top_leads[0].name, 'A One');
+});
+
+test('normalizes lookup objects when grouping dashboard aggregates', async () => {
+  const service = new CrmService({
+    query: async () => ({
+      records: [
+        { Owner: { name: 'Laya', id: '1' }, Amount: 100 },
+        { Owner: { name: 'Laya', id: '1' }, Amount: 50 },
+        { Owner: { name: 'Raj', id: '2' }, Amount: 25 }
+      ],
+      info: { more_records: false }
+    })
+  });
+
+  const result = await service.aggregate({ module: 'Deals', fields: ['Amount', 'Owner'], filters: [], group_by: 'Owner' }, { operation: 'sum', field: 'Amount' });
+
+  assert.deepEqual(result.data, [{ Owner: 'Laya', value: 150 }, { Owner: 'Raj', value: 25 }]);
+});
+
 test('obtains and caches the Zoho access token and stores api_domain internally', async () => {
   let calls = 0;
   const auth = new ZohoAuthService({

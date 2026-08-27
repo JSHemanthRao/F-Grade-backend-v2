@@ -69,6 +69,21 @@ function planQuestion(question) {
     filters.push({ field: 'Lead_Source', operator: 'equals', value: 'LinkedIn' });
   }
 
+  if (module === 'Leads' && /(group|grouped|each|percentage|top 5|highest-volume|lead source)/.test(lower)) {
+    if (!filters.some((filter) => filter.field === 'Lead_Source' && filter.operator === 'equals')) {
+      filters.push({ field: 'Lead_Source', operator: 'is_not_null' });
+    }
+    return {
+      module,
+      request_type: 'analysis',
+      analysis: { type: 'lead_source_report' },
+      fields: ['First_Name', 'Last_Name', 'Company', 'Email', 'Lead_Status', 'Lead_Source', 'Created_Time'],
+      filters,
+      limit: 20,
+      offset: 0
+    };
+  }
+
   if (module === 'Deals' && /(dashboard|report)/.test(lower) && /(by all persons|by all owners|per owner|by owner|each owner|all persons|all owners)/.test(lower)) {
     return {
       module,
@@ -159,6 +174,12 @@ function buildAssistantAnswer(question, result) {
     return lines.length > 0
       ? `CRM dashboard for ${module}:\n${lines.join('\n')}\nTotal: ${formatAmount(rows.reduce((total, row) => total + Number(row.value || 0), 0))}`
       : `CRM dashboard for ${module}: no matching records were found.`;
+  }
+
+  if (result?.request_type === 'analysis' && result?.analysis === 'lead_source_report') {
+    const lines = (result.source_breakdown || []).map((row) => `${row.source}: ${row.count} (${row.percentage}%)`);
+    const leads = (result.top_leads || []).map((lead, index) => `${index + 1}. ${lead.name} | ${lead.company || 'No company'} | ${lead.email || 'No email'} | ${lead.lead_status || 'No status'} | ${lead.created_time || 'No date'}`);
+    return `Lead Source Dashboard\n\n${lines.join('\n')}\n\nTop 5 leads from ${result.top_source || 'the highest-volume source'}:\n${leads.join('\n')}`;
   }
 
   if (result?.request_type === 'analysis' && summary.conversion_rate != null) {
@@ -281,6 +302,13 @@ function detectDateFilter(lowerText, module) {
   const exactRange = lowerText.match(/between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})/i);
   if (exactRange) {
     return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: [exactRange[1], exactRange[2]] };
+  }
+
+  const namedRange = lowerText.match(/between\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})\s+and\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})/i);
+  if (namedRange) {
+    const start = new Date(`${namedRange[1]} ${namedRange[2]}, ${namedRange[3]}`);
+    const end = new Date(`${namedRange[4]} ${namedRange[5]}, ${namedRange[6]}`);
+    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: [toIsoDate(start), toIsoDate(end)] };
   }
 
   if (lowerText.includes('created this month') || lowerText.includes('created in this month')) {

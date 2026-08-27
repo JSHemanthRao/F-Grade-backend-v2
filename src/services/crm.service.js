@@ -30,6 +30,7 @@ class CrmService {
     if (request.request_type === 'count') return this.count(request);
     if (request.request_type === 'aggregate') return this.aggregate(request, request.aggregate);
     if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_conversion') return this.leadConversionAnalysis(request);
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_source_report') return this.leadSourceReport(request);
     const result = await this.zohoService.query(request);
     const data = result.records.map(sanitizeZohoRecord);
     const info = result.info || {};
@@ -83,6 +84,46 @@ class CrmService {
       summary: { operation: aggregate.operation, field: aggregate.field, rows },
       pagination: { limit: request.limit, offset: request.offset, returned: rows.length, more_records: false }
     };
+  }
+
+  async leadSourceReport(request) {
+    const records = [];
+    let offset = 0;
+    let moreRecords = true;
+    while (moreRecords) {
+      const result = await this.zohoService.query({
+        ...request,
+        fields: request.fields,
+        limit: 200,
+        offset,
+        sort: { field: 'Created_Time', order: 'desc' },
+        sort_field: 'Created_Time',
+        sort_order: 'desc'
+      });
+      records.push(...result.records);
+      moreRecords = Boolean(result.info?.more_records);
+      offset += 200;
+    }
+
+    const counts = new Map();
+    for (const record of records) counts.set(record.Lead_Source, (counts.get(record.Lead_Source) || 0) + 1);
+    const total = records.length;
+    const sourceBreakdown = [...counts.entries()]
+      .map(([source, count]) => ({ source, count, percentage: total ? Number(((count / total) * 100).toFixed(2)) : 0 }))
+      .sort((left, right) => right.count - left.count || left.source.localeCompare(right.source));
+    const topSource = sourceBreakdown[0]?.source;
+    const topLeads = records
+      .filter((record) => record.Lead_Source === topSource)
+      .slice(0, 5)
+      .map((record) => ({
+        name: [record.First_Name, record.Last_Name].filter(Boolean).join(' ') || 'Unnamed lead',
+        company: record.Company || null,
+        email: record.Email || null,
+        lead_status: record.Lead_Status || null,
+        lead_source: record.Lead_Source,
+        created_time: record.Created_Time || null
+      }));
+    return { module: 'Leads', request_type: 'analysis', analysis: 'lead_source_report', total, source_breakdown: sourceBreakdown, top_source: topSource || null, top_leads: topLeads };
   }
 
   
@@ -252,7 +293,10 @@ function calculateAggregate(records, aggregate) {
 function buildGroupedAggregateRows(records, groupBy, aggregate) {
   const groups = new Map();
   for (const record of records) {
-    const key = record[groupBy] ?? null;
+    const rawKey = record[groupBy];
+    const key = rawKey && typeof rawKey === 'object'
+      ? rawKey.name || rawKey.full_name || rawKey.email || rawKey.id || null
+      : rawKey ?? null;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(record);
   }
