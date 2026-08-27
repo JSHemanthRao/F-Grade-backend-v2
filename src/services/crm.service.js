@@ -5,6 +5,7 @@ const { CRM_API_NAMES } = require('../constants/crmModules');
 const { buildFilterClauses, buildWhereClause } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
+const { randomUUID } = require('node:crypto');
 
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
@@ -12,6 +13,10 @@ class CrmService {
   }
 
   async query(input) {
+    const executionId = randomUUID();
+    const startedAt = Date.now();
+    const statsAtStart = { ...(this.zohoService.executionStats || {}) };
+    log('info', `[CRM EXECUTION START] executionId=${executionId}`);
     log('info', `[CRM filters received] ${JSON.stringify(Array.isArray(input?.filters) ? input.filters : [])}`);
     log('info', `[CRM request received] ${JSON.stringify({ module: input?.module, fields: input?.fields, filters: input?.filters, limit: input?.limit, offset: input?.offset, sort_field: input?.sort_field || input?.sort?.field, sort_order: input?.sort_order || input?.sort?.order, request_type: input?.request_type || 'records' })}`);
     const normalizedInput = normalizeSemanticRequest(input);
@@ -28,15 +33,31 @@ class CrmService {
     }
     log('info', `[CRM normalized request] ${JSON.stringify({ module: request.module, fields: request.fields, filters: request.filters, limit: request.limit, offset: request.offset, sort_field: request.sort?.field, sort_order: request.sort?.order, request_type: request.request_type })}`);
     log('info', `[CRM filters normalized] ${JSON.stringify(request.filters)}`);
-    if (request.request_type === 'count') return this.count(request);
-    if (request.request_type === 'aggregate') return this.aggregate(request, request.aggregate);
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_conversion') return this.leadConversionAnalysis(request);
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_source_report') return this.leadSourceReport(request);
+    if (request.request_type === 'count') {
+      const result = await this.count(request);
+      this.logExecution(executionId, startedAt, statsAtStart, 'count');
+      return result;
+    }
+    if (request.request_type === 'aggregate') {
+      const result = await this.aggregate(request, request.aggregate);
+      this.logExecution(executionId, startedAt, statsAtStart, 'aggregate');
+      return result;
+    }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_conversion') {
+      const result = await this.leadConversionAnalysis(request);
+      this.logExecution(executionId, startedAt, statsAtStart, 'lead_conversion');
+      return result;
+    }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_source_report') {
+      const result = await this.leadSourceReport(request);
+      this.logExecution(executionId, startedAt, statsAtStart, 'lead_source_report');
+      return result;
+    }
     const result = await this.zohoService.query(request);
     const data = result.records.map(sanitizeZohoRecord);
     const info = result.info || {};
 
-    return {
+    const response = {
       module: request.module,
       count: Number.isInteger(info.count) ? info.count : data.length,
       data,
@@ -46,6 +67,14 @@ class CrmService {
         more_records: Boolean(info.more_records)
       }
     };
+    this.logExecution(executionId, startedAt, statsAtStart, request.request_type);
+    return response;
+  }
+
+  logExecution(executionId, startedAt, statsAtStart, operation) {
+    const current = this.zohoService.executionStats || {};
+    const delta = (key) => Math.max(0, (current[key] || 0) - (statsAtStart[key] || 0));
+    log('info', `[CRM EXECUTION COMPLETE] executionId=${executionId} operation=${operation} durationMs=${Date.now() - startedAt} crmCalls=${delta('calls')} successfulCalls=${delta('successfulCalls')} failedCalls=${delta('failedCalls')} retries=${delta('retries')}`);
   }
 
   async count(request) {

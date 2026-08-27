@@ -18,7 +18,11 @@ const env = Object.freeze({
   backendApiPath: process.env.BACKEND_API_PATH || '/api/crm/assistant',
   backendApiKey: process.env.BACKEND_API_KEY || '',
   backendRequestTimeoutMs: numberFromEnv('BACKEND_REQUEST_TIMEOUT_MS', 15000),
-  backendDiagnostics: process.env.BACKEND_DIAGNOSTICS === 'true'
+  backendDiagnostics: process.env.BACKEND_DIAGNOSTICS === 'true',
+  zohoMaxRetries: numberFromEnv('ZOHO_MAX_RETRIES', 2),
+  zohoCircuitFailureThreshold: numberFromEnv('ZOHO_CIRCUIT_FAILURE_THRESHOLD', 3),
+  zohoCircuitResetTimeoutMs: numberFromEnv('ZOHO_CIRCUIT_RESET_TIMEOUT_MS', 30000),
+  zohoMaxConcurrency: numberFromEnv('ZOHO_MAX_CONCURRENCY', 4)
 });
 
 module.exports = { env };

@@ -5,12 +5,41 @@ const { buildCoqlQuery } = require('./coql.service');
 const { buildModuleCriteria } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
+const { env } = require('../config/env');
+const { CircuitBreaker, isTransientFailure } = require('../utils/circuitBreaker');
 
 class ZohoCrmService {
   constructor(httpClient = axios, configLoader = getZohoConfig, authService) {
     this.httpClient = httpClient;
     this.configLoader = configLoader;
     this.authService = authService || new ZohoAuthService(httpClient, configLoader);
+    this.circuitBreaker = new CircuitBreaker({ failureThreshold: env.zohoCircuitFailureThreshold, resetTimeoutMs: env.zohoCircuitResetTimeoutMs });
+    this.executionStats = { calls: 0, successfulCalls: 0, failedCalls: 0, retries: 0 };
+  }
+
+  async executeRequest(method, url, options) {
+    const maxAttempts = Math.max(1, env.zohoMaxRetries + 1);
+    let attempt = 0;
+    const startedAt = Date.now();
+    this.executionStats.calls += 1;
+    while (attempt < maxAttempts) {
+      try {
+        const response = await this.circuitBreaker.execute(() => method === 'get'
+          ? this.httpClient.get(url, options?.config)
+          : this.httpClient.post(url, options?.data, options?.config));
+        this.executionStats.successfulCalls += 1;
+        log('info', `[ZOHO EXECUTION] method=${method} durationMs=${Date.now() - startedAt} retries=${attempt}`);
+        return response;
+      } catch (error) {
+        attempt += 1;
+        if (attempt >= maxAttempts || !isTransientFailure(error)) {
+          this.executionStats.failedCalls += 1;
+          throw error;
+        }
+        this.executionStats.retries += 1;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(250 * (2 ** (attempt - 1)), 2000)));
+      }
+    }
   }
 
   async query(request) {
@@ -27,10 +56,10 @@ class ZohoCrmService {
     log('info', `[COQL query] ${selectQuery}`);
 
     try {
-      const response = await this.httpClient.post(`${apiBaseUrl}/coql`, { select_query: selectQuery }, {
+      const response = await this.executeRequest('post', `${apiBaseUrl}/coql`, { data: { select_query: selectQuery }, config: {
         headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
         timeout: config.timeoutMs
-      });
+      }});
       const records = Array.isArray(response.data?.data) ? response.data.data : [];
       const info = response.data?.info || {};
       const firstRecord = records[0] || {};
@@ -53,10 +82,10 @@ class ZohoCrmService {
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
     log('info', `[COQL aggregate query] ${selectQuery}`);
     try {
-      const response = await this.httpClient.post(`${apiBaseUrl}/coql`, { select_query: selectQuery }, {
+      const response = await this.executeRequest('post', `${apiBaseUrl}/coql`, { data: { select_query: selectQuery }, config: {
         headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
         timeout: config.timeoutMs
-      });
+      }});
       const rows = Array.isArray(response.data?.data) ? response.data.data : [];
       log('info', `[COQL aggregate result] count=${rows.length}`);
       return { rows };
@@ -79,11 +108,11 @@ class ZohoCrmService {
     const criteria = buildModuleCriteria(filters);
     log('info', `[CRM count API] module=${module} criteria=${criteria || '(none)'}`);
     try {
-      const response = await this.httpClient.get(`${apiBaseUrl}/${module}/actions/count`, {
+      const response = await this.executeRequest('get', `${apiBaseUrl}/${module}/actions/count`, { config: {
         params: criteria ? { criteria } : undefined,
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
         timeout: config.timeoutMs
-      });
+      }});
       return { count: Number(response.data?.count || 0), criteria };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
@@ -96,7 +125,7 @@ class ZohoCrmService {
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
     const token = await this.authService.getAccessToken();
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
-    const response = await this.httpClient.get(`${apiBaseUrl}/users`, { params: { type: 'AllUsers' }, headers: { Authorization: `Zoho-oauthtoken ${token}` }, timeout: config.timeoutMs });
+    const response = await this.executeRequest('get', `${apiBaseUrl}/users`, { config: { params: { type: 'AllUsers' }, headers: { Authorization: `Zoho-oauthtoken ${token}` }, timeout: config.timeoutMs } });
     return Array.isArray(response.data?.users) ? response.data.users : [];
   }
 
@@ -105,11 +134,11 @@ class ZohoCrmService {
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
     const token = await this.authService.getAccessToken();
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
-    const response = await this.httpClient.get(`${apiBaseUrl}/${module}`, {
+    const response = await this.executeRequest('get', `${apiBaseUrl}/${module}`, { config: {
       params: { ids: ids.join(','), fields: fields.join(',') },
       headers: { Authorization: `Zoho-oauthtoken ${token}` },
       timeout: config.timeoutMs
-    });
+    }});
     return Array.isArray(response.data?.data) ? response.data.data : [];
   }
 
@@ -120,11 +149,11 @@ class ZohoCrmService {
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
     const { buildCriteria } = require('./coql.service');
     const criteria = buildCriteria(filters);
-    const response = await this.httpClient.get(`${apiBaseUrl}/${module}/search`, {
+    const response = await this.executeRequest('get', `${apiBaseUrl}/${module}/search`, { config: {
       params: { criteria, fields: fields.join(','), page, per_page: perPage },
       headers: { Authorization: `Zoho-oauthtoken ${token}` },
       timeout: config.timeoutMs
-    });
+    }});
     return { records: Array.isArray(response.data?.data) ? response.data.data : [], info: response.data?.info || {} };
   }
 
@@ -162,11 +191,11 @@ class ZohoCrmService {
     const token = await this.authService.getAccessToken();
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
     try {
-      const response = await this.httpClient.get(`${apiBaseUrl}/settings/fields`, {
+      const response = await this.executeRequest('get', `${apiBaseUrl}/settings/fields`, { config: {
         params: { module },
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
         timeout: config.timeoutMs
-      });
+      }});
       const fields = Array.isArray(response.data?.fields) ? response.data.fields : [];
       return {
         fields: fields.map((field) => field.api_name).filter(Boolean),
