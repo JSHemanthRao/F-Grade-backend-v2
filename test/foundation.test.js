@@ -104,6 +104,21 @@ test('plans a general-purpose count question for this month leads', async () => 
   assert.equal(response.body.count, 7);
 });
 
+test('plans first lead records as the latest requested page', async () => {
+  let request;
+  const app = createApp({ crmService: { query: async (input) => {
+    request = input;
+    return { module: input.module, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } };
+  } } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Give me the first 10 leads.' });
+  assert.equal(response.status, 200);
+  assert.equal(request.module, 'Leads');
+  assert.equal(request.limit, 10);
+  assert.equal(request.offset, 0);
+  assert.equal(request.sort_field, 'Created_Time');
+  assert.equal(request.sort_order, 'desc');
+});
+
 test('plans a general-purpose aggregate question for average deal value', async () => {
   const app = createApp({ crmService: { query: async (input) => ({ module: input.module, request_type: input.request_type, aggregate: input.aggregate, count: 1, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
   const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'What is the average deal value?' });

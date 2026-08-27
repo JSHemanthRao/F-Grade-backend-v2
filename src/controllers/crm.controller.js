@@ -43,6 +43,7 @@ function planQuestion(question) {
 
   const lower = text.toLowerCase();
   const module = detectModule(lower);
+  const requestedLimit = extractRecordLimit(lower);
   const filters = [];
   const dateFilter = detectDateFilter(lower, module);
   if (dateFilter) filters.push(dateFilter);
@@ -111,7 +112,7 @@ function planQuestion(question) {
       filters,
       sort_field: defaultSortField(module),
       sort_order: 'desc',
-      limit: 20,
+      limit: requestedLimit,
       offset: 0
     };
   }
@@ -121,9 +122,17 @@ function planQuestion(question) {
     request_type: 'records',
     fields: defaultFields(module),
     filters,
-    limit: 20,
+    sort_field: defaultSortField(module),
+    sort_order: 'desc',
+    limit: requestedLimit,
     offset: 0
   };
+}
+
+function extractRecordLimit(lowerText) {
+  const match = lowerText.match(/(?:first|latest|last|top|show|give me)\s+(\d+)\b/i);
+  if (!match) return 20;
+  return Math.min(Math.max(Number(match[1]), 1), 200);
 }
 
 function buildAssistantAnswer(question, result) {
