@@ -127,6 +127,15 @@ test('plans highest-value deal requests with server-side amount sorting', () => 
   assert.equal(request.sort_order, 'desc');
 });
 
+test('separates owner dimension from total deal value metric', () => {
+  const request = require('../src/controllers/crm.controller').planQuestion('Show the top 3 owners by total deal value');
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.request_type, 'analysis');
+  assert.deepEqual(request.analysis, { type: 'owner_performance' });
+  assert.deepEqual(request.ranking, { dimension: 'Owner', metric: 'Amount', operation: 'sum', limit: 3 });
+  assert.deepEqual(request.filters, []);
+});
+
 test('plans oldest lead requests with ascending creation sorting', () => {
   const request = require('../src/controllers/crm.controller').planQuestion('Show the oldest 10 leads');
   assert.equal(request.module, 'Leads');

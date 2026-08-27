@@ -150,6 +150,18 @@ function planQuestion(question) {
     filters.push({ field: 'Lead_Source', operator: 'equals', value: 'LinkedIn' });
   }
 
+  if (module === 'Deals' && /(top|highest|best|rank).*(owner|owners|person|persons).*(total deal value|total deal amount|deal value|revenue|amount)/.test(lower)) {
+    return {
+      module,
+      request_type: 'analysis',
+      analysis: { type: 'owner_performance' },
+      ranking: { dimension: 'Owner', metric: 'Amount', operation: 'sum', limit: requestedLimit },
+      filters,
+      limit: requestedLimit,
+      offset: 0
+    };
+  }
+
   if (module === 'Leads' && /(group|grouped|each|percentage|top 5|highest-volume|lead source)/.test(lower)) {
     if (!filters.some((filter) => filter.field === 'Lead_Source' && filter.operator === 'equals')) {
       filters.push({ field: 'Lead_Source', operator: 'is_not_null' });
@@ -267,6 +279,12 @@ function buildAssistantAnswer(question, result) {
     const lines = (result.source_breakdown || []).map((row) => `${row.source}: ${row.count} (${row.percentage}%)`);
     const leads = (result.top_leads || []).map((lead, index) => `${index + 1}. ${lead.name} | ${lead.company || 'No company'} | ${lead.email || 'No email'} | ${lead.lead_status || 'No status'} | ${lead.created_time || 'No date'}`);
     return `Lead Source Dashboard\n\n${lines.join('\n')}\n\nTop 5 leads from ${result.top_source || 'the highest-volume source'}:\n${leads.join('\n')}`;
+  }
+
+  if (result?.request_type === 'analysis' && result?.analysis === 'owner_performance') {
+    const lines = (result.owners || []).map((owner, index) => `${index + 1}. ${owner.owner}: ${formatAmount(owner.total_value)} total value, ${owner.deals} deals, ${owner.closed_won} Closed Won, ${owner.win_rate == null ? 'not calculable' : `${owner.win_rate}%`} win rate`);
+    const overall = result.overall || {};
+    return `Owner performance for ${result.year}:\n${lines.join('\n')}\n\nOverall: ${overall.deals} deals, ${overall.closed_won} Closed Won, ${overall.win_rate == null ? 'win rate not calculable' : `${overall.win_rate}% win rate`}.`;
   }
 
   if (result?.request_type === 'analysis' && summary.conversion_rate != null) {

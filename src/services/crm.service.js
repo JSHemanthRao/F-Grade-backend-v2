@@ -53,6 +53,11 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'lead_source_report');
       return result;
     }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'owner_performance') {
+      const result = await this.ownerPerformanceReport(request, executionContext);
+      this.logExecution(executionId, startedAt, statsAtStart, 'owner_performance');
+      return result;
+    }
     const result = await this.zohoService.query(request);
     const data = result.records.map(sanitizeZohoRecord);
     const info = result.info || {};
@@ -148,6 +153,29 @@ class CrmService {
     if (topSource && topLeads.some((lead) => lead.lead_source !== topSource)) integrityWarnings.push('Top lead results did not all match the highest-volume source.');
     if (uniqueIds.size !== topLeads.length && topLeads.some((lead) => lead.id)) integrityWarnings.push('Duplicate lead records were removed from the top-lead result.');
     return { module: 'Leads', request_type: 'analysis', analysis: 'lead_source_report', total, source_breakdown: sourceBreakdown, top_source: topSource || null, top_leads: topLeads, warnings: integrityWarnings };
+  }
+
+  async ownerPerformanceReport(request, executionContext = createExecutionContext()) {
+    const year = new Date().getFullYear();
+    const yearFilters = [...request.filters, { field: 'Created_Time', operator: 'between', value: [`${year}-01-01`, `${year}-12-31`] }];
+    const closedWonFilters = [...yearFilters, { field: 'Stage', operator: 'equals', value: 'Closed Won' }];
+    const groupQuery = (filters, fields) => `select ${fields} from ${CRM_API_NAMES.Deals} where ${buildWhereClause(buildFilterClauses(filters))} group by Owner`;
+    const [ownerTotals, ownerWon, totalDeals, wonDeals] = await Promise.all([
+      executeCached(executionContext, `owner-total:${JSON.stringify(yearFilters)}`, () => this.zohoService.aggregate(groupQuery(yearFilters, 'Owner, COUNT(id), SUM(Amount), AVG(Amount)'))),
+      executeCached(executionContext, `owner-won:${JSON.stringify(closedWonFilters)}`, () => this.zohoService.aggregate(groupQuery(closedWonFilters, 'Owner, COUNT(id)'))),
+      executeCached(executionContext, `deal-total:${JSON.stringify(yearFilters)}`, () => this.zohoService.aggregate(`select COUNT(id) from ${CRM_API_NAMES.Deals} where ${buildWhereClause(buildFilterClauses(yearFilters))}`)),
+      executeCached(executionContext, `deal-won:${JSON.stringify(closedWonFilters)}`, () => this.zohoService.aggregate(`select COUNT(id) from ${CRM_API_NAMES.Deals} where ${buildWhereClause(buildFilterClauses(closedWonFilters))}`))
+    ]);
+    const wonByOwner = new Map(ownerWon.rows.map((row) => [ownerLabel(row.Owner), aggregateNumber(row, 'COUNT(id)')]));
+    const owners = ownerTotals.rows.map((row) => {
+      const owner = ownerLabel(row.Owner);
+      const deals = aggregateNumber(row, 'COUNT(id)');
+      const won = wonByOwner.get(owner) || 0;
+      return { owner, deals, total_value: aggregateNumber(row, 'SUM(Amount)'), average_value: aggregateNumber(row, 'AVG(Amount)'), closed_won: won, win_rate: deals ? Number(((won / deals) * 100).toFixed(2)) : null };
+    }).sort((left, right) => right.total_value - left.total_value).slice(0, request.ranking?.limit || 20);
+    const overallDeals = aggregateNumber(totalDeals.rows[0], 'COUNT(id)');
+    const overallWon = aggregateNumber(wonDeals.rows[0], 'COUNT(id)');
+    return { module: 'Deals', request_type: 'analysis', analysis: 'owner_performance', year, owners, overall: { deals: overallDeals, closed_won: overallWon, win_rate: overallDeals ? Number(((overallWon / overallDeals) * 100).toFixed(2)) : null } };
   }
 
   
@@ -304,6 +332,14 @@ class CrmService {
 function normalizeGroupValue(value) {
   if (!value || typeof value !== 'object') return value;
   return value.name || value.full_name || value.email || value.id || null;
+}
+
+function ownerLabel(value) {
+  return normalizeGroupValue(value) || 'Unassigned';
+}
+
+function aggregateNumber(row = {}, key) {
+  return Number(row[key] ?? row[key.replace(/[()]/g, '')] ?? row.value ?? 0) || 0;
 }
 
 function createExecutionContext() {

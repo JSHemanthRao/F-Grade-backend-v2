@@ -80,6 +80,25 @@ test('normalizes lookup objects when grouping dashboard aggregates', async () =>
   ]);
 });
 
+test('calculates owner performance from compatible grouped populations', async () => {
+  const queries = [];
+  const service = new CrmService({
+    aggregate: async (query) => {
+      queries.push(query);
+      if (query.includes('SUM(Amount)')) return { rows: [{ Owner: { name: 'Laya' }, 'COUNT(id)': 4, 'SUM(Amount)': 1000, 'AVG(Amount)': 250 }] };
+      if (query.includes('Stage')) return { rows: [{ Owner: { name: 'Laya' }, 'COUNT(id)': 2 }] };
+      return { rows: [{ 'COUNT(id)': query.includes('Stage') ? 2 : 4 }] };
+    }
+  });
+
+  const result = await service.ownerPerformanceReport({ module: 'Deals', filters: [], ranking: { limit: 3 } });
+
+  assert.equal(queries.length, 4);
+  assert.equal(result.owners[0].owner, 'Laya');
+  assert.equal(result.owners[0].win_rate, 50);
+  assert.equal(result.overall.win_rate, 50);
+});
+
 test('obtains and caches the Zoho access token and stores api_domain internally', async () => {
   let calls = 0;
   const auth = new ZohoAuthService({
