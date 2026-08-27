@@ -159,10 +159,8 @@ test('rejects unsupported Converted Lead fields with the exact field error', () 
 test('Copilot schema treats conversion as an operation, not the invalid Converted field', () => {
   const guidance = openApi.info['x-copilot-studio-tool-description'];
   assert.match(guidance, /never emit a Leads field named Converted/i);
-  assert.match(guidance, /Converted__s/);
-  assert.match(guidance, /Converted_Date_Time/);
-  assert.deepEqual(openApi.info['x-copilot-studio-field-mappings'].Leads.includes('Converted'), false);
-  assert.deepEqual(openApi.info['x-copilot-studio-field-mappings'].Leads.includes('Converted_Deal'), true);
+  assert.match(guidance, /conversion questions must remain natural language/i);
+  assert.equal(openApi.info['x-copilot-studio-field-mappings'], undefined);
 });
 
 test('module-specific CRM routes remain unavailable', async () => {

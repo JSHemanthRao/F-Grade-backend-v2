@@ -4,14 +4,8 @@
     "title": "F-Grade Corporate AI CRM API",
     "version": "1.0.0",
     "description": "Live Zoho CRM records and server-side metrics for the F-Grade Corporate AI Agent. Semantic concepts such as converted, conversion rate, revenue, pipeline, and top owner are business operations, not CRM field names.",
-    "x-copilot-studio-tool-description": "Use this API for live Zoho CRM records and metrics. For records, use the exact module field mappings and limit 20 offset 0. For count or analysis questions, set request_type to count or analysis and let the backend execute server-side count/relationship queries; do not retrieve records for counting. For lead conversion questions, never emit a Leads field named Converted. Converted is invalid. Use analysis with module Leads and filters on Created_Time, or use only the verified fields Converted__s and Converted_Date_Time when a conversion field is explicitly required. The backend resolves owner names to Zoho user IDs. Never send a raw owner name as a lookup value. Preserve filters and sorting for pagination; change only offset for next-page requests."
-    ,
-    "x-copilot-studio-field-mappings": {
-      "Leads": ["id", "First_Name", "Last_Name", "Company", "Email", "Phone", "Lead_Status", "Lead_Source", "Owner", "Created_Time", "Modified_Time", "Converted__s", "Converted_Date_Time", "Converted_Account", "Converted_Contact", "Converted_Deal"],
-      "Deals": ["id", "Deal_Name", "Amount", "Stage", "Closing_Date", "Lead_Conversion_Time", "Account_Name", "Contact_Name", "Lead_Source", "Type", "Probability", "Owner", "Created_Time", "Modified_Time"],
-      "Contacts": ["id", "First_Name", "Last_Name", "Account_Name", "Email", "Phone", "Title", "Owner", "Created_Time", "Modified_Time"],
-      "Accounts": ["id", "Account_Name", "Account_Type", "Industry", "Phone", "Website", "Billing_City", "Billing_State", "Owner", "Created_Time", "Modified_Time"]
-    }
+    "x-copilot-studio-tool-description": "Use this single tool for every CRM question. Send the user's natural-language question unchanged in the question property. The backend owns intent detection, module selection, Zoho field mapping, filters, owner resolution, date ranges, pagination, aggregation, conversion logic, and answer generation. Do not construct module names, field names, owner IDs, filters, COQL, date criteria, or conversion logic in Copilot Studio. Do not call an alternate structured CRM operation. Never emit a Leads field named Converted; Converted is not a CRM API field. Conversion questions must remain natural language and be handled by the backend.",
+    "x-copilot-studio-input-policy": "The question property is required and must contain the user's complete natural-language CRM request. Ask a clarifying question in conversation when the user's request is ambiguous; do not guess CRM fields or criteria."
   },
   "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",
@@ -25,49 +19,6 @@
     "application/json"
   ],
   "paths": {
-    "/api/crm/query": {
-      "post": {
-        "operationId": "queryCrm",
-        "summary": "Retrieve live CRM data from a structured request",
-        "description": "The only CRM operation exposed to Copilot Studio. Use it for live Zoho CRM records. Select the correct module and actual Zoho CRM API fields, convert each user condition into a structured filter, and send the request here. Analyze every record in the returned data array; do not invent records or claim a result is complete while pagination.more_records is true. Every new question starts with limit 20 and offset 0. For an explicit continuation such as give me the next 20, show me more, next page, continue, or give me the next set, call this same operation with the same module, fields, filters, sort_field, and sort_order, changing only offset to the previous offset plus previous limit. Thus offset 0 plus limit 20 becomes offset 20, and offset 20 plus limit 20 becomes offset 40. Never restart an explicit continuation at offset 0 or remove the previous filters. If no previous query/page context exists, ask for the CRM query instead of guessing. Activity Reports and Audit Logs are not implemented in Phase 1 and have no separate operations.",
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/CrmQueryRequest"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "CRM records retrieved successfully.",
-            "schema": {
-              "$ref": "#/definitions/CrmQueryResponse"
-            }
-          },
-          "400": {
-            "description": "The structured CRM request failed validation or contains invalid JSON.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "502": {
-            "description": "Zoho CRM configuration, authentication, or retrieval failure.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "500": {
-            "description": "Unexpected backend failure.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    },
     "/api/crm/assistant": {
       "post": {
         "operationId": "askCrmAssistant",
@@ -109,11 +60,10 @@
   "definitions": {
     "AssistantRequest": {
       "type": "object",
-      "description": "Natural-language CRM question. Use one of question, prompt, or message.",
+      "description": "Natural-language CRM question. Send the complete user request in question.",
+      "required": ["question"],
       "properties": {
-        "question": { "type": "string" },
-        "prompt": { "type": "string" },
-        "message": { "type": "string" }
+        "question": { "type": "string", "minLength": 1 }
       }
     },
     "AssistantResponse": {
