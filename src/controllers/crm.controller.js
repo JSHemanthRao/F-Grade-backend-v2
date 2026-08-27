@@ -23,13 +23,100 @@ function createCrmController(crmService = new CrmService()) {
           ...(req.body?.query || {}),
           ...planQuestion(question)
         });
-        const answer = buildAssistantAnswer(question, result);
+            const answer = isDashboardRequest(question)
+              ? JSON.stringify(buildDashboardSpecification(question, result), null, 2)
+              : buildAssistantAnswer(question, result);
         res.status(200).json({ success: true, status: 'ok', question, answer, ...result });
       } catch (error) {
         next(error);
       }
     }
   };
+}
+
+function isDashboardRequest(question) {
+  return /(dashboard|visuali[sz]e|kpi|charts?|management report|analytics dashboard|performance dashboard)/i.test(question);
+}
+
+function buildDashboardSpecification(question, result) {
+  const module = result?.module || 'CRM';
+  const sourceBreakdown = Array.isArray(result?.source_breakdown) ? result.source_breakdown : [];
+  const rows = Array.isArray(result?.data) ? result.data : [];
+  const isLeadSourceReport = result?.analysis === 'lead_source_report';
+  const isGroupedResult = result?.request_type === 'aggregate' && rows.length > 0;
+  const filters = extractDashboardFilters(result);
+  const dashboard = {
+    dashboard: {
+      title: isLeadSourceReport ? 'Lead Source Performance Dashboard' : `${module} Performance Dashboard`,
+      subtitle: String(question).trim(),
+      type: isLeadSourceReport ? 'lead_source' : isGroupedResult ? 'performance' : 'crm_records',
+      purpose: 'Present verified CRM results for business decision-making.',
+      filters,
+      kpis: buildDashboardKpis(result, sourceBreakdown, rows),
+      charts: buildDashboardCharts(result, sourceBreakdown, rows),
+      tables: buildDashboardTables(result, sourceBreakdown, rows),
+      insights: buildDashboardInsights(result, sourceBreakdown, rows),
+      interactions: buildDashboardInteractions(result, sourceBreakdown, rows),
+      data_quality: buildDashboardDataQuality(result, sourceBreakdown, rows)
+    }
+  };
+  return dashboard;
+}
+
+function buildDashboardKpis(result, sourceBreakdown, rows) {
+  const kpis = [];
+  if (Number.isFinite(Number(result?.total))) kpis.push({ title: 'Total Records', value: String(result.total), unit: 'records', comparison: '', trend: '', description: 'Verified records in the requested population.' });
+  if (Number.isFinite(Number(result?.count)) && !Number.isFinite(Number(result?.total))) kpis.push({ title: 'Total Records', value: String(result.count), unit: 'records', comparison: '', trend: '', description: 'Verified CRM result count.' });
+  if (sourceBreakdown.length > 0) kpis.push({ title: 'Top Source', value: String(result.top_source || sourceBreakdown[0].source), unit: 'lead source', comparison: '', trend: '', description: 'Highest-volume source in the selected population.' });
+  if (rows.length > 0 && rows.every((row) => Number.isFinite(Number(row.value)))) {
+    kpis.push({ title: 'Total Value', value: formatAmount(rows.reduce((total, row) => total + Number(row.value || 0), 0)), unit: 'currency', comparison: '', trend: '', description: 'Sum of the supplied grouped CRM values.' });
+  }
+  return kpis;
+}
+
+function buildDashboardCharts(result, sourceBreakdown, rows) {
+  if (sourceBreakdown.length > 0) return [{
+    title: 'Leads by Source', type: 'horizontal_bar', purpose: 'Compare lead volume and contribution by source.', x_axis: 'Lead Source', y_axis: 'Lead Count',
+    series: [{ name: 'Leads', field: 'count' }, { name: 'Percentage', field: 'percentage' }], data: sourceBreakdown, sort: 'count descending', interaction: 'Select a source to inspect its top leads.'
+  }];
+  if (rows.length > 0) return [{
+    title: 'Performance by Group', type: 'horizontal_bar', purpose: 'Compare verified grouped CRM values.', x_axis: 'Group', y_axis: 'Value', series: [{ name: 'Value', field: 'value' }], data: rows, sort: 'value descending', interaction: 'Sort by value.'
+  }];
+  return [];
+}
+
+function buildDashboardTables(result, sourceBreakdown, rows) {
+  const tables = [];
+  if (sourceBreakdown.length > 0) tables.push({ title: 'Source Breakdown', columns: ['source', 'count', 'percentage'], rows: sourceBreakdown, sort: 'count descending', page_size: 10, searchable: true });
+  if (Array.isArray(result?.top_leads) && result.top_leads.length > 0) tables.push({ title: `Top Leads from ${result.top_source || 'highest-volume source'}`, columns: ['name', 'company', 'email', 'lead_status', 'lead_source', 'created_time'], rows: result.top_leads, sort: 'created_time descending', page_size: 5, searchable: true });
+  if (sourceBreakdown.length === 0 && rows.length === 0 && Array.isArray(result?.data) && result.data.length === 0) tables.push({ title: 'CRM Records', columns: [], rows: [], sort: '', page_size: 10, searchable: true, empty_state: 'No data available for the selected request.' });
+  return tables;
+}
+
+function buildDashboardInsights(result, sourceBreakdown, rows) {
+  if (sourceBreakdown.length > 0) return [`${sourceBreakdown[0].source} is the highest-volume source with ${sourceBreakdown[0].count} leads (${sourceBreakdown[0].percentage}%).`];
+  if (rows.length > 0) return ['The dashboard is based on the verified grouped CRM values returned for this request.'];
+  return [];
+}
+
+function buildDashboardInteractions(result, sourceBreakdown, rows) {
+  const interactions = [];
+  if (sourceBreakdown.length > 0) interactions.push('Filter by Lead Source', 'Sort sources by lead count');
+  if (rows.length > 0) interactions.push('Sort groups by value');
+  return interactions;
+}
+
+function buildDashboardDataQuality(result, sourceBreakdown, rows) {
+  const quality = [];
+  if (result?.warnings?.length) quality.push(...result.warnings);
+  if (sourceBreakdown.length === 0 && rows.length === 0) quality.push('No verified CRM data was available for the requested visualization.');
+  return quality;
+}
+
+function extractDashboardFilters(result) {
+  const filters = [];
+  if (result?.top_source) filters.push({ field: 'Lead Source', value: result.top_source });
+  return filters;
 }
 
 function planQuestion(question) {

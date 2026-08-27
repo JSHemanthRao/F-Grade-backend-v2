@@ -151,6 +151,42 @@ test('plans a complex Lead Source report without Deals-only aggregate fields', (
   assert.deepEqual(request.fields, ['First_Name', 'Last_Name', 'Company', 'Email', 'Lead_Status', 'Lead_Source', 'Created_Time']);
 });
 
+test('returns a renderer-ready dashboard specification from CRM results', async () => {
+  const app = createApp({ crmService: { query: async () => ({
+    module: 'Leads',
+    request_type: 'analysis',
+    analysis: 'lead_source_report',
+    total: 10,
+    source_breakdown: [
+      { source: 'Website', count: 7, percentage: 70 },
+      { source: 'Referral', count: 3, percentage: 30 }
+    ],
+    top_source: 'Website',
+    top_leads: [{ name: 'A One', company: 'Example', email: 'a@example.com', lead_status: 'New', lead_source: 'Website', created_time: '2026-08-27' }],
+    warnings: []
+  }) } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Create a lead source dashboard.' });
+  const dashboard = JSON.parse(response.body.answer).dashboard;
+
+  assert.equal(response.status, 200);
+  assert.equal(dashboard.title, 'Lead Source Performance Dashboard');
+  assert.equal(dashboard.kpis[0].value, '10');
+  assert.equal(dashboard.charts[0].type, 'horizontal_bar');
+  assert.deepEqual(dashboard.charts[0].data, dashboard.tables[0].rows);
+  assert.equal(dashboard.tables[1].rows[0].email, 'a@example.com');
+  assert.equal(dashboard.data_quality.length, 0);
+});
+
+test('returns an explicit dashboard empty state when CRM data is unavailable', async () => {
+  const app = createApp({ crmService: { query: async () => ({ module: 'Leads', data: [], pagination: { more_records: false } }) } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Create a lead dashboard.' });
+  const dashboard = JSON.parse(response.body.answer).dashboard;
+
+  assert.equal(response.status, 200);
+  assert.equal(dashboard.tables[0].empty_state, 'No data available for the selected request.');
+  assert.ok(dashboard.data_quality.includes('No verified CRM data was available for the requested visualization.'));
+});
+
 test('plans a general-purpose owner and amount filter question', async () => {
   const app = createApp({ crmService: { query: async (input) => ({ module: input.module, filters: input.filters, pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
   const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Show me deals owned by Laya above ₹50,000.' });
