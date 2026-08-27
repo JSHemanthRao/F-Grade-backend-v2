@@ -124,6 +124,7 @@ function planQuestion(question) {
   const lower = text.toLowerCase();
   const module = detectModule(lower);
   const requestedLimit = extractRecordLimit(lower);
+  const recordSort = detectRecordSort(lower, module);
   const filters = [];
   const dateFilter = detectDateFilter(lower, module);
   if (dateFilter) filters.push(dateFilter);
@@ -217,8 +218,8 @@ function planQuestion(question) {
       request_type: 'records',
       fields: defaultFields(module),
       filters,
-      sort_field: defaultSortField(module),
-      sort_order: 'desc',
+      sort_field: recordSort.field,
+      sort_order: recordSort.order,
       limit: requestedLimit,
       offset: 0
     };
@@ -229,17 +230,23 @@ function planQuestion(question) {
     request_type: 'records',
     fields: defaultFields(module),
     filters,
-    sort_field: defaultSortField(module),
-    sort_order: 'desc',
+    sort_field: recordSort.field,
+    sort_order: recordSort.order,
     limit: requestedLimit,
     offset: 0
   };
 }
 
 function extractRecordLimit(lowerText) {
-  const match = lowerText.match(/(?:first|latest|last|top|show|give me)\s+(\d+)\b/i);
+  const match = lowerText.match(/(?:first|latest|last|oldest|top|show|give me)\s+(\d+)\b/i);
   if (!match) return 20;
   return Math.min(Math.max(Number(match[1]), 1), 200);
+}
+
+function detectRecordSort(lowerText, module) {
+  if (/(oldest|first created|earliest)/.test(lowerText)) return { field: 'Created_Time', order: 'asc' };
+  if (/(highest|largest|maximum|top|latest|recent|newest)/.test(lowerText) && module === 'Deals' && /(amount|value|revenue|deal)/.test(lowerText)) return { field: 'Amount', order: 'desc' };
+  return { field: defaultSortField(module), order: 'desc' };
 }
 
 function buildAssistantAnswer(question, result) {

@@ -119,6 +119,22 @@ test('plans first lead records as the latest requested page', async () => {
   assert.equal(request.sort_order, 'desc');
 });
 
+test('plans highest-value deal requests with server-side amount sorting', () => {
+  const request = require('../src/controllers/crm.controller').planQuestion('Give me the top 5 deals by amount');
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.limit, 5);
+  assert.equal(request.sort_field, 'Amount');
+  assert.equal(request.sort_order, 'desc');
+});
+
+test('plans oldest lead requests with ascending creation sorting', () => {
+  const request = require('../src/controllers/crm.controller').planQuestion('Show the oldest 10 leads');
+  assert.equal(request.module, 'Leads');
+  assert.equal(request.limit, 10);
+  assert.equal(request.sort_field, 'Created_Time');
+  assert.equal(request.sort_order, 'asc');
+});
+
 test('plans a general-purpose aggregate question for average deal value', async () => {
   const app = createApp({ crmService: { query: async (input) => ({ module: input.module, request_type: input.request_type, aggregate: input.aggregate, count: 1, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
   const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'What is the average deal value?' });
