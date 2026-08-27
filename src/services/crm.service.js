@@ -2,6 +2,7 @@ const { validateCrmQuery } = require('../validators/crmQuery.validator');
 const { ZohoCrmService } = require('./zohoCrm.service');
 const { sanitizeZohoRecord } = require('../utils/zohoRecord');
 const { CRM_API_NAMES } = require('../constants/crmModules');
+const { buildFilterClauses, buildWhereClause } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
 
@@ -87,34 +88,34 @@ class CrmService {
   }
 
   async leadSourceReport(request) {
-    const records = [];
-    let offset = 0;
-    let moreRecords = true;
-    while (moreRecords) {
-      const result = await this.zohoService.query({
+    const whereClause = buildWhereClause(buildFilterClauses(request.filters));
+    const groupingQuery = `select Lead_Source, COUNT(id) from ${CRM_API_NAMES.Leads} where ${whereClause} group by Lead_Source`;
+    log('info', '[CRM lead source report] executing grouped source count');
+    const groupedResult = await this.zohoService.aggregate(groupingQuery);
+    const counts = groupedResult.rows
+      .map((row) => ({
+        source: row.Lead_Source || row['Lead_Source'] || 'Unknown',
+        count: Number(row['COUNT(id)'] ?? row.count ?? row.value ?? 0)
+      }))
+      .filter((row) => row.count > 0);
+    const total = counts.reduce((sum, row) => sum + row.count, 0);
+    const sourceBreakdown = counts
+      .map((row) => ({ ...row, percentage: total ? Number(((row.count / total) * 100).toFixed(2)) : 0 }))
+      .sort((left, right) => right.count - left.count || left.source.localeCompare(right.source));
+    const topSource = sourceBreakdown[0]?.source;
+    let topLeads = [];
+    if (topSource) {
+      const topResult = await this.zohoService.query({
         ...request,
         fields: request.fields,
-        limit: 200,
-        offset,
+        filters: [...request.filters, { field: 'Lead_Source', operator: 'equals', value: topSource }],
+        limit: 5,
+        offset: 0,
         sort: { field: 'Created_Time', order: 'desc' },
         sort_field: 'Created_Time',
         sort_order: 'desc'
       });
-      records.push(...result.records);
-      moreRecords = Boolean(result.info?.more_records);
-      offset += 200;
-    }
-
-    const counts = new Map();
-    for (const record of records) counts.set(record.Lead_Source, (counts.get(record.Lead_Source) || 0) + 1);
-    const total = records.length;
-    const sourceBreakdown = [...counts.entries()]
-      .map(([source, count]) => ({ source, count, percentage: total ? Number(((count / total) * 100).toFixed(2)) : 0 }))
-      .sort((left, right) => right.count - left.count || left.source.localeCompare(right.source));
-    const topSource = sourceBreakdown[0]?.source;
-    const topLeads = records
-      .filter((record) => record.Lead_Source === topSource)
-      .slice(0, 5)
+      topLeads = topResult.records
       .map((record) => ({
         name: [record.First_Name, record.Last_Name].filter(Boolean).join(' ') || 'Unnamed lead',
         company: record.Company || null,
@@ -123,6 +124,7 @@ class CrmService {
         lead_source: record.Lead_Source,
         created_time: record.Created_Time || null
       }));
+    }
     return { module: 'Leads', request_type: 'analysis', analysis: 'lead_source_report', total, source_breakdown: sourceBreakdown, top_source: topSource || null, top_leads: topLeads };
   }
 
