@@ -48,16 +48,14 @@ function buildDashboardSpecification(question, result) {
   const dashboard = {
     dashboard: {
       title: isLeadSourceReport ? 'Lead Source Performance Dashboard' : `${module} Performance Dashboard`,
-      subtitle: String(question).trim(),
+      description: String(question).trim(),
       type: isLeadSourceReport ? 'lead_source' : isGroupedResult ? 'performance' : 'crm_records',
-      purpose: 'Present verified CRM results for business decision-making.',
-      filters,
       kpis: buildDashboardKpis(result, sourceBreakdown, rows),
       charts: buildDashboardCharts(result, sourceBreakdown, rows),
       tables: buildDashboardTables(result, sourceBreakdown, rows),
+      filters,
       insights: buildDashboardInsights(result, sourceBreakdown, rows),
-      interactions: buildDashboardInteractions(result, sourceBreakdown, rows),
-      data_quality: buildDashboardDataQuality(result, sourceBreakdown, rows)
+      layout: buildDashboardLayout(result, sourceBreakdown, rows)
     }
   };
   return dashboard;
@@ -99,18 +97,13 @@ function buildDashboardInsights(result, sourceBreakdown, rows) {
   return [];
 }
 
-function buildDashboardInteractions(result, sourceBreakdown, rows) {
-  const interactions = [];
-  if (sourceBreakdown.length > 0) interactions.push('Filter by Lead Source', 'Sort sources by lead count');
-  if (rows.length > 0) interactions.push('Sort groups by value');
-  return interactions;
-}
-
-function buildDashboardDataQuality(result, sourceBreakdown, rows) {
-  const quality = [];
-  if (result?.warnings?.length) quality.push(...result.warnings);
-  if (sourceBreakdown.length === 0 && rows.length === 0) quality.push('No verified CRM data was available for the requested visualization.');
-  return quality;
+function buildDashboardLayout(result, sourceBreakdown, rows) {
+  const layout = [];
+  if (buildDashboardKpis(result, sourceBreakdown, rows).length > 0) layout.push({ type: 'kpi_row', components: ['kpis'] });
+  if (buildDashboardCharts(result, sourceBreakdown, rows).length > 0) layout.push({ type: 'chart_row', components: ['charts'] });
+  if (buildDashboardTables(result, sourceBreakdown, rows).length > 0) layout.push({ type: 'table_row', components: ['tables'] });
+  if (buildDashboardInsights(result, sourceBreakdown, rows).length > 0) layout.push({ type: 'insight_row', components: ['insights'] });
+  return layout;
 }
 
 function extractDashboardFilters(result) {

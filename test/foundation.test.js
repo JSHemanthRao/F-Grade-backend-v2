@@ -170,11 +170,14 @@ test('returns a renderer-ready dashboard specification from CRM results', async 
 
   assert.equal(response.status, 200);
   assert.equal(dashboard.title, 'Lead Source Performance Dashboard');
+  assert.deepEqual(Object.keys(dashboard), ['title', 'description', 'type', 'kpis', 'charts', 'tables', 'filters', 'insights', 'layout']);
   assert.equal(dashboard.kpis[0].value, '10');
   assert.equal(dashboard.charts[0].type, 'horizontal_bar');
   assert.deepEqual(dashboard.charts[0].data, dashboard.tables[0].rows);
   assert.equal(dashboard.tables[1].rows[0].email, 'a@example.com');
-  assert.equal(dashboard.data_quality.length, 0);
+  assert.equal(dashboard.layout[0].type, 'kpi_row');
+  assert.equal(response.body.answer.startsWith('{'), true);
+  assert.equal(response.body.answer.includes('|'), false);
 });
 
 test('returns an explicit dashboard empty state when CRM data is unavailable', async () => {
@@ -184,7 +187,7 @@ test('returns an explicit dashboard empty state when CRM data is unavailable', a
 
   assert.equal(response.status, 200);
   assert.equal(dashboard.tables[0].empty_state, 'No data available for the selected request.');
-  assert.ok(dashboard.data_quality.includes('No verified CRM data was available for the requested visualization.'));
+  assert.deepEqual(Object.keys(dashboard), ['title', 'description', 'type', 'kpis', 'charts', 'tables', 'filters', 'insights', 'layout']);
 });
 
 test('plans a general-purpose owner and amount filter question', async () => {
