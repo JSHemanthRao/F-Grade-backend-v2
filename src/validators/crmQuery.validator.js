@@ -28,6 +28,7 @@ function validateCrmQuery(body) {
 
   const { module, fields, filters = [], sort, sort_field, sort_order, limit = 20, offset = 0, request_type = 'records', aggregate, group_by } = body;
   const supportedFields = CRM_MODULES[module];
+  const defaultModuleFields = supportedFields ? supportedFields.slice(0, 6) : [];
   const addError = (path, message) => errors.push({ path, message });
   const invalidFieldMessage = (field) => `Field '${field}' is not supported for module '${module}'. Use a valid Zoho CRM API field name. Allowed fields: ${supportedFields ? supportedFields.join(', ') : 'none'}.`;
 
@@ -36,9 +37,15 @@ function validateCrmQuery(body) {
   if (typeof module !== 'string' || !supportedFields) addError('module', `module must be one of: ${Object.keys(CRM_MODULES).join(', ')}.`);
   if (!requestTypes.has(request_type)) addError('request_type', 'request_type must be one of: records, count, aggregate, analysis.');
   if (!Array.isArray(fields) || fields.length === 0) {
-    if (!metricRequest) addError('fields', 'fields must be a non-empty array for record requests.');
-  }
-  else {
+    if (!metricRequest) {
+      if (supportedFields && supportedFields.length > 0) {
+        // Connector payloads can omit fields for a module-only request. Fill with a safe default set
+        // so the request still executes instead of failing validation.
+      } else {
+        addError('fields', 'fields must be a non-empty array for record requests.');
+      }
+    }
+  } else {
     const duplicates = fields.filter((field, index) => fields.indexOf(field) !== index);
     if (duplicates.length > 0) addError('fields', `fields must not contain duplicates: ${[...new Set(duplicates)].join(', ')}.`);
     fields.forEach((field, index) => {
@@ -49,7 +56,7 @@ function validateCrmQuery(body) {
 
   const normalizedFields = Array.isArray(fields) && fields.length > 0
     ? fields
-    : (metricRequest ? ['id'] : fields);
+    : (metricRequest ? ['id'] : (supportedFields ? defaultModuleFields : []));
   if (request_type === 'aggregate') {
     if (!aggregate || typeof aggregate !== 'object' || Array.isArray(aggregate)) {
       addError('aggregate', 'aggregate is required for aggregate requests and must be an object.');

@@ -85,6 +85,15 @@ test('accepts Copilot count requests without record fields', () => {
   assert.deepEqual(request.filters[0].value, ['2026-08-01', '2026-09-01']);
 });
 
+test('defaults record requests to valid module fields when the connector omits fields', () => {
+  const request = validateCrmQuery({ module: 'Deals' });
+  assert.equal(request.module, 'Deals');
+  assert.ok(Array.isArray(request.fields));
+  assert.ok(request.fields.length > 0);
+  assert.ok(request.fields.includes('Deal_Name'));
+  assert.equal(request.request_type, 'records');
+});
+
 test('plans a general-purpose count question for this month leads', async () => {
   const app = createApp({ crmService: { query: async (input) => ({ module: input.module, request_type: input.request_type, count: 7, pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
   const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'How many leads were created this month?' });

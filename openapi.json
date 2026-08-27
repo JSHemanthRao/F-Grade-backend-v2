@@ -169,8 +169,9 @@
         },
         "fields": {
           "type": "array",
-            "description": "Fields for record requests. Metric requests may omit fields. For Leads, NEVER use 'Converted'; it is not a CRM API field. Use the analysis operation for conversion questions, or only verified fields Converted__s, Converted_Date_Time, Converted_Account, Converted_Contact, and Converted_Deal.",
-          "minItems": 1,
+            "description": "Fields for record requests. Metric requests may omit fields. If omitted or empty for a record request, the backend will use a safe default field set for the selected module. For Leads, NEVER use 'Converted'; it is not a CRM API field. Use the analysis operation for conversion questions, or only verified fields Converted__s, Converted_Date_Time, Converted_Account, Converted_Contact, and Converted_Deal.",
+          "minItems": 0,
+          "default": [],
           "items": {
             "type": "string",
             "minLength": 1

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "mcp": "node src/stdio/server.js",
     "test": "node --test",
     "test:zoho-auth": "node scripts/check-zoho-auth.js"
   },
@@ -14,6 +15,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "axios": "^1.7.9",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
