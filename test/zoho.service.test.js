@@ -5,6 +5,26 @@ const { buildCoqlQuery } = require('../src/services/coql.service');
 const { ZohoAuthService, EXPIRY_BUFFER_MS } = require('../src/services/zohoAuth.service');
 const { CrmService } = require('../src/services/crm.service');
 
+test('builds Zoho-supported aggregate COQL and normalizes the aggregate value', async () => {
+  let selectQuery;
+  const service = new CrmService({
+    aggregate: async (query) => {
+      selectQuery = query;
+      return { rows: [{ 'SUM(Amount)': 125000 }] };
+    }
+  });
+
+  const result = await service.aggregate({
+    module: 'Deals',
+    filters: [{ field: 'Stage', operator: 'equals', value: 'Closed Won' }],
+    limit: 20,
+    offset: 0
+  }, { operation: 'sum', field: 'Amount' });
+
+  assert.equal(selectQuery, "select SUM(Amount) from Deals where (Stage = 'Closed Won')");
+  assert.equal(result.data[0].value, 125000);
+});
+
 test('obtains and caches the Zoho access token and stores api_domain internally', async () => {
   let calls = 0;
   const auth = new ZohoAuthService({

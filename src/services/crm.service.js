@@ -54,13 +54,17 @@ class CrmService {
 
   async aggregate(request, aggregate) {
     const clauses = buildFilterClauses(request.filters);
-    const expression = `${aggregate.operation}(${aggregate.field}) as value`;
+    const expression = `${aggregate.operation.toUpperCase()}(${aggregate.field})`;
     let selectQuery = `select ${request.group_by ? `${request.group_by}, ` : ''}${expression} from ${CRM_API_NAMES[request.module]}`;
     selectQuery += ` where ${buildWhereClause(clauses)}`;
     if (request.group_by) selectQuery += ` group by ${request.group_by}`;
     log('info', `[COQL aggregate query] ${selectQuery}`);
     const result = await this.zohoService.aggregate(selectQuery);
-    const rows = result.rows;
+    const aggregateKey = `${aggregate.operation.toUpperCase()}(${aggregate.field})`;
+    const rows = result.rows.map((row) => ({
+      ...row,
+      value: row.value ?? row[aggregateKey]
+    }));
     return {
       module: request.module,
       count: aggregate.operation === 'count' ? Number(rows[0]?.value || 0) : rows.length,
