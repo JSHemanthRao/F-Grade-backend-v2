@@ -15,6 +15,24 @@ class ZohoCrmService {
     this.authService = authService || new ZohoAuthService(httpClient, configLoader);
     this.circuitBreaker = new CircuitBreaker({ failureThreshold: env.zohoCircuitFailureThreshold, resetTimeoutMs: env.zohoCircuitResetTimeoutMs });
     this.executionStats = { calls: 0, successfulCalls: 0, failedCalls: 0, retries: 0 };
+    this.maxConcurrency = Math.max(1, env.zohoMaxConcurrency);
+    this.activeRequests = 0;
+    this.requestQueue = [];
+  }
+
+  async acquireSlot() {
+    if (this.activeRequests < this.maxConcurrency) {
+      this.activeRequests += 1;
+      return;
+    }
+    await new Promise((resolve) => this.requestQueue.push(resolve));
+    this.activeRequests += 1;
+  }
+
+  releaseSlot() {
+    this.activeRequests -= 1;
+    const next = this.requestQueue.shift();
+    if (next) next();
   }
 
   async executeRequest(method, url, options) {
@@ -23,6 +41,7 @@ class ZohoCrmService {
     const startedAt = Date.now();
     this.executionStats.calls += 1;
     while (attempt < maxAttempts) {
+      await this.acquireSlot();
       try {
         const response = await this.circuitBreaker.execute(() => method === 'get'
           ? this.httpClient.get(url, options?.config)
@@ -38,6 +57,8 @@ class ZohoCrmService {
         }
         this.executionStats.retries += 1;
         await new Promise((resolve) => setTimeout(resolve, Math.min(250 * (2 ** (attempt - 1)), 2000)));
+      } finally {
+        this.releaseSlot();
       }
     }
   }
