@@ -17,7 +17,8 @@ const env = Object.freeze({
   backendApiUrl: process.env.BACKEND_API_URL || 'http://localhost:3000',
   backendApiPath: process.env.BACKEND_API_PATH || '/api/crm/assistant',
   backendApiKey: process.env.BACKEND_API_KEY || '',
-  backendRequestTimeoutMs: numberFromEnv('BACKEND_REQUEST_TIMEOUT_MS', 15000)
+  backendRequestTimeoutMs: numberFromEnv('BACKEND_REQUEST_TIMEOUT_MS', 15000),
+  backendDiagnostics: process.env.BACKEND_DIAGNOSTICS === 'true'
 });
 
 module.exports = { env };

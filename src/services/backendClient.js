@@ -7,14 +7,24 @@ class BackendClient {
     this.config = config;
   }
 
-  getBaseUrl() {
-    const url = this.config.backendApiUrl || 'http://localhost:3000';
-    return url.replace(/\/$/, '');
-  }
+  getEndpoint() {
+    const baseUrl = this.config.backendApiUrl || 'http://localhost:3000';
+    const requestPath = this.config.backendApiPath || '/api/crm/assistant';
+    const base = new URL(baseUrl);
+    const normalizedPath = requestPath.startsWith('/') ? requestPath : `/${requestPath}`;
+    const basePath = base.pathname.replace(/\/$/, '');
 
-  getRequestPath() {
-    const path = this.config.backendApiPath || '/api/crm/assistant';
-    return path.startsWith('/') ? path : `/${path}`;
+    if (!basePath || basePath === '/') {
+      base.pathname = normalizedPath;
+    } else if (normalizedPath === basePath || normalizedPath.startsWith(`${basePath}/`)) {
+      base.pathname = normalizedPath;
+    } else {
+      base.pathname = `${basePath}${normalizedPath}`;
+    }
+
+    base.search = '';
+    base.hash = '';
+    return base.toString().replace(/\/$/, '');
   }
 
   buildHeaders() {
@@ -34,7 +44,9 @@ class BackendClient {
       throw error;
     }
 
-    const endpoint = `${this.getBaseUrl()}${this.getRequestPath()}`;
+    const endpoint = this.getEndpoint();
+    const startedAt = Date.now();
+    this.logDiagnostic('request', { method: 'POST', endpoint });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.backendRequestTimeoutMs || 15000);
 
@@ -45,6 +57,7 @@ class BackendClient {
         timeout: this.config.backendRequestTimeoutMs || 15000
       });
 
+      this.logDiagnostic('response', { method: 'POST', endpoint, status: response.status, durationMs: Date.now() - startedAt });
       return response.data;
     } catch (error) {
       if (error.code === 'ECONNABORTED' || error.name === 'AbortError') {
@@ -57,13 +70,19 @@ class BackendClient {
       if (error.response) {
         const status = error.response.status;
         const message = extractBackendErrorMessage(error.response.data);
+        this.logDiagnostic('response', { method: 'POST', endpoint, status, durationMs: Date.now() - startedAt });
         const enriched = new Error(message || 'The CRM backend returned an error.');
         enriched.code = `BACKEND_HTTP_${status}`;
         enriched.statusCode = status;
+        if (status === 404) {
+          enriched.code = 'BACKEND_ENDPOINT_NOT_FOUND';
+          enriched.message = `Backend endpoint not found: ${new URL(endpoint).pathname}`;
+        }
         throw enriched;
       }
 
       if (error.request) {
+        this.logDiagnostic('network_error', { method: 'POST', endpoint, durationMs: Date.now() - startedAt });
         const networkError = new Error('The CRM backend could not be reached.');
         networkError.code = 'BACKEND_UNAVAILABLE';
         networkError.statusCode = 503;
@@ -74,6 +93,11 @@ class BackendClient {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  logDiagnostic(event, details) {
+    if (!this.config.backendDiagnostics) return;
+    console.error(`[BACKEND_CLIENT] ${event}`, JSON.stringify(details));
   }
 }
 
