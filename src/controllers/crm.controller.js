@@ -202,6 +202,19 @@ function planQuestion(question) {
     };
   }
 
+  if (isConversionFunnelQuestion(lower)) {
+    return {
+      module: 'Leads',
+      complexity: 'MULTI-STEP',
+      request_type: 'analysis',
+      analysis: { type: 'conversion_funnel' },
+      fields: ['id'],
+      filters,
+      limit: 20,
+      offset: 0
+    };
+  }
+
   if (isLeadConversionQuestion(lower)) {
     return {
       module: 'Leads',
@@ -393,6 +406,15 @@ function isLeadConversionQuestion(lowerText) {
     && /\b(?:lead|leads)\b/.test(lowerText);
 }
 
+function isConversionFunnelQuestion(lowerText) {
+  return /\b(?:conversion rate|conversion funnel|funnel conversion)\b/.test(lowerText)
+    && /\b(?:lead|leads)\b/.test(lowerText)
+    && /\b(?:contact|contacts)\b/.test(lowerText)
+    && /\b(?:account|accounts)\b/.test(lowerText)
+    && /\b(?:deal|deals)\b/.test(lowerText)
+    && /\b(?:closed won|closed-won|won deals?|won deal)\b/.test(lowerText);
+}
+
 function isLeadToClosedWonQuestion(lowerText) {
   return /\b(?:closed won|closed-won)\b/.test(lowerText)
     && /\b(?:lead|leads)\b/.test(lowerText);
@@ -427,6 +449,12 @@ function buildAssistantAnswer(question, result) {
   if (result?.analysis === 'lead_closed_won_conversion') {
     const metrics = result.metrics || {};
     return `Total Leads: ${metrics.total_leads}. Converted Leads: ${metrics.converted_leads}. Closed Won Deals: ${metrics.closed_won_deals}. Lead Conversion Rate: ${metrics.converted_leads} / ${metrics.total_leads} x 100 = ${formatPercent(metrics.lead_conversion_rate)}. Lead-to-Closed-Won Rate: ${metrics.closed_won_deals} / ${metrics.total_leads} x 100 = ${formatPercent(metrics.lead_to_closed_won_rate)}.`;
+  }
+
+  if (result?.analysis === 'conversion_funnel') {
+    const totals = result.totals || {};
+    const rates = result.conversion_rates || {};
+    return `Conversion funnel: ${totals.leads} leads, ${totals.contacts} contacts, ${totals.accounts} accounts, ${totals.deals} deals, and ${totals.closed_won_deals} Closed Won deals. Lead-to-Contact: ${formatPercent(rates.lead_to_contact)}. Contact-to-Account: ${formatPercent(rates.contact_to_account)}. Account-to-Deal: ${formatPercent(rates.account_to_deal)}. Deal-to-Closed-Won: ${formatPercent(rates.deal_to_closed_won)}.`;
   }
 
   if (result?.request_type === 'aggregate') {

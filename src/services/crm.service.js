@@ -56,6 +56,11 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'lead_closed_won_conversion');
       return result;
     }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'conversion_funnel') {
+      const result = await this.conversionFunnelAnalysis(request, executionContext);
+      this.logExecution(executionId, startedAt, statsAtStart, 'conversion_funnel');
+      return result;
+    }
     if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_source_report') {
       const result = await this.leadSourceReport(request, executionContext);
       this.logExecution(executionId, startedAt, statsAtStart, 'lead_source_report');
@@ -363,6 +368,40 @@ class CrmService {
       formulas: {
         lead_conversion_rate: 'converted_leads / total_leads * 100',
         lead_to_closed_won_rate: 'closed_won_deals / total_leads * 100'
+      },
+      data: [],
+      pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false }
+    };
+  }
+
+  async conversionFunnelAnalysis(request, executionContext = createExecutionContext()) {
+    const countRequest = (module, filters = request.filters) => ({ module, request_type: 'count', fields: ['id'], filters, limit: 1, offset: 0 });
+    const closedWonFilters = [...request.filters, { field: 'Stage', operator: 'equals', value: 'Closed Won' }];
+    const [leads, contacts, accounts, deals, closedWonDeals] = await Promise.all([
+      executeCached(executionContext, `funnel:leads:${JSON.stringify(request.filters)}`, () => this.count(countRequest('Leads'))),
+      executeCached(executionContext, `funnel:contacts:${JSON.stringify(request.filters)}`, () => this.count(countRequest('Contacts'))),
+      executeCached(executionContext, `funnel:accounts:${JSON.stringify(request.filters)}`, () => this.count(countRequest('Accounts'))),
+      executeCached(executionContext, `funnel:deals:${JSON.stringify(request.filters)}`, () => this.count(countRequest('Deals'))),
+      executeCached(executionContext, `funnel:closed-won-deals:${JSON.stringify(closedWonFilters)}`, () => this.count(countRequest('Deals', closedWonFilters)))
+    ]);
+    const totals = {
+      leads: leads.count,
+      contacts: contacts.count,
+      accounts: accounts.count,
+      deals: deals.count,
+      closed_won_deals: closedWonDeals.count
+    };
+    const percentage = (numerator, denominator) => denominator ? Number(((numerator / denominator) * 100).toFixed(2)) : 0;
+    return {
+      module: 'CRM',
+      request_type: 'analysis',
+      analysis: 'conversion_funnel',
+      totals,
+      conversion_rates: {
+        lead_to_contact: percentage(totals.contacts, totals.leads),
+        contact_to_account: percentage(totals.accounts, totals.contacts),
+        account_to_deal: percentage(totals.deals, totals.accounts),
+        deal_to_closed_won: percentage(totals.closed_won_deals, totals.deals)
       },
       data: [],
       pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false }

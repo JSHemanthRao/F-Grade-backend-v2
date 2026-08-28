@@ -130,6 +130,16 @@ test('plans Lead-to-Closed-Won conversion as a cross-module analysis', () => {
   assert.deepEqual(request.filters, []);
 });
 
+test('plans the full lead-to-closed-won funnel as cross-module analysis', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('the conversion rate from leads to contacts to accounts to deals to closed won deals');
+  assert.equal(request.module, 'Leads');
+  assert.equal(request.request_type, 'analysis');
+  assert.deepEqual(request.analysis, { type: 'conversion_funnel' });
+  assert.equal(request.aggregate, undefined);
+  assert.deepEqual(request.filters, []);
+});
+
 test('accepts Copilot count requests without record fields', () => {
   const request = validateCrmQuery({
     module: 'Leads',

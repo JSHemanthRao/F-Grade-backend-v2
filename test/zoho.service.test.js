@@ -259,6 +259,29 @@ test('executes lead conversion analysis as two aggregate queries', async () => {
   assert.equal(calls.length, 2);
 });
 
+test('calculates full conversion funnel rates with module-valid count queries', async () => {
+  const calls = [];
+  const counts = { Leads: 100, Contacts: 60, Accounts: 30, Deals: 20 };
+  const service = new CrmService({
+    count: async (module, filters) => {
+      calls.push({ module, filters });
+      return { count: module === 'Deals' && filters.some((filter) => filter.field === 'Stage') ? 5 : counts[module] };
+    }
+  });
+  const result = await service.query({
+    module: 'Leads',
+    request_type: 'analysis',
+    analysis: { type: 'conversion_funnel' },
+    fields: ['id'],
+    filters: []
+  });
+  assert.deepEqual(result.totals, { leads: 100, contacts: 60, accounts: 30, deals: 20, closed_won_deals: 5 });
+  assert.deepEqual(result.conversion_rates, { lead_to_contact: 60, contact_to_account: 50, account_to_deal: 66.67, deal_to_closed_won: 25 });
+  assert.equal(calls.length, 5);
+  assert.ok(calls.filter(({ module }) => module !== 'Deals').every(({ filters }) => filters.every((filter) => filter.field !== 'Stage')));
+  assert.ok(calls.some(({ module, filters }) => module === 'Deals' && filters.some((filter) => filter.field === 'Stage' && filter.value === 'Closed Won')));
+});
+
 test('translates the Copilot Converted semantic field into conversion analysis', async () => {
   const calls = [];
   const service = new CrmService({
