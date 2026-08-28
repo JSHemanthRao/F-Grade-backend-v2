@@ -61,6 +61,11 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'lead_source_report');
       return result;
     }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_source_conversion_report') {
+      const result = await this.leadSourceConversionReport(request, executionContext);
+      this.logExecution(executionId, startedAt, statsAtStart, 'lead_source_conversion_report');
+      return result;
+    }
     if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'owner_performance') {
       const result = await this.ownerPerformanceReport(request, executionContext);
       this.logExecution(executionId, startedAt, statsAtStart, 'owner_performance');
@@ -178,6 +183,26 @@ class CrmService {
     if (topSource && topLeads.some((lead) => lead.lead_source !== topSource)) integrityWarnings.push('Top lead results did not all match the highest-volume source.');
     if (uniqueIds.size !== topLeads.length && topLeads.some((lead) => lead.id)) integrityWarnings.push('Duplicate lead records were removed from the top-lead result.');
     return { module: 'Leads', request_type: 'analysis', analysis: 'lead_source_report', total, source_breakdown: sourceBreakdown, top_source: topSource || null, top_leads: topLeads, warnings: integrityWarnings };
+  }
+
+  async leadSourceConversionReport(request, executionContext = createExecutionContext()) {
+    const filters = request.filters;
+    const convertedFilters = [...filters, { field: 'Converted__s', operator: 'equals', value: true }];
+    const buildGroupedQuery = (queryFilters) => `select Lead_Source, COUNT(id) from ${CRM_API_NAMES.Leads} where ${buildWhereClause(buildFilterClauses(queryFilters))} group by Lead_Source`;
+    validateAggregateQuery({ module: 'Leads', fields: ['Lead_Source', 'id'], filters, aggregate: { operation: 'count', field: 'id' }, groupBy: 'Lead_Source' });
+    validateAggregateQuery({ module: 'Leads', fields: ['Lead_Source', 'id'], filters: convertedFilters, aggregate: { operation: 'count', field: 'id' }, groupBy: 'Lead_Source' });
+    const [totalResult, convertedResult] = await Promise.all([
+      executeCached(executionContext, `source-total:${JSON.stringify(filters)}`, () => this.zohoService.aggregate(buildGroupedQuery(filters))),
+      executeCached(executionContext, `source-converted:${JSON.stringify(convertedFilters)}`, () => this.zohoService.aggregate(buildGroupedQuery(convertedFilters)))
+    ]);
+    const convertedBySource = new Map(convertedResult.rows.map((row) => [normalizeGroupValue(row.Lead_Source) || 'Unknown', aggregateNumber(row, 'COUNT(id)')]));
+    const sourceBreakdown = totalResult.rows.map((row) => {
+      const source = normalizeGroupValue(row.Lead_Source) || 'Unknown';
+      const leads = aggregateNumber(row, 'COUNT(id)');
+      const converted = convertedBySource.get(source) || 0;
+      return { source, leads, converted, conversion_rate: leads ? Number(((converted / leads) * 100).toFixed(2)) : 0 };
+    }).filter((row) => row.leads >= 10).sort((left, right) => right.conversion_rate - left.conversion_rate || right.leads - left.leads);
+    return { module: 'Leads', request_type: 'analysis', analysis: 'lead_source_conversion_report', source_breakdown: sourceBreakdown.slice(0, 3), data: [], pagination: { limit: request.limit, offset: request.offset, returned: sourceBreakdown.length, more_records: false } };
   }
 
   async ownerPerformanceReport(request, executionContext = createExecutionContext()) {

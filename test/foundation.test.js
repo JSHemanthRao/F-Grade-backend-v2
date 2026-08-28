@@ -258,6 +258,14 @@ test('plans comprehensive multi-module sales prompts before single-module aggreg
   assert.equal(request.filters[0].value[1], '2027-01-01');
 });
 
+test('plans advanced Lead Source conversion ranking separately from Lead conversion', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('Show Leads grouped by Lead Source and rank the top 3 sources by conversion rate, excluding sources with fewer than 10 Leads');
+  assert.deepEqual(request.analysis, { type: 'lead_source_conversion_report' });
+  assert.equal(request.module, 'Leads');
+  assert.equal(request.filters.some((filter) => filter.field === 'Lead_Source'), true);
+});
+
 test('accepts questions up to 2000 characters and rejects longer questions', async () => {
   const app = createApp({ crmService: { query: async (input) => ({ module: input.module, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
   const accepted = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'x'.repeat(2000) });

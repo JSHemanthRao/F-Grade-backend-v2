@@ -189,6 +189,19 @@ function planQuestion(question) {
     };
   }
 
+  if (module === 'Leads' && /lead source/.test(lower) && /(conversion rate|converted)/.test(lower)) {
+    return {
+      module: 'Leads',
+      complexity: 'MULTI-STEP',
+      request_type: 'analysis',
+      analysis: { type: 'lead_source_conversion_report' },
+      fields: ['id', 'Lead_Source', 'Converted__s'],
+      filters: [...filters, { field: 'Lead_Source', operator: 'is_not_null' }],
+      limit: 20,
+      offset: 0
+    };
+  }
+
   if (isLeadConversionQuestion(lower)) {
     return {
       module: 'Leads',
@@ -370,8 +383,9 @@ function extractRecordLimit(lowerText) {
 function isComprehensiveSalesPerformanceRequest(lowerText) {
   const modules = ['leads', 'converted', 'accounts', 'contacts', 'deals'];
   const metrics = ['lead source', 'owner', 'closed won', 'conversion rate', 'created'];
-  return modules.filter((term) => lowerText.includes(term)).length >= 4
-    && metrics.filter((term) => lowerText.includes(term)).length >= 3;
+  const moduleCount = modules.filter((term) => lowerText.includes(term)).length;
+  const metricCount = metrics.filter((term) => lowerText.includes(term)).length;
+  return moduleCount >= 4 && (metricCount >= 3 || /sales performance|compare|overall/.test(lowerText));
 }
 
 function isLeadConversionQuestion(lowerText) {
@@ -427,6 +441,11 @@ function buildAssistantAnswer(question, result) {
     const lines = (result.source_breakdown || []).map((row) => `${row.source}: ${row.count} (${row.percentage}%)`);
     const leads = (result.top_leads || []).map((lead, index) => `${index + 1}. ${lead.name} | ${lead.company || 'No company'} | ${lead.email || 'No email'} | ${lead.lead_status || 'No status'} | ${lead.created_time || 'No date'}`);
     return `Lead Source Dashboard\n\n${lines.join('\n')}\n\nTop 5 leads from ${result.top_source || 'the highest-volume source'}:\n${leads.join('\n')}`;
+  }
+
+  if (result?.request_type === 'analysis' && result?.analysis === 'lead_source_conversion_report') {
+    const lines = (result.source_breakdown || []).map((row) => `${row.source}: ${row.converted} converted of ${row.leads} leads (${row.conversion_rate}%)`);
+    return `Lead Source Conversion Report\n\n${lines.join('\n')}`;
   }
 
   if (result?.request_type === 'analysis' && result?.analysis === 'owner_performance') {
