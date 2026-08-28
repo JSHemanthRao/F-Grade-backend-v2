@@ -1,6 +1,9 @@
 const { CrmService } = require('../services/crm.service');
 
+const MAX_QUESTION_LENGTH = 2000;
+
 function createCrmController(crmService = new CrmService()) {
+  const conversationContext = new Map();
   return {
     query: async (req, res, next) => {
       try {
@@ -19,13 +22,29 @@ function createCrmController(crmService = new CrmService()) {
           error.statusCode = 400;
           throw error;
         }
-            const result = await crmService.query({
+        if (question.length > MAX_QUESTION_LENGTH) {
+          const error = new Error(`Question must not exceed ${MAX_QUESTION_LENGTH} characters.`);
+          error.code = 'QUESTION_TOO_LONG';
+          error.statusCode = 400;
+          throw error;
+        }
+        const conversationId = typeof req.body?.conversation_id === 'string' && req.body.conversation_id.trim()
+          ? req.body.conversation_id.trim()
+          : null;
+        const previous = conversationId ? conversationContext.get(conversationId) : null;
+        const resolvedQuestion = resolveFollowUpQuestion(question, previous);
+        const plannedRequest = planQuestion(resolvedQuestion);
+        const result = await crmService.query({
           ...(req.body?.query || {}),
-          ...planQuestion(question)
+          ...plannedRequest
         });
-            const answer = isDashboardRequest(question)
-              ? JSON.stringify(buildDashboardSpecification(question, result), null, 2)
-              : buildAssistantAnswer(question, result);
+        if (conversationId) {
+          conversationContext.set(conversationId, { question: resolvedQuestion, plannedRequest });
+          if (conversationContext.size > 1000) conversationContext.delete(conversationContext.keys().next().value);
+        }
+        const answer = isDashboardRequest(resolvedQuestion)
+          ? JSON.stringify(buildDashboardSpecification(resolvedQuestion, result), null, 2)
+          : buildAssistantAnswer(resolvedQuestion, result);
         res.status(200).json({ success: true, status: 'ok', question, answer, ...result });
       } catch (error) {
         next(error);
@@ -34,12 +53,40 @@ function createCrmController(crmService = new CrmService()) {
   };
 }
 
+function resolveFollowUpQuestion(question, previous) {
+  const text = String(question || '').trim();
+  if (!previous || hasExplicitModuleIntent(text) || isClarification(text)) return text;
+  if (!isFollowUpQuestion(text)) return text;
+  if (/(this year|current year|last year|previous year|this month|current month|last month|previous month|today|yesterday|\b20\d{2}\b|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(text)) {
+    return `${previous.question} created ${text}`;
+  }
+  return previous.question;
+}
+
+function hasExplicitModuleIntent(text) {
+  return /\b(?:lead|leads|deal|deals|account|accounts|contact|contacts)\b/i.test(text);
+}
+
+function isClarification(text) {
+  return /^(?:i\s+mean|i\s+meant|actually|no,?\s+i\s+mean|not\s+leads?,?\s+deals?|give me\s+deals?\s+instead)\b/i.test(text);
+}
+
+function isFollowUpQuestion(text) {
+  return /^(?:give me|show me|what about|how about|only|just|and|also|now|for)\b/i.test(text)
+    && !/(lead|deal|account|contact|crm|amount|revenue|pipeline|owner|source)/i.test(text);
+}
+
 function isDashboardRequest(question) {
   return /(dashboard|visuali[sz]e|kpi|charts?|management report|analytics dashboard|performance dashboard)/i.test(question);
 }
 
 function buildDashboardSpecification(question, result) {
   const module = result?.module || 'CRM';
+
+  if (result?.analysis === 'sales_performance') {
+    const totals = result.totals || {};
+    return `2026 sales performance: ${totals.leads || 0} leads, ${totals.converted_leads || 0} converted leads, ${totals.accounts || 0} accounts, ${totals.contacts || 0} contacts, and ${totals.deals || 0} deals. Lead conversion rate: ${formatPercent(result.lead_conversion_rate)}. Deal Closed Won rate: ${formatPercent(result.comparison?.deal_closed_won_rate)}.`;
+  }
   const sourceBreakdown = Array.isArray(result?.source_breakdown) ? result.source_breakdown : [];
   const rows = Array.isArray(result?.data) ? result.data : [];
   const isLeadSourceReport = result?.analysis === 'lead_source_report';
@@ -129,6 +176,32 @@ function planQuestion(question) {
   const dateFilter = detectDateFilter(lower, module);
   if (dateFilter) filters.push(dateFilter);
 
+  if (isComprehensiveSalesPerformanceRequest(lower)) {
+    return {
+      module: 'Deals',
+      complexity: 'MULTI-STEP',
+      request_type: 'analysis',
+      analysis: { type: 'sales_performance' },
+      fields: ['id'],
+      filters: [{ field: 'Created_Time', operator: 'between', value: [`${extractRequestedYear(lower)}-01-01`, `${extractRequestedYear(lower) + 1}-01-01`], exclusive_end: true }],
+      limit: 20,
+      offset: 0
+    };
+  }
+
+  if (isLeadConversionQuestion(lower)) {
+    return {
+      module: 'Leads',
+      complexity: 'MULTI-STEP',
+      request_type: 'analysis',
+      analysis: { type: 'lead_conversion' },
+      fields: ['id'],
+      filters,
+      limit: 20,
+      offset: 0
+    };
+  }
+
   const ownerName = extractOwnerName(text);
   if (ownerName) filters.push({ field: 'Owner', operator: 'equals', value: ownerName });
 
@@ -138,6 +211,11 @@ function planQuestion(question) {
   if (/(closed won|closed-won|won deals|won deal)/.test(lower)) {
     filters.push({ field: 'Stage', operator: 'equals', value: 'Closed Won' });
   }
+
+  if (module === 'Leads' && /(closed won|closed-won)/.test(lower) && !/(lead status|lead_status)/.test(lower)) {
+    return planQuestion(text.replace(/\bleads?\b/gi, 'deals'));
+  }
+
   if (/(closed lost|closed-lost|lost deals|lost deal)/.test(lower)) {
     filters.push({ field: 'Stage', operator: 'equals', value: 'Closed Lost' });
   }
@@ -150,9 +228,24 @@ function planQuestion(question) {
     filters.push({ field: 'Lead_Source', operator: 'equals', value: 'LinkedIn' });
   }
 
+  if (module === 'Deals' && /\b(?:count|how many)\b/.test(lower) && /\b(?:list|show|give me)\b/.test(lower)) {
+    return {
+      module: 'Deals',
+      complexity: 'MULTI-STEP',
+      request_type: 'analysis',
+      analysis: { type: 'count_and_records' },
+      fields: defaultFields('Deals'),
+      filters,
+      retrieve_all: /\b(?:all|every|complete|entire)\b/.test(lower),
+      limit: extractRecordLimit(lower),
+      offset: 0
+    };
+  }
+
   if (module === 'Deals' && /(top|highest|best|rank).*(owner|owners|person|persons).*(total deal value|total deal amount|deal value|revenue|amount)/.test(lower)) {
     return {
       module,
+      complexity: 'MULTI-STEP',
       request_type: 'analysis',
       analysis: { type: 'owner_performance' },
       ranking: { dimension: 'Owner', metric: 'Amount', operation: 'sum', limit: requestedLimit },
@@ -168,6 +261,7 @@ function planQuestion(question) {
     }
     return {
       module,
+      complexity: 'MULTI-STEP',
       request_type: 'analysis',
       analysis: { type: 'lead_source_report' },
       fields: ['First_Name', 'Last_Name', 'Company', 'Email', 'Lead_Status', 'Lead_Source', 'Created_Time'],
@@ -180,6 +274,7 @@ function planQuestion(question) {
   if (module === 'Deals' && /(dashboard|report)/.test(lower) && /(by all persons|by all owners|per owner|by owner|each owner|all persons|all owners)/.test(lower)) {
     return {
       module,
+      complexity: 'COMPLEX',
       request_type: 'aggregate',
       aggregate: { operation: 'sum', field: 'Amount' },
       group_by: 'Owner',
@@ -189,10 +284,24 @@ function planQuestion(question) {
     };
   }
 
+  if (module === 'Deals' && /(closed won|closed-won)/.test(lower) && /(this month|current month|last month|previous month)/.test(lower)) {
+    return {
+      module: 'Deals',
+      complexity: 'MODERATE',
+      request_type: 'analysis',
+      analysis: { type: 'closed_won_summary' },
+      fields: ['id', 'Amount', 'Closing_Date', 'Stage'],
+      filters,
+      limit: 1,
+      offset: 0
+    };
+  }
+
   const aggregateOperation = detectAggregateOperation(lower);
   if (aggregateOperation) {
     return {
       module,
+      complexity: 'MODERATE',
       request_type: 'aggregate',
       aggregate: { operation: aggregateOperation.operation, field: aggregateOperation.field },
       filters,
@@ -201,9 +310,10 @@ function planQuestion(question) {
     };
   }
 
-  if (/(converted|conversion|became deals|became a deal|converted to deals|converted to deal)/.test(lower)) {
+  if (isLeadConversionQuestion(lower)) {
     return {
       module: 'Leads',
+      complexity: 'MULTI-STEP',
       request_type: 'analysis',
       analysis: { type: 'lead_conversion' },
       fields: ['id'],
@@ -216,6 +326,7 @@ function planQuestion(question) {
   if (/(count|how many|number of|total number|many)/.test(lower) || /(?:lead|deal)s? created/.test(lower)) {
     return {
       module,
+      complexity: 'SIMPLE',
       request_type: 'count',
       fields: ['id'],
       filters,
@@ -239,6 +350,7 @@ function planQuestion(question) {
 
   return {
     module,
+    complexity: 'SIMPLE',
     request_type: 'records',
     fields: defaultFields(module),
     filters,
@@ -255,6 +367,23 @@ function extractRecordLimit(lowerText) {
   return Math.min(Math.max(Number(match[1]), 1), 200);
 }
 
+function isComprehensiveSalesPerformanceRequest(lowerText) {
+  const modules = ['leads', 'converted', 'accounts', 'contacts', 'deals'];
+  const metrics = ['lead source', 'owner', 'closed won', 'conversion rate', 'created'];
+  return modules.filter((term) => lowerText.includes(term)).length >= 4
+    && metrics.filter((term) => lowerText.includes(term)).length >= 3;
+}
+
+function isLeadConversionQuestion(lowerText) {
+  return /\b(?:conversion rate|conversion|converted|converted to deals?|became deals?|lead to deal)\b/.test(lowerText)
+    && /\b(?:lead|leads)\b/.test(lowerText);
+}
+
+function extractRequestedYear(lowerText) {
+  const match = lowerText.match(/\b(?:created\s+in\s+|during\s+|for\s+)(20\d{2})\b/);
+  return match ? Number(match[1]) : new Date().getFullYear();
+}
+
 function detectRecordSort(lowerText, module) {
   if (/(oldest|first created|earliest)/.test(lowerText)) return { field: 'Created_Time', order: 'asc' };
   if (/(highest|largest|maximum|top|latest|recent|newest)/.test(lowerText) && module === 'Deals' && /(amount|value|revenue|deal)/.test(lowerText)) return { field: 'Amount', order: 'desc' };
@@ -267,11 +396,20 @@ function buildAssistantAnswer(question, result) {
   const summary = result?.summary || {};
   const module = result?.module || 'CRM';
 
+  if (result?.analysis === 'closed_won_summary') {
+    const range = result.filters?.find((filter) => filter.field === 'Closing_Date')?.value || [];
+    return `Closed Won Deals for ${range[0] || 'the selected period'} through ${range[1] || 'the selected period'}: ${result.count} deals, ${formatAmount(result.total_amount, result.currency)} total amount, and ${formatAmount(result.average_amount, result.currency)} average deal value.`;
+  }
+
+  if (result?.analysis === 'count_and_records') {
+    return `I found ${result.count} matching ${module.toLowerCase()} records and retrieved ${result.data?.length || 0} for display.`;
+  }
+
   if (result?.request_type === 'aggregate') {
     const rows = Array.isArray(result.data) ? result.data : [];
-    const lines = rows.map((row) => `${row.Owner ?? 'Unassigned'}: ${formatAmount(row.value)}`);
+    const lines = rows.map((row) => `${row.Owner ?? 'Unassigned'}: ${formatAmount(row.value, row.currency)}`);
     return lines.length > 0
-      ? `CRM dashboard for ${module}:\n${lines.join('\n')}\nTotal: ${formatAmount(rows.reduce((total, row) => total + Number(row.value || 0), 0))}`
+      ? `CRM dashboard for ${module}:\n${lines.join('\n')}\nTotal: ${formatAmount(rows.reduce((total, row) => total + Number(row.value || 0), 0), result.currency)}`
       : `CRM dashboard for ${module}: no matching records were found.`;
   }
 
@@ -282,7 +420,7 @@ function buildAssistantAnswer(question, result) {
   }
 
   if (result?.request_type === 'analysis' && result?.analysis === 'owner_performance') {
-    const lines = (result.owners || []).map((owner, index) => `${index + 1}. ${owner.owner}: ${formatAmount(owner.total_value)} total value, ${owner.deals} deals, ${owner.closed_won} Closed Won, ${owner.win_rate == null ? 'not calculable' : `${owner.win_rate}%`} win rate`);
+    const lines = (result.owners || []).map((owner, index) => `${index + 1}. ${owner.owner}: ${formatAmount(owner.total_value, owner.currency || result.currency)} total value, ${owner.deals} deals, ${owner.closed_won} Closed Won, ${owner.win_rate == null ? 'not calculable' : `${owner.win_rate}%`} win rate`);
     const overall = result.overall || {};
     return `Owner performance for ${result.year}:\n${lines.join('\n')}\n\nOverall: ${overall.deals} deals, ${overall.closed_won} Closed Won, ${overall.win_rate == null ? 'win rate not calculable' : `${overall.win_rate}% win rate`}.`;
   }
@@ -311,8 +449,12 @@ function formatPercent(value) {
   return `${numeric.toFixed(2)}%`;
 }
 
-function formatAmount(value) {
-  return `₹ ${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function formatAmount(value, currency) {
+  const amount = Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (!currency) return amount;
+  const symbols = { INR: '₹', USD: '$', EUR: '€', GBP: '£' };
+  const symbol = symbols[String(currency).toUpperCase()] || String(currency);
+  return `${symbol} ${amount}`;
 }
 
 function detectModule(lowerText) {
@@ -365,71 +507,96 @@ function extractAmountThreshold(lowerText) {
 
 function detectDateFilter(lowerText, module) {
   const currentDate = new Date();
+  const dateField = dateFieldForQuestion(lowerText, module);
 
   if (/(today)/.test(lowerText)) {
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: [toIsoDate(currentDate), toIsoDate(currentDate)] };
+    return calendarFilter(dateField, dayRange(currentDate));
   }
 
   if (/(yesterday)/.test(lowerText)) {
     const yesterday = new Date(currentDate);
     yesterday.setDate(currentDate.getDate() - 1);
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: [toIsoDate(yesterday), toIsoDate(yesterday)] };
+    return calendarFilter(dateField, dayRange(yesterday));
   }
 
   if (/(this month|current month)/.test(lowerText)) {
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: monthRange(currentDate, 0) };
+    return calendarFilter(dateField, monthRange(currentDate, 0));
   }
 
   if (/(last month|previous month)/.test(lowerText)) {
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: monthRange(currentDate, -1) };
+    return calendarFilter(dateField, monthRange(currentDate, -1));
   }
 
   if (/(this quarter|current quarter)/.test(lowerText)) {
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: quarterRange(currentDate, 0) };
+    return calendarFilter(dateField, quarterRange(currentDate, 0));
   }
 
   if (/(last quarter|previous quarter)/.test(lowerText)) {
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: quarterRange(currentDate, -1) };
+    return calendarFilter(dateField, quarterRange(currentDate, -1));
   }
 
   if (/(this year|current year)/.test(lowerText)) {
     const start = new Date(currentDate.getFullYear(), 0, 1);
     const end = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate());
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: [toIsoDate(start), toIsoDate(end)] };
+    return calendarFilter(dateField, [toIsoDate(start), toIsoDate(end)]);
   }
 
   if (/(last year|previous year)/.test(lowerText)) {
     const start = new Date(currentDate.getFullYear() - 1, 0, 1);
     const end = new Date(currentDate.getFullYear() - 1, 11, 31);
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: [toIsoDate(start), toIsoDate(end)] };
+    return calendarFilter(dateField, [toIsoDate(start), toIsoDate(end)]);
+  }
+
+  const yearMatch = lowerText.match(/\b(?:created\s+in\s+|during\s+|for\s+)(20\d{2})\b/);
+  if (yearMatch) {
+    const year = Number(yearMatch[1]);
+    return calendarFilter(dateField, [`${year}-01-01`, `${year}-12-31`]);
   }
 
   const exactRange = lowerText.match(/between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})/i);
   if (exactRange) {
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: [exactRange[1], exactRange[2]] };
+    return calendarFilter(dateField, [exactRange[1], exactRange[2]]);
   }
 
   const namedRange = lowerText.match(/between\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})\s+and\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})/i);
   if (namedRange) {
     const start = new Date(`${namedRange[1]} ${namedRange[2]}, ${namedRange[3]}`);
     const end = new Date(`${namedRange[4]} ${namedRange[5]}, ${namedRange[6]}`);
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', operator: 'between', value: [toIsoDate(start), toIsoDate(end)] };
+    return calendarFilter(dateField, [toIsoDate(start), toIsoDate(end)]);
   }
 
   if (lowerText.includes('created this month') || lowerText.includes('created in this month')) {
-    return { field: 'Created_Time', operator: 'between', value: monthRange(currentDate, 0) };
+    return calendarFilter('Created_Time', monthRange(currentDate, 0));
   }
 
   if (/(created|date)\s+(this month|last month|this quarter|last quarter)/.test(lowerText)) {
-    return { field: 'Created_Time', operator: 'between', value: monthRange(currentDate, /last month|previous month/.test(lowerText) ? -1 : 0) };
+    return calendarFilter('Created_Time', monthRange(currentDate, /last month|previous month/.test(lowerText) ? -1 : 0));
   }
 
   return null;
 }
 
+function dateFieldForQuestion(lowerText, module) {
+  if (module !== 'Deals') return 'Created_Time';
+  if (/(created|creation|new|added|entered)/.test(lowerText)) return 'Created_Time';
+  return 'Closing_Date';
+}
+
+function calendarFilter(field, value) {
+  if (field !== 'Created_Time') return { field, operator: 'between', value };
+  const exclusiveEnd = new Date(`${value[1]}T00:00:00Z`);
+  exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
+  return { field, operator: 'between', value: [value[0], exclusiveEnd.toISOString().slice(0, 10)], exclusive_end: true };
+}
+
+function dayRange(date) {
+  return [toIsoDate(date), toIsoDate(date)];
+}
+
 function monthRange(referenceDate, offsetMonths) {
   const start = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + offsetMonths, 1);
-  const end = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + offsetMonths + 1, 0);
+  const end = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + offsetMonths + 1, 1);
+  end.setDate(end.getDate() - 1);
   return [toIsoDate(start), toIsoDate(end)];
 }
 
@@ -439,7 +606,8 @@ function quarterRange(referenceDate, offsetQuarters) {
   const startMonth = (quarterIndex * 3) % 12;
   const targetYear = year + Math.floor((quarterIndex * 3) / 12);
   const start = new Date(targetYear, startMonth, 1);
-  const end = new Date(targetYear, startMonth + 3, 0);
+  const end = new Date(targetYear, startMonth + 3, 1);
+  end.setDate(end.getDate() - 1);
   return [toIsoDate(start), toIsoDate(end)];
 }
 

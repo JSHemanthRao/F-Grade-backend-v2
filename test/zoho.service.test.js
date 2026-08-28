@@ -25,6 +25,29 @@ test('uses server-side aggregate values for filtered CRM records', async () => {
   assert.equal(result.data[0].value, 150000);
 });
 
+test('calculates Closed Won monthly metrics from one consistently filtered aggregate', async () => {
+  let query;
+  const service = new CrmService({
+    aggregate: async (selectQuery) => {
+      query = selectQuery;
+      return { rows: [{ 'COUNT(id)': 4, 'SUM(Amount)': 1000, 'AVG(Amount)': 250 }] };
+    }
+  });
+  const result = await service.closedWonSummary({
+    module: 'Deals',
+    filters: [
+      { field: 'Closing_Date', operator: 'between', value: ['2026-08-01', '2026-08-31'] },
+      { field: 'Stage', operator: 'equals', value: 'Closed Won' }
+    ],
+    limit: 1,
+    offset: 0
+  });
+  assert.match(query, /COUNT\(id\), SUM\(Amount\), AVG\(Amount\) from Deals/);
+  assert.match(query, /Closing_Date >= '2026-08-01' and Closing_Date <= '2026-08-31'/);
+  assert.match(query, /Stage = 'Closed Won'/);
+  assert.deepEqual({ count: result.count, total_amount: result.total_amount, average_amount: result.average_amount }, { count: 4, total_amount: 1000, average_amount: 250 });
+});
+
 test('builds a Lead Source report from filtered records', async () => {
   const calls = [];
   const service = new CrmService({
@@ -85,18 +108,49 @@ test('calculates owner performance from compatible grouped populations', async (
   const service = new CrmService({
     aggregate: async (query) => {
       queries.push(query);
-      if (query.includes('SUM(Amount)')) return { rows: [{ Owner: { name: 'Laya' }, 'COUNT(id)': 4, 'SUM(Amount)': 1000, 'AVG(Amount)': 250 }] };
+      if (query.includes('SUM(Amount)')) return { rows: [{ Owner: { name: 'Laya' }, 'SUM(Amount)': 1000 }] };
       if (query.includes('Stage')) return { rows: [{ Owner: { name: 'Laya' }, 'COUNT(id)': 2 }] };
-      return { rows: [{ 'COUNT(id)': query.includes('Stage') ? 2 : 4 }] };
+      return { rows: [{ Owner: { name: 'Laya' }, 'COUNT(id)': 4 }] };
     }
   });
 
   const result = await service.ownerPerformanceReport({ module: 'Deals', filters: [], ranking: { limit: 3 } });
 
-  assert.equal(queries.length, 4);
+  assert.equal(queries.length, 5);
   assert.equal(result.owners[0].owner, 'Laya');
   assert.equal(result.owners[0].win_rate, 50);
   assert.equal(result.overall.win_rate, 50);
+});
+
+test('retrieves top deals only after ranking the top owners', async () => {
+  const aggregateQueries = [];
+  const dealQueries = [];
+  const service = new CrmService({
+    aggregate: async (query) => {
+      aggregateQueries.push(query);
+      if (query.includes('SUM(Amount)')) return { rows: [
+        { Owner: { name: 'First', id: '1' }, 'SUM(Amount)': 300 },
+        { Owner: { name: 'Second', id: '2' }, 'SUM(Amount)': 200 },
+        { Owner: { name: 'Third', id: '3' }, 'SUM(Amount)': 100 }
+      ] };
+      if (query.includes('Stage')) return { rows: [{ Owner: { name: 'First', id: '1' }, 'COUNT(id)': 1 }] };
+      return { rows: [
+        { Owner: { name: 'First', id: '1' }, 'COUNT(id)': 3 },
+        { Owner: { name: 'Second', id: '2' }, 'COUNT(id)': 2 },
+        { Owner: { name: 'Third', id: '3' }, 'COUNT(id)': 1 }
+      ] };
+    },
+    query: async (request) => {
+      dealQueries.push(request);
+      return { records: [{ id: request.filters.find((filter) => filter.field === 'Owner').value, Deal_Name: 'Top deal', Amount: 100 }], info: { more_records: false } };
+    }
+  });
+
+  const result = await service.ownerPerformanceReport({ module: 'Deals', filters: [], ranking: { limit: 20 } });
+  assert.equal(aggregateQueries.length, 5);
+  assert.equal(dealQueries.length, 3);
+  assert.deepEqual(dealQueries.map((request) => request.limit), [3, 3, 3]);
+  assert.deepEqual(result.owners.slice(0, 3).map((owner) => owner.top_deals.length), [1, 1, 1]);
 });
 
 test('obtains and caches the Zoho access token and stores api_domain internally', async () => {
@@ -325,6 +379,15 @@ test('builds v8 COQL from structured filters without accepting raw queries', () 
   assert.equal(query, "select Deal_Name, Amount, Stage from Deals where (Stage = 'Closed Won') order by Amount desc");
 });
 
+test('rejects cross-module fields while building COQL', () => {
+  assert.throws(() => buildCoqlQuery({
+    module: 'Leads',
+    fields: ['id'],
+    filters: [],
+    sort: { field: 'Amount', order: 'desc' }
+  }), (error) => error.code === 'INVALID_CRM_FIELD_SCOPE' && error.details.invalid_fields[0].field === 'Amount');
+});
+
 test('adds a safe internal predicate for unfiltered COQL retrieval', () => {
   const query = buildCoqlQuery({
     module: 'Deals',
@@ -384,7 +447,7 @@ test('authenticates, calls Zoho COQL, and normalizes the CRM response', async ()
   });
 });
 
-test('converts date between filters into parenthesized inclusive COQL bounds', () => {
+test('keeps DATE between filters date-only and inclusive', () => {
   const query = buildCoqlQuery({
     module: 'Deals',
     fields: ['Deal_Name', 'Amount', 'Stage', 'Closing_Date'],
@@ -394,7 +457,16 @@ test('converts date between filters into parenthesized inclusive COQL bounds', (
     ],
     sort: { field: 'Amount', order: 'desc' }
   });
-  assert.equal(query, "select Deal_Name, Amount, Stage, Closing_Date from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01T00:00:00+05:30' and Closing_Date <= '2026-07-31T23:59:59+05:30')) order by Amount desc");
+  assert.equal(query, "select Deal_Name, Amount, Stage, Closing_Date from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) order by Amount desc");
+});
+
+test('uses explicit exclusive DateTime boundaries for Created_Time calendar years', () => {
+  const query = buildCoqlQuery({
+    module: 'Leads',
+    fields: ['id', 'Created_Time'],
+    filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-01-01', '2027-01-01'], exclusive_end: true }]
+  });
+  assert.equal(query, "select id, Created_Time from Leads where (Created_Time >= '2026-01-01T00:00:00+05:30' and Created_Time < '2027-01-01T00:00:00+05:30')");
 });
 
 test('generates the correct COQL for a normalized comma-separated between value', () => {
@@ -404,7 +476,7 @@ test('generates the correct COQL for a normalized comma-separated between value'
     fields: ['Closing_Date'],
     filters: [{ field: 'Closing_Date', operator: 'between', value: '2026-07-01,2026-07-31' }]
   });
-  assert.equal(buildCoqlQuery(request), "select Closing_Date from Deals where (Closing_Date >= '2026-07-01T00:00:00+05:30' and Closing_Date <= '2026-07-31T23:59:59+05:30')");
+  assert.equal(buildCoqlQuery(request), "select Closing_Date from Deals where (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')");
 });
 
 test('retrieves only Closed Won Deals within the requested Closing_Date range', async () => {
@@ -442,7 +514,7 @@ test('retrieves only Closed Won Deals within the requested Closing_Date range', 
     offset: 0
   });
 
-  assert.equal(calls[0], "select Deal_Name, Stage, Closing_Date, Amount from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01T00:00:00+05:30' and Closing_Date <= '2026-07-31T23:59:59+05:30')) order by Closing_Date desc limit 0, 20");
+  assert.equal(calls[0], "select Deal_Name, Stage, Closing_Date, Amount from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) order by Closing_Date desc limit 0, 20");
   assert.equal(result.count, 2);
   assert.equal(result.pagination.more_records, false);
   assert.ok(result.data.every((record) => record.Stage === 'Closed Won'));
@@ -460,7 +532,7 @@ test('keeps additional filters outside the compound date group for Zoho COQL', (
     ],
     sort: { field: 'Amount', order: 'desc' }
   });
-  assert.equal(query, "select Deal_Name, Amount, Stage, Closing_Date from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01T00:00:00+05:30' and Closing_Date <= '2026-07-31T23:59:59+05:30')) and (Amount > 50000) order by Amount desc");
+  assert.equal(query, "select Deal_Name, Amount, Stage, Closing_Date from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) and (Amount > 50000) order by Amount desc");
 });
 
 test('does not quote numeric COQL values and rejects invalid date values', () => {

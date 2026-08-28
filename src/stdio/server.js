@@ -25,7 +25,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       properties: {
         question: {
           type: 'string',
-          description: 'The natural-language CRM question to send to the backend.'
+          description: 'The natural-language CRM question to send to the backend.',
+          minLength: 1,
+          maxLength: 2000
         }
       },
       required: ['question'],

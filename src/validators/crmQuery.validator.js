@@ -133,4 +133,46 @@ function validateCrmQuery(body) {
   return { module, fields: normalizedFields, filters: normalizedFilters, sort: normalizedSort, limit, offset, request_type, aggregate, group_by };
 }
 
-module.exports = { validateCrmQuery };
+function validateModuleFieldScope({ module, fields = [], filters = [], sort, aggregate, group_by } = {}) {
+  const supportedFields = CRM_MODULES[module];
+  const errors = [];
+  const addInvalid = (path, field) => errors.push({ path, field });
+  const isSupported = (field) => typeof field === 'string' && supportedFields?.includes(field);
+
+  if (!supportedFields) errors.push({ path: 'module', field: module });
+  fields.forEach((field, index) => { if (!isSupported(field)) addInvalid(`fields[${index}]`, field); });
+  filters.forEach((filter, index) => { if (!isSupported(filter?.field)) addInvalid(`filters[${index}].field`, filter?.field); });
+  if (sort && !isSupported(sort.field)) addInvalid('sort.field', sort.field);
+  if (aggregate && !isSupported(aggregate.field)) addInvalid('aggregate.field', aggregate.field);
+  if (group_by && !isSupported(group_by)) addInvalid('group_by', group_by);
+
+  if (errors.length > 0) {
+    const allowed = supportedFields ? supportedFields.join(', ') : 'none';
+    throw createAppError(
+      'INVALID_CRM_FIELD_SCOPE',
+      `CRM query field scope validation failed for module '${module}'. Every field must belong to this module. Allowed fields: ${allowed}.`,
+      400,
+      { module, allowed_fields: supportedFields || [], invalid_fields: errors }
+    );
+  }
+  return true;
+}
+
+function validateAggregateQuery({ module, fields = [], filters = [], aggregate, groupBy, sort } = {}) {
+  if (!aggregate || typeof aggregate !== 'object') {
+    throw createAppError('INVALID_CRM_AGGREGATE', 'An aggregate definition is required.', 400);
+  }
+  const aggregateFields = [...fields, aggregate.field, groupBy].filter(Boolean);
+  validateModuleFieldScope({ module, fields: aggregateFields, filters });
+  if (sort && /^(SUM|COUNT|AVG|MAX|MIN)\s*\(/i.test(String(sort.field || ''))) {
+    throw createAppError(
+      'INVALID_CRM_AGGREGATE_ORDER',
+      'Grouped aggregate results must be ranked in backend memory; ORDER BY aggregate expressions is not allowed.',
+      400,
+      { module, sort_field: sort.field }
+    );
+  }
+  return true;
+}
+
+module.exports = { validateCrmQuery, validateModuleFieldScope, validateAggregateQuery };

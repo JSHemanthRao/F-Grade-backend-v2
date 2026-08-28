@@ -66,7 +66,14 @@
         "question": {
           "type": "string",
           "description": "The complete natural-language CRM question provided by the user.",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "conversation_id": {
+          "type": "string",
+          "description": "Optional stable conversation identifier used to resolve natural-language follow-up questions.",
+          "minLength": 1,
+          "maxLength": 128
         }
       },
       "additionalProperties": false

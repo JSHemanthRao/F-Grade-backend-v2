@@ -61,6 +61,37 @@ test('POST /api/crm/assistant accepts question, prompt, and message', async () =
   assert.equal(calls[0].module, 'Deals');
 });
 
+test('resolves date-only follow-ups using the previous CRM question', async () => {
+  const calls = [];
+  const app = createApp({ crmService: { query: async (input) => {
+    calls.push(input);
+    return { module: input.module, request_type: input.request_type, count: 0, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } };
+  } } });
+  await requestJson(app, '/api/crm/assistant', 'POST', { conversation_id: 'follow-up-test', question: 'What is the total Amount for Closed Won Deals?' });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { conversation_id: 'follow-up-test', question: 'give me only this year' });
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].module, 'Deals');
+  assert.equal(calls[1].filters.some((filter) => filter.field === 'Stage' && filter.value === 'Closed Won'), true);
+  assert.equal(calls[1].filters.some((filter) => filter.field === 'Created_Time'), true);
+});
+
+test('re-evaluates Closed Won follow-ups as Deals instead of adding Stage to Leads', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('In these 10 leads how many are Closed Won?');
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.filters.some((filter) => filter.field === 'Stage' && filter.value === 'Closed Won'), true);
+  assert.equal(request.filters.some((filter) => filter.field === 'Lead_Source'), false);
+});
+
+test('plans count and list requests as separate logical operations', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('Count and list all Closed Won Deals');
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.analysis.type, 'count_and_records');
+  assert.equal(request.retrieve_all, true);
+});
+
 test('POST /api/crm/assistant routes conversion questions to analysis', async () => {
   let request;
   const app = createApp({ crmService: { query: async (input) => {
@@ -72,6 +103,23 @@ test('POST /api/crm/assistant routes conversion questions to analysis', async ()
   assert.equal(request.request_type, 'analysis');
   assert.equal(request.analysis.type, 'lead_conversion');
   assert.equal(request.fields.includes('Converted'), false);
+});
+
+test('routes Lead-to-Closed-Won conversion rate to Lead conversion analysis', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('give me the conversion rate from leads to closed won deals.');
+  assert.equal(request.module, 'Leads');
+  assert.equal(request.request_type, 'analysis');
+  assert.deepEqual(request.analysis, { type: 'lead_conversion' });
+  assert.equal(request.filters.some((filter) => filter.field === 'Stage'), false);
+  assert.equal(request.aggregate, undefined);
+});
+
+test('does not let total wording turn Lead conversion into SUM(Amount)', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('show the total conversion rate from leads to closed won deals');
+  assert.deepEqual(request.analysis, { type: 'lead_conversion' });
+  assert.equal(request.aggregate, undefined);
 });
 
 test('accepts Copilot count requests without record fields', () => {
@@ -154,6 +202,23 @@ test('plans a general-purpose aggregate question for average deal value', async 
   assert.equal(response.body.aggregate.field, 'Amount');
 });
 
+test('plans monthly Closed Won deal summaries with a Closing_Date filter', () => {
+  const request = require('../src/controllers/crm.controller').planQuestion('Give me a total closed won deals for this month');
+  assert.equal(request.request_type, 'analysis');
+  assert.equal(request.analysis.type, 'closed_won_summary');
+  assert.deepEqual(request.filters, [
+    { field: 'Closing_Date', operator: 'between', value: [request.filters[0].value[0], request.filters[0].value[1]] },
+    { field: 'Stage', operator: 'equals', value: 'Closed Won' }
+  ]);
+});
+
+test('uses Created_Time when a Deal prompt explicitly asks for created records', () => {
+  const request = require('../src/controllers/crm.controller').planQuestion('Show closed won deals created this month');
+  assert.equal(request.filters[0].field, 'Created_Time');
+  assert.deepEqual(request.filters[0].value, ['2026-08-01', '2026-09-01']);
+  assert.equal(request.filters[0].exclusive_end, true);
+});
+
 test('plans a Closed Won dashboard by owner without an Owner name filter', () => {
   const request = require('../src/controllers/crm.controller').planQuestion('Give me a report for all closed won deals by all persons like a dashboard');
   assert.equal(request.module, 'Deals');
@@ -170,10 +235,28 @@ test('plans a complex Lead Source report without Deals-only aggregate fields', (
   assert.deepEqual(request.analysis, { type: 'lead_source_report' });
   assert.equal(request.group_by, undefined);
   assert.deepEqual(request.filters, [
-    { field: 'Created_Time', operator: 'between', value: ['2026-01-01', '2026-06-30'] },
+    { field: 'Created_Time', operator: 'between', value: ['2026-01-01', '2026-07-01'], exclusive_end: true },
     { field: 'Lead_Source', operator: 'is_not_null' }
   ]);
   assert.deepEqual(request.fields, ['First_Name', 'Last_Name', 'Company', 'Email', 'Lead_Status', 'Lead_Source', 'Created_Time']);
+});
+
+test('plans comprehensive multi-module sales prompts before single-module aggregates', () => {
+  const request = require('../src/controllers/crm.controller').planQuestion('Analyze our 2026 sales performance: show the total number of Leads, Converted Leads, Accounts, Contacts, and Deals created during 2026; calculate the Lead conversion rate; group Leads by Lead Source and identify the top 3 sources by conversion rate while excluding sources with fewer than 10 Leads; then group Deals by Owner and show deal count, total deal value, average deal value, and Closed Won rate; identify the top 3 owners by total deal value; for each top owner, show their 3 highest-value Deals with Deal Name, Account Name, Amount, Stage, and Closing Date; finally compare the overall Lead conversion rate with the overall Deal Closed Won rate and identify the strongest Lead Source and strongest Deal Owner based on their respective conversion rates.');
+  assert.equal(request.request_type, 'analysis');
+  assert.equal(request.analysis.type, 'sales_performance');
+  assert.equal(request.complexity, 'MULTI-STEP');
+  assert.equal(request.filters[0].value[0], '2026-01-01');
+  assert.equal(request.filters[0].value[1], '2027-01-01');
+});
+
+test('accepts questions up to 2000 characters and rejects longer questions', async () => {
+  const app = createApp({ crmService: { query: async (input) => ({ module: input.module, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } }) } });
+  const accepted = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'x'.repeat(2000) });
+  const rejected = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'x'.repeat(2001) });
+  assert.equal(accepted.status, 200);
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.error.code, 'QUESTION_TOO_LONG');
 });
 
 test('returns a renderer-ready dashboard specification from CRM results', async () => {
@@ -270,7 +353,7 @@ test('OpenAPI exposes only question input and response output', () => {
   const response = openApi.definitions.AssistantResponse;
 
   assert.equal(operation.operationId, 'askCrmAssistant');
-  assert.deepEqual(Object.keys(request.properties), ['question']);
+  assert.deepEqual(Object.keys(request.properties), ['question', 'conversation_id']);
   assert.deepEqual(request.required, ['question']);
   assert.equal(request.additionalProperties, false);
   assert.deepEqual(Object.keys(response.properties), ['response']);
@@ -315,6 +398,32 @@ test('accepts valid API fields for Deals, Leads, Contacts, and Accounts', () => 
     const fields = CRM_MODULES[module].slice(0, 3);
     assert.deepEqual(validateCrmQuery({ module, fields }).fields, fields);
   }
+});
+
+test('rejects a cross-module aggregate field before CRM execution', () => {
+  const { validateModuleFieldScope } = require('../src/validators/crmQuery.validator');
+  assert.throws(
+    () => validateModuleFieldScope({ module: 'Leads', aggregate: { operation: 'sum', field: 'Amount' } }),
+    (error) => error.code === 'INVALID_CRM_FIELD_SCOPE'
+      && error.statusCode === 400
+      && error.details.invalid_fields[0].path === 'aggregate.field'
+      && error.details.invalid_fields[0].field === 'Amount'
+  );
+});
+
+test('rejects aggregate-expression ordering before CRM execution', () => {
+  const { validateAggregateQuery } = require('../src/validators/crmQuery.validator');
+  assert.throws(
+    () => validateAggregateQuery({
+      module: 'Deals',
+      fields: ['Owner', 'Amount'],
+      filters: [],
+      aggregate: { operation: 'sum', field: 'Amount' },
+      groupBy: 'Owner',
+      sort: { field: 'SUM(Amount)', order: 'desc' }
+    }),
+    (error) => error.code === 'INVALID_CRM_AGGREGATE_ORDER' && error.statusCode === 400
+  );
 });
 
 test('rejects display labels instead of Zoho API field names', () => {

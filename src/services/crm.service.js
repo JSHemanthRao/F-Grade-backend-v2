@@ -1,4 +1,4 @@
-const { validateCrmQuery } = require('../validators/crmQuery.validator');
+const { validateCrmQuery, validateModuleFieldScope, validateAggregateQuery } = require('../validators/crmQuery.validator');
 const { ZohoCrmService } = require('./zohoCrm.service');
 const { sanitizeZohoRecord } = require('../utils/zohoRecord');
 const { CRM_API_NAMES } = require('../constants/crmModules');
@@ -6,6 +6,7 @@ const { buildFilterClauses, buildWhereClause } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
 const { randomUUID } = require('node:crypto');
+const { env } = require('../config/env');
 
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
@@ -20,6 +21,8 @@ class CrmService {
     log('info', `[CRM filters received] ${JSON.stringify(Array.isArray(input?.filters) ? input.filters : [])}`);
     log('info', `[CRM request received] ${JSON.stringify({ module: input?.module, fields: input?.fields, filters: input?.filters, limit: input?.limit, offset: input?.offset, sort_field: input?.sort_field || input?.sort?.field, sort_order: input?.sort_order || input?.sort?.order, request_type: input?.request_type || 'records' })}`);
     const normalizedInput = normalizeSemanticRequest(input);
+    const executionPlan = classifyExecution(normalizedInput);
+    log('info', `[CRM execution plan] classification=${executionPlan.classification} steps=${executionPlan.steps.join(' | ')}`);
     let request;
     try {
       request = validateCrmQuery(normalizedInput);
@@ -58,6 +61,21 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'owner_performance');
       return result;
     }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'sales_performance') {
+      const result = await this.salesPerformanceAnalysis(request, executionContext);
+      this.logExecution(executionId, startedAt, statsAtStart, 'sales_performance');
+      return result;
+    }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'closed_won_summary') {
+      const result = await this.closedWonSummary(request, executionContext);
+      this.logExecution(executionId, startedAt, statsAtStart, 'closed_won_summary');
+      return result;
+    }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'count_and_records') {
+      const result = await this.countAndRecords(request, normalizedInput.retrieve_all === true, executionContext);
+      this.logExecution(executionId, startedAt, statsAtStart, 'count_and_records');
+      return result;
+    }
     const result = await this.zohoService.query(request);
     const data = result.records.map(sanitizeZohoRecord);
     const info = result.info || {};
@@ -88,6 +106,7 @@ class CrmService {
   }
 
   async aggregate(request, aggregate) {
+    validateAggregateQuery({ module: request.module, fields: request.fields, filters: request.filters, aggregate, groupBy: request.group_by, sort: request.sort });
     const expression = `${aggregate.operation.toUpperCase()}(${aggregate.field})`;
     const selectQuery = `select ${request.group_by ? `${request.group_by}, ` : ''}${expression} from ${CRM_API_NAMES[request.module]} where ${buildWhereClause(buildFilterClauses(request.filters))}${request.group_by ? ` group by ${request.group_by}` : ''}`;
     const result = await this.zohoService.aggregate(selectQuery);
@@ -108,6 +127,7 @@ class CrmService {
   }
 
   async leadSourceReport(request, executionContext = createExecutionContext()) {
+    validateAggregateQuery({ module: 'Leads', fields: ['id', 'Lead_Source'], filters: request.filters, aggregate: { operation: 'count', field: 'id' }, groupBy: 'Lead_Source' });
     const whereClause = buildWhereClause(buildFilterClauses(request.filters));
     const groupingQuery = `select Lead_Source, COUNT(id) from ${CRM_API_NAMES.Leads} where ${whereClause} group by Lead_Source`;
     log('info', '[CRM lead source report] executing grouped source count');
@@ -156,26 +176,131 @@ class CrmService {
   }
 
   async ownerPerformanceReport(request, executionContext = createExecutionContext()) {
+    validateModuleFieldScope({ module: 'Deals', filters: request.filters, group_by: 'Owner' });
     const year = new Date().getFullYear();
-    const yearFilters = [...request.filters, { field: 'Created_Time', operator: 'between', value: [`${year}-01-01`, `${year}-12-31`] }];
+    const yearFilters = [...request.filters, { field: 'Created_Time', operator: 'between', value: [`${year}-01-01`, `${year + 1}-01-01`], exclusive_end: true }];
     const closedWonFilters = [...yearFilters, { field: 'Stage', operator: 'equals', value: 'Closed Won' }];
     const groupQuery = (filters, fields) => `select ${fields} from ${CRM_API_NAMES.Deals} where ${buildWhereClause(buildFilterClauses(filters))} group by Owner`;
-    const [ownerTotals, ownerWon, totalDeals, wonDeals] = await Promise.all([
-      executeCached(executionContext, `owner-total:${JSON.stringify(yearFilters)}`, () => this.zohoService.aggregate(groupQuery(yearFilters, 'Owner, COUNT(id), SUM(Amount), AVG(Amount)'))),
+    validateAggregateQuery({ module: 'Deals', fields: ['Owner', 'id', 'Amount'], filters: request.filters, aggregate: { operation: 'count', field: 'id' }, groupBy: 'Owner' });
+    const [ownerCounts, ownerValues, ownerWon, totalDeals, wonDeals] = await Promise.all([
+      executeCached(executionContext, `owner-count:${JSON.stringify(yearFilters)}`, () => this.zohoService.aggregate(groupQuery(yearFilters, 'Owner, COUNT(id)'))),
+      executeCached(executionContext, `owner-value:${JSON.stringify(yearFilters)}`, () => this.zohoService.aggregate(groupQuery(yearFilters, 'Owner, SUM(Amount)'))),
       executeCached(executionContext, `owner-won:${JSON.stringify(closedWonFilters)}`, () => this.zohoService.aggregate(groupQuery(closedWonFilters, 'Owner, COUNT(id)'))),
       executeCached(executionContext, `deal-total:${JSON.stringify(yearFilters)}`, () => this.zohoService.aggregate(`select COUNT(id) from ${CRM_API_NAMES.Deals} where ${buildWhereClause(buildFilterClauses(yearFilters))}`)),
       executeCached(executionContext, `deal-won:${JSON.stringify(closedWonFilters)}`, () => this.zohoService.aggregate(`select COUNT(id) from ${CRM_API_NAMES.Deals} where ${buildWhereClause(buildFilterClauses(closedWonFilters))}`))
     ]);
     const wonByOwner = new Map(ownerWon.rows.map((row) => [ownerLabel(row.Owner), aggregateNumber(row, 'COUNT(id)')]));
-    const owners = ownerTotals.rows.map((row) => {
+    const valueByOwner = new Map(ownerValues.rows.map((row) => [ownerLabel(row.Owner), aggregateNumber(row, 'SUM(Amount)')]));
+    const owners = ownerCounts.rows.map((row) => {
       const owner = ownerLabel(row.Owner);
+      const ownerId = row.Owner && typeof row.Owner === 'object' ? row.Owner.id : row.Owner;
       const deals = aggregateNumber(row, 'COUNT(id)');
       const won = wonByOwner.get(owner) || 0;
-      return { owner, deals, total_value: aggregateNumber(row, 'SUM(Amount)'), average_value: aggregateNumber(row, 'AVG(Amount)'), closed_won: won, win_rate: deals ? Number(((won / deals) * 100).toFixed(2)) : null };
+      const totalValue = valueByOwner.get(owner) || 0;
+      return { owner, owner_id: ownerId ? String(ownerId) : null, deals, total_value: totalValue, average_value: deals ? Number((totalValue / deals).toFixed(2)) : 0, closed_won: won, win_rate: deals ? Number(((won / deals) * 100).toFixed(2)) : null };
     }).sort((left, right) => right.total_value - left.total_value).slice(0, request.ranking?.limit || 20);
     const overallDeals = aggregateNumber(totalDeals.rows[0], 'COUNT(id)');
     const overallWon = aggregateNumber(wonDeals.rows[0], 'COUNT(id)');
-    return { module: 'Deals', request_type: 'analysis', analysis: 'owner_performance', year, owners, overall: { deals: overallDeals, closed_won: overallWon, win_rate: overallDeals ? Number(((overallWon / overallDeals) * 100).toFixed(2)) : null } };
+    const topOwners = owners.slice(0, 3).filter((owner) => owner.owner_id);
+    const topDeals = await Promise.all(topOwners.map((owner) => executeCached(
+      executionContext,
+      `top-deals:${owner.owner_id}:${year}`,
+      () => this.zohoService.query({
+        module: 'Deals',
+        fields: ['Deal_Name', 'Account_Name', 'Amount', 'Stage', 'Closing_Date'],
+        filters: [...yearFilters, { field: 'Owner', operator: 'equals', value: owner.owner_id }],
+        sort: { field: 'Amount', order: 'desc' },
+        limit: 3,
+        offset: 0
+      })
+    )));
+    const topDealsByOwner = new Map(topOwners.map((owner, index) => [owner.owner, (topDeals[index]?.records || []).map(sanitizeZohoRecord)]));
+    const ownersWithDeals = owners.map((owner) => ({ ...owner, top_deals: topDealsByOwner.get(owner.owner) || [] }));
+    return { module: 'Deals', request_type: 'analysis', analysis: 'owner_performance', year, owners: ownersWithDeals, overall: { deals: overallDeals, closed_won: overallWon, win_rate: overallDeals ? Number(((overallWon / overallDeals) * 100).toFixed(2)) : null } };
+  }
+
+  async salesPerformanceAnalysis(request, executionContext = createExecutionContext()) {
+    const dateFilter = request.filters.find((filter) => filter.field === 'Created_Time');
+    const moduleFilters = (module) => module === 'Deals'
+      ? request.filters
+      : request.filters.map((filter) => ({ ...filter }));
+    const countRequest = (module) => ({ ...request, module, filters: moduleFilters(module), request_type: 'count', fields: ['id'] });
+    const leadFilters = moduleFilters('Leads');
+    const convertedFilters = [...leadFilters, { field: 'Converted__s', operator: 'equals', value: true }];
+    const [leads, convertedLeads, accounts, contacts, deals, leadSources, owners] = await Promise.all([
+      executeCached(executionContext, 'sales:leads', () => this.count(countRequest('Leads'))),
+      executeCached(executionContext, 'sales:converted-leads', () => this.count({ ...countRequest('Leads'), filters: convertedFilters })),
+      executeCached(executionContext, 'sales:accounts', () => this.count(countRequest('Accounts'))),
+      executeCached(executionContext, 'sales:contacts', () => this.count(countRequest('Contacts'))),
+      executeCached(executionContext, 'sales:deals', () => this.count(countRequest('Deals'))),
+      executeCached(executionContext, 'sales:lead-sources', () => this.leadSourceReport({ ...request, module: 'Leads', fields: ['id', 'Lead_Source', 'Converted__s', 'Created_Time'], filters: leadFilters }, executionContext)),
+      executeCached(executionContext, 'sales:owners', () => this.ownerPerformanceReport({ ...request, module: 'Deals', filters: moduleFilters('Deals') }, executionContext))
+    ]);
+    const leadConversionRate = leads.count ? Number(((convertedLeads.count / leads.count) * 100).toFixed(2)) : 0;
+    const dealClosedWonRate = owners.overall?.deals ? Number(((owners.overall.closed_won / owners.overall.deals) * 100).toFixed(2)) : 0;
+    return {
+      module: 'CRM',
+      request_type: 'analysis',
+      analysis: 'sales_performance',
+      year: dateFilter?.value?.[0]?.slice(0, 4) || new Date().getFullYear(),
+      totals: { leads: leads.count, converted_leads: convertedLeads.count, accounts: accounts.count, contacts: contacts.count, deals: deals.count },
+      lead_conversion_rate: leadConversionRate,
+      lead_sources: leadSources.source_breakdown,
+      top_lead_sources: leadSources.source_breakdown.filter((source) => source.count >= 10).sort((left, right) => right.percentage - left.percentage).slice(0, 3),
+      deal_owners: owners.owners.slice(0, 3),
+      top_deal_owners: owners.owners.slice(0, 3),
+      comparison: { lead_conversion_rate: leadConversionRate, deal_closed_won_rate: dealClosedWonRate, strongest_lead_source: leadSources.source_breakdown[0]?.source || null, strongest_deal_owner: owners.owners[0]?.owner || null }
+    };
+  }
+
+  async closedWonSummary(request, executionContext = createExecutionContext()) {
+    validateAggregateQuery({
+      module: 'Deals',
+      fields: ['id', 'Amount'],
+      filters: request.filters,
+      aggregate: { operation: 'sum', field: 'Amount' }
+    });
+    const whereClause = buildWhereClause(buildFilterClauses(request.filters));
+    const query = `select COUNT(id), SUM(Amount), AVG(Amount) from ${CRM_API_NAMES.Deals} where ${whereClause}`;
+    const result = await executeCached(executionContext, `closed-won-summary:${query}`, () => this.zohoService.aggregate(query));
+    const row = result.rows[0] || {};
+    const count = aggregateNumber(row, 'COUNT(id)');
+    const totalAmount = aggregateNumber(row, 'SUM(Amount)');
+    const averageAmount = aggregateNumber(row, 'AVG(Amount)');
+    const currency = row.currency || row.Currency || null;
+    return {
+      module: 'Deals',
+      request_type: 'analysis',
+      analysis: 'closed_won_summary',
+      count,
+      total_amount: totalAmount,
+      average_amount: averageAmount,
+      ...(currency ? { currency } : {}),
+      filters: request.filters,
+      data: [],
+      pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false }
+    };
+  }
+
+  async countAndRecords(request, retrieveAll, executionContext = createExecutionContext()) {
+    const countResult = await this.count(request);
+    const records = [];
+    let offset = request.offset;
+    let moreRecords = true;
+    while (moreRecords) {
+      const page = await executeCached(executionContext, `count-records:${JSON.stringify({ ...request, offset })}`, () => this.zohoService.query({ ...request, request_type: 'records', offset, limit: retrieveAll ? 200 : request.limit }));
+      records.push(...page.records.map(sanitizeZohoRecord));
+      moreRecords = retrieveAll && Boolean(page.info?.more_records);
+      offset += retrieveAll ? 200 : request.limit;
+    }
+    return {
+      module: request.module,
+      request_type: 'analysis',
+      analysis: 'count_and_records',
+      count: countResult.count,
+      data: records,
+      pagination: { limit: request.limit, offset: request.offset, returned: records.length, more_records: false }
+    };
   }
 
   
@@ -343,11 +468,15 @@ function aggregateNumber(row = {}, key) {
 }
 
 function createExecutionContext() {
-  return { resultCache: new Map(), startedAt: Date.now() };
+  return { resultCache: new Map(), startedAt: Date.now(), queryBudget: Math.max(1, env.zohoMaxQueryBudget), queriesReserved: 0 };
 }
 
 async function executeCached(context, key, operation) {
   if (context.resultCache.has(key)) return context.resultCache.get(key);
+  if (context.queriesReserved >= context.queryBudget) {
+    throw createAppError('CRM_QUERY_BUDGET_EXCEEDED', `CRM query execution budget exceeded (${context.queryBudget} operations).`, 503, { budget: context.queryBudget, queries_reserved: context.queriesReserved });
+  }
+  context.queriesReserved += 1;
   const result = await operation();
   context.resultCache.set(key, result);
   return result;
@@ -386,6 +515,25 @@ function normalizeSemanticRequest(input) {
     request_type: 'analysis',
     analysis: { type: 'lead_conversion' }
   };
+}
+
+function classifyExecution(input = {}) {
+  const explicit = String(input.complexity || '').toUpperCase();
+  if (['SIMPLE', 'MODERATE', 'COMPLEX', 'MULTI-STEP'].includes(explicit)) {
+    return { classification: explicit, steps: stepsForRequest(input) };
+  }
+  if (input.request_type === 'analysis') return { classification: 'MULTI-STEP', steps: stepsForRequest(input) };
+  if (input.request_type === 'aggregate' || input.request_type === 'count') return { classification: 'MODERATE', steps: stepsForRequest(input) };
+  return { classification: 'SIMPLE', steps: stepsForRequest(input) };
+}
+
+function stepsForRequest(input = {}) {
+  if (input.request_type === 'analysis') {
+    if (input.analysis?.type === 'owner_performance') return ['owner totals', 'closed-won totals', 'overall totals', 'calculate ranking and win rate', 'validate result'];
+    if (input.analysis?.type === 'lead_source_report') return ['source counts', 'top-source records', 'calculate percentages', 'validate result'];
+    if (input.analysis?.type === 'lead_conversion') return ['created lead count', 'converted lead count', 'related deal lookup', 'calculate conversion rate', 'validate result'];
+  }
+  return ['execute one bounded CRM query', 'validate result'];
 }
 
 module.exports = { CrmService };

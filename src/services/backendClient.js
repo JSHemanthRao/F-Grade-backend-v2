@@ -1,6 +1,8 @@
 const axios = require('axios');
 const { env } = require('../config/env');
 
+const MAX_QUESTION_LENGTH = 2000;
+
 class BackendClient {
   constructor(httpClient = axios, config = env) {
     this.httpClient = httpClient;
@@ -40,6 +42,12 @@ class BackendClient {
     if (typeof question !== 'string' || question.trim().length === 0) {
       const error = new Error('Question must be a non-empty string.');
       error.code = 'INVALID_QUESTION';
+      error.statusCode = 400;
+      throw error;
+    }
+    if (question.length > MAX_QUESTION_LENGTH) {
+      const error = new Error(`Question must not exceed ${MAX_QUESTION_LENGTH} characters.`);
+      error.code = 'QUESTION_TOO_LONG';
       error.statusCode = 400;
       throw error;
     }

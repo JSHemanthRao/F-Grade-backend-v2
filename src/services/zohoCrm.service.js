@@ -7,6 +7,8 @@ const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
 const { env } = require('../config/env');
 const { CircuitBreaker, isTransientFailure } = require('../utils/circuitBreaker');
+const { CRM_API_NAMES } = require('../constants/crmModules');
+const { validateModuleFieldScope } = require('../validators/crmQuery.validator');
 
 class ZohoCrmService {
   constructor(httpClient = axios, configLoader = getZohoConfig, authService) {
@@ -37,7 +39,7 @@ class ZohoCrmService {
   }
 
   async executeRequest(method, url, options) {
-    const maxAttempts = Math.max(1, env.zohoMaxRetries + 1);
+    const maxAttempts = options?.retrySameRequest === false ? 1 : Math.max(1, env.zohoMaxRetries + 1);
     let attempt = 0;
     const startedAt = Date.now();
     this.executionStats.calls += 1;
@@ -85,7 +87,7 @@ class ZohoCrmService {
       const response = await this.executeRequest('post', `${apiBaseUrl}/coql`, { data: { select_query: selectQuery }, config: {
         headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
         timeout: config.timeoutMs
-      }});
+      }, retrySameRequest: false });
       const records = Array.isArray(response.data?.data) ? response.data.data : [];
       const info = response.data?.info || {};
       const firstRecord = records[0] || {};
@@ -93,7 +95,11 @@ class ZohoCrmService {
       return { records, info };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
-      throw createAppError('ZOHO_QUERY_ERROR', 'Unable to retrieve CRM data.', 502);
+      log('error', `[ZOHO QUERY FAILURE] operation=record_query query=${selectQuery} status=${error.response?.status || 'unknown'}`);
+      throw createAppError('ZOHO_QUERY_ERROR', 'Unable to retrieve CRM data.', mapZohoStatus(error.response?.status), {
+        ...safeZohoDetails(error),
+        operation: 'record_query'
+      });
     }
   }
 
@@ -111,22 +117,25 @@ class ZohoCrmService {
       const response = await this.executeRequest('post', `${apiBaseUrl}/coql`, { data: { select_query: selectQuery }, config: {
         headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
         timeout: config.timeoutMs
-      }});
+      }, retrySameRequest: false });
       const rows = Array.isArray(response.data?.data) ? response.data.data : [];
       log('info', `[COQL aggregate result] count=${rows.length}`);
       return { rows };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
+      log('error', `[ZOHO QUERY FAILURE] operation=aggregate_query query=${selectQuery} status=${error.response?.status || 'unknown'}`);
       throw createAppError(
         'ZOHO_AGGREGATE_ERROR',
         'Unable to execute the CRM aggregate query.',
         mapZohoStatus(error.response?.status),
-        safeZohoDetails(error)
+        { ...safeZohoDetails(error), operation: 'aggregate_query' }
       );
     }
   }
 
   async count(module, filters = []) {
+    const moduleName = Object.keys(CRM_API_NAMES).find((name) => CRM_API_NAMES[name] === module) || module;
+    validateModuleFieldScope({ module: moduleName, filters });
     let config;
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
     const token = await this.authService.getAccessToken();
@@ -156,6 +165,8 @@ class ZohoCrmService {
   }
 
   async getRecordsByIds(module, ids, fields) {
+    const moduleName = Object.keys(CRM_API_NAMES).find((name) => CRM_API_NAMES[name] === module) || module;
+    validateModuleFieldScope({ module: moduleName, fields });
     let config;
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
     const token = await this.authService.getAccessToken();
@@ -169,6 +180,8 @@ class ZohoCrmService {
   }
 
   async searchRecords(module, fields, filters, page = 1, perPage = 200) {
+    const moduleName = Object.keys(CRM_API_NAMES).find((name) => CRM_API_NAMES[name] === module) || module;
+    validateModuleFieldScope({ module: moduleName, fields, filters });
     let config;
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
     const token = await this.authService.getAccessToken();
