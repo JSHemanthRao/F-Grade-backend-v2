@@ -110,7 +110,7 @@ test('routes Lead-to-Closed-Won conversion rate to Lead conversion analysis', ()
   const request = planQuestion('give me the conversion rate from leads to closed won deals.');
   assert.equal(request.module, 'Leads');
   assert.equal(request.request_type, 'analysis');
-  assert.deepEqual(request.analysis, { type: 'lead_conversion' });
+  assert.deepEqual(request.analysis, { type: 'lead_closed_won_conversion' });
   assert.equal(request.filters.some((filter) => filter.field === 'Stage'), false);
   assert.equal(request.aggregate, undefined);
 });
@@ -118,8 +118,16 @@ test('routes Lead-to-Closed-Won conversion rate to Lead conversion analysis', ()
 test('does not let total wording turn Lead conversion into SUM(Amount)', () => {
   const { planQuestion } = require('../src/controllers/crm.controller');
   const request = planQuestion('show the total conversion rate from leads to closed won deals');
-  assert.deepEqual(request.analysis, { type: 'lead_conversion' });
+  assert.deepEqual(request.analysis, { type: 'lead_closed_won_conversion' });
   assert.equal(request.aggregate, undefined);
+});
+
+test('plans Lead-to-Closed-Won conversion as a cross-module analysis', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('give me the conversion rate from leads to closed won deals');
+  assert.equal(request.analysis.type, 'lead_closed_won_conversion');
+  assert.equal(request.module, 'Leads');
+  assert.deepEqual(request.filters, []);
 });
 
 test('accepts Copilot count requests without record fields', () => {

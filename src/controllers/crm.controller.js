@@ -194,7 +194,7 @@ function planQuestion(question) {
       module: 'Leads',
       complexity: 'MULTI-STEP',
       request_type: 'analysis',
-      analysis: { type: 'lead_conversion' },
+      analysis: { type: isLeadToClosedWonQuestion(lower) ? 'lead_closed_won_conversion' : 'lead_conversion' },
       fields: ['id'],
       filters,
       limit: 20,
@@ -379,6 +379,11 @@ function isLeadConversionQuestion(lowerText) {
     && /\b(?:lead|leads)\b/.test(lowerText);
 }
 
+function isLeadToClosedWonQuestion(lowerText) {
+  return /\b(?:closed won|closed-won)\b/.test(lowerText)
+    && /\b(?:lead|leads)\b/.test(lowerText);
+}
+
 function extractRequestedYear(lowerText) {
   const match = lowerText.match(/\b(?:created\s+in\s+|during\s+|for\s+)(20\d{2})\b/);
   return match ? Number(match[1]) : new Date().getFullYear();
@@ -403,6 +408,11 @@ function buildAssistantAnswer(question, result) {
 
   if (result?.analysis === 'count_and_records') {
     return `I found ${result.count} matching ${module.toLowerCase()} records and retrieved ${result.data?.length || 0} for display.`;
+  }
+
+  if (result?.analysis === 'lead_closed_won_conversion') {
+    const metrics = result.metrics || {};
+    return `Total Leads: ${metrics.total_leads}. Converted Leads: ${metrics.converted_leads}. Closed Won Deals: ${metrics.closed_won_deals}. Lead Conversion Rate: ${metrics.converted_leads} / ${metrics.total_leads} x 100 = ${formatPercent(metrics.lead_conversion_rate)}. Lead-to-Closed-Won Rate: ${metrics.closed_won_deals} / ${metrics.total_leads} x 100 = ${formatPercent(metrics.lead_to_closed_won_rate)}.`;
   }
 
   if (result?.request_type === 'aggregate') {

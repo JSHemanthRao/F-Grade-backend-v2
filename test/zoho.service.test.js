@@ -48,6 +48,22 @@ test('calculates Closed Won monthly metrics from one consistently filtered aggre
   assert.deepEqual({ count: result.count, total_amount: result.total_amount, average_amount: result.average_amount }, { count: 4, total_amount: 1000, average_amount: 250 });
 });
 
+test('calculates Lead-to-Closed-Won rate from separate Lead and Deal counts', async () => {
+  const calls = [];
+  const service = new CrmService({
+    count: async (module, filters) => {
+      calls.push({ module, filters });
+      if (module === 'Leads' && filters.some((filter) => filter.field === 'Converted__s')) return { count: 4 };
+      if (module === 'Deals') return { count: 2 };
+      return { count: 10 };
+    }
+  });
+  const result = await service.leadClosedWonConversionAnalysis({ module: 'Leads', filters: [], limit: 20, offset: 0 });
+  assert.deepEqual(result.metrics, { total_leads: 10, converted_leads: 4, closed_won_deals: 2, lead_conversion_rate: 40, lead_to_closed_won_rate: 20 });
+  assert.equal(calls.some(({ module, filters }) => module === 'Leads' && filters.some((filter) => filter.field === 'Stage')), false);
+  assert.equal(calls.some(({ module, filters }) => module === 'Deals' && filters.some((filter) => filter.field === 'Stage' && filter.value === 'Closed Won')), true);
+});
+
 test('builds a Lead Source report from filtered records', async () => {
   const calls = [];
   const service = new CrmService({

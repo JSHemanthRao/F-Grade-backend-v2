@@ -51,6 +51,11 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'lead_conversion');
       return result;
     }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_closed_won_conversion') {
+      const result = await this.leadClosedWonConversionAnalysis(request, executionContext);
+      this.logExecution(executionId, startedAt, statsAtStart, 'lead_closed_won_conversion');
+      return result;
+    }
     if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_source_report') {
       const result = await this.leadSourceReport(request, executionContext);
       this.logExecution(executionId, startedAt, statsAtStart, 'lead_source_report');
@@ -300,6 +305,42 @@ class CrmService {
       count: countResult.count,
       data: records,
       pagination: { limit: request.limit, offset: request.offset, returned: records.length, more_records: false }
+    };
+  }
+
+  async leadClosedWonConversionAnalysis(request, executionContext = createExecutionContext()) {
+    const leadFilters = request.filters.filter((filter) => filter.field !== 'Stage');
+    const convertedFilters = [...leadFilters, { field: 'Converted__s', operator: 'equals', value: true }];
+    const dealFilters = [
+      ...request.filters.filter((filter) => filter.field !== 'Converted__s'),
+      { field: 'Stage', operator: 'equals', value: 'Closed Won' }
+    ];
+    const countRequest = (module, filters) => ({ module, request_type: 'count', fields: ['id'], filters, limit: 1, offset: 0 });
+    const [totalLeads, convertedLeads, closedWonDeals] = await Promise.all([
+      executeCached(executionContext, `conversion-total-leads:${JSON.stringify(leadFilters)}`, () => this.count(countRequest('Leads', leadFilters))),
+      executeCached(executionContext, `conversion-converted-leads:${JSON.stringify(convertedFilters)}`, () => this.count(countRequest('Leads', convertedFilters))),
+      executeCached(executionContext, `conversion-closed-won-deals:${JSON.stringify(dealFilters)}`, () => this.count(countRequest('Deals', dealFilters)))
+    ]);
+    const leadCount = totalLeads.count;
+    const convertedCount = convertedLeads.count;
+    const closedWonCount = closedWonDeals.count;
+    return {
+      module: 'CRM',
+      request_type: 'analysis',
+      analysis: 'lead_closed_won_conversion',
+      metrics: {
+        total_leads: leadCount,
+        converted_leads: convertedCount,
+        closed_won_deals: closedWonCount,
+        lead_conversion_rate: leadCount ? Number(((convertedCount / leadCount) * 100).toFixed(2)) : 0,
+        lead_to_closed_won_rate: leadCount ? Number(((closedWonCount / leadCount) * 100).toFixed(2)) : 0
+      },
+      formulas: {
+        lead_conversion_rate: 'converted_leads / total_leads * 100',
+        lead_to_closed_won_rate: 'closed_won_deals / total_leads * 100'
+      },
+      data: [],
+      pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false }
     };
   }
 
