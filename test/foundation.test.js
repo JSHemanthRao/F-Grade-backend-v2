@@ -188,6 +188,19 @@ test('plans a general-purpose count question for this month leads', async () => 
   assert.equal(response.body.count, 7);
 });
 
+test('plans plain meeting requests as the Meetings module', async () => {
+  let request;
+  const app = createApp({ crmService: { query: async (input) => {
+    request = input;
+    return { module: input.module, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } };
+  } } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'give me meetings' });
+  assert.equal(response.status, 200);
+  assert.equal(request.module, 'Meetings');
+  assert.deepEqual(request.fields, ['Event_Title', 'Subject', 'Start_DateTime', 'End_DateTime', 'Location', 'Owner']);
+  assert.equal(response.body.module, 'Meetings');
+});
+
 test('plans first lead records as the latest requested page', async () => {
   let request;
   const app = createApp({ crmService: { query: async (input) => {

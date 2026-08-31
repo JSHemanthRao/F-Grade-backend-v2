@@ -542,6 +542,7 @@ function formatAmount(value, currency) {
 }
 
 function detectModule(lowerText) {
+  if (/(meeting|meetings|event|events|appointment|appointments)/.test(lowerText)) return 'Meetings';
   if (/(lead|leads)/.test(lowerText) && /(converted|conversion|become.*deal|became.*deal)/.test(lowerText)) return 'Leads';
   if (/(deal|deals)/.test(lowerText)) return 'Deals';
   if (/(lead|leads)/.test(lowerText)) return 'Leads';
@@ -554,6 +555,7 @@ function defaultFields(module) {
   if (module === 'Leads') return ['First_Name', 'Last_Name', 'Company', 'Created_Time', 'Lead_Source', 'Owner'];
   if (module === 'Accounts') return ['Account_Name', 'Industry', 'Owner', 'Created_Time'];
   if (module === 'Contacts') return ['First_Name', 'Last_Name', 'Account_Name', 'Email', 'Owner'];
+  if (module === 'Meetings') return ['Event_Title', 'Subject', 'Start_DateTime', 'End_DateTime', 'Location', 'Owner'];
   return ['Deal_Name', 'Amount', 'Stage', 'Owner', 'Closing_Date'];
 }
 
@@ -562,6 +564,7 @@ function defaultSortField(module) {
   if (module === 'Leads') return 'Created_Time';
   if (module === 'Accounts') return 'Created_Time';
   if (module === 'Contacts') return 'Created_Time';
+  if (module === 'Meetings') return 'Start_DateTime';
   return 'Created_Time';
 }
 
@@ -661,6 +664,10 @@ function detectDateFilter(lowerText, module) {
 }
 
 function dateFieldForQuestion(lowerText, module) {
+  if (module === 'Meetings') {
+    if (/(created|creation|new|added|entered)/.test(lowerText)) return 'Created_Time';
+    return 'Start_DateTime';
+  }
   if (module !== 'Deals') return 'Created_Time';
   if (/(created|creation|new|added|entered)/.test(lowerText)) return 'Created_Time';
   return 'Closing_Date';

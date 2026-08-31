@@ -16,6 +16,8 @@ Before retrieval, interpret the user's request as precisely as possible so the a
 
 When the current request conflicts with prior context, prefer the current request unless the user clearly indicates that they want the earlier context to remain active.
 
+If the user names Meetings or Events, treat that as a first-class CRM module lookup and do not route it to Deals.
+
 ---
 
 # 1. ABSOLUTE CRM ACCESS PRINCIPLE
