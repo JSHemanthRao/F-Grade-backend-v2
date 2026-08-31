@@ -85,7 +85,8 @@ function buildDashboardSpecification(question, result) {
 
   if (result?.analysis === 'sales_performance') {
     const totals = result.totals || {};
-    return `2026 sales performance: ${totals.leads || 0} leads, ${totals.converted_leads || 0} converted leads, ${totals.accounts || 0} accounts, ${totals.contacts || 0} contacts, and ${totals.deals || 0} deals. Lead conversion rate: ${formatPercent(result.lead_conversion_rate)}. Deal Closed Won rate: ${formatPercent(result.comparison?.deal_closed_won_rate)}.`;
+    const year = result.year || new Date().getFullYear();
+    return `${year} sales performance: ${totals.leads || 0} leads, ${totals.converted_leads || 0} converted leads, ${totals.accounts || 0} accounts, ${totals.contacts || 0} contacts, and ${totals.deals || 0} deals. Lead conversion rate: ${formatPercent(result.lead_conversion_rate)}. Deal Closed Won rate: ${formatPercent(result.comparison?.deal_closed_won_rate)}.`;
   }
   const sourceBreakdown = Array.isArray(result?.source_breakdown) ? result.source_breakdown : [];
   const rows = Array.isArray(result?.data) ? result.data : [];
