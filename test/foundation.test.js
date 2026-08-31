@@ -444,6 +444,17 @@ test('accepts valid API fields for Deals, Leads, Contacts, and Accounts', () => 
   }
 });
 
+test('accepts every backend-supported CRM module with safe default record fields', () => {
+  for (const module of Object.keys(CRM_MODULES)) {
+    const request = validateCrmQuery({ module });
+    assert.equal(request.module, module);
+    assert.equal(request.request_type, 'records');
+    assert.ok(Array.isArray(request.fields));
+    assert.ok(request.fields.length > 0);
+    assert.equal(request.fields.every((field) => CRM_MODULES[module].includes(field)), true);
+  }
+});
+
 test('rejects a cross-module aggregate field before CRM execution', () => {
   const { validateModuleFieldScope } = require('../src/validators/crmQuery.validator');
   assert.throws(
