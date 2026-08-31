@@ -51,6 +51,11 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'lead_conversion');
       return result;
     }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'highest_creation_day') {
+      const result = await this.highestCreationDayAnalysis(request, executionContext);
+      this.logExecution(executionId, startedAt, statsAtStart, 'highest_creation_day');
+      return result;
+    }
     if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_closed_won_conversion') {
       const result = await this.leadClosedWonConversionAnalysis(request, executionContext);
       this.logExecution(executionId, startedAt, statsAtStart, 'lead_closed_won_conversion');
@@ -408,7 +413,48 @@ class CrmService {
     };
   }
 
-  
+  async highestCreationDayAnalysis(request, executionContext = createExecutionContext()) {
+    const records = [];
+    let offset = 0;
+    let moreRecords = true;
+    const pageSize = 200;
+    while (moreRecords) {
+      const page = await executeCached(executionContext, `highest-creation-day:${JSON.stringify({ filters: request.filters, offset })}`, () => this.zohoService.query({
+        ...request,
+        module: 'Leads',
+        fields: ['id', 'Created_Time'],
+        request_type: 'records',
+        sort: undefined,
+        limit: pageSize,
+        offset
+      }));
+      records.push(...page.records.map(sanitizeZohoRecord));
+      moreRecords = Boolean(page.info?.more_records);
+      offset += pageSize;
+    }
+    const countsByDate = new Map();
+    for (const record of records) {
+      const createdTime = record.Created_Time;
+      if (typeof createdTime !== 'string' || createdTime.length < 10) continue;
+      const date = createdTime.slice(0, 10);
+      countsByDate.set(date, (countsByDate.get(date) || 0) + 1);
+    }
+    const dateBreakdown = [...countsByDate.entries()]
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => (b.count - a.count) || a.date.localeCompare(b.date));
+    const top = dateBreakdown[0] || null;
+    return {
+      module: 'Leads',
+      request_type: 'analysis',
+      analysis: 'highest_creation_day',
+      total_leads_checked: records.length,
+      top_date: top ? top.date : null,
+      top_count: top ? top.count : 0,
+      date_breakdown: dateBreakdown,
+      data: [],
+      pagination: { limit: request.limit, offset: request.offset, returned: records.length, more_records: false }
+    };
+  }
 
   async leadConversionAnalysis(request) {
     log('info', '[METRIC QUERY] lead conversion analysis');

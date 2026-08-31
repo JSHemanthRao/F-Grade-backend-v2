@@ -25,6 +25,36 @@ test('uses server-side aggregate values for filtered CRM records', async () => {
   assert.equal(result.data[0].value, 150000);
 });
 
+test('groups Leads by calendar date in backend memory to find the busiest creation day, never Amount', async () => {
+  const requestsSeen = [];
+  const service = new CrmService({
+    query: async (request) => {
+      requestsSeen.push(request);
+      return {
+        records: [
+          { id: '1', Created_Time: '2026-08-05T09:00:00+05:30' },
+          { id: '2', Created_Time: '2026-08-05T10:00:00+05:30' },
+          { id: '3', Created_Time: '2026-08-06T09:00:00+05:30' }
+        ],
+        info: { more_records: false }
+      };
+    }
+  });
+  const result = await service.query({
+    module: 'Leads',
+    request_type: 'analysis',
+    analysis: { type: 'highest_creation_day' },
+    fields: ['id', 'Created_Time'],
+    filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-08-31'] }]
+  });
+  assert.equal(result.analysis, 'highest_creation_day');
+  assert.equal(result.top_date, '2026-08-05');
+  assert.equal(result.top_count, 2);
+  assert.equal(result.total_leads_checked, 3);
+  assert.deepEqual(result.date_breakdown, [{ date: '2026-08-05', count: 2 }, { date: '2026-08-06', count: 1 }]);
+  assert.ok(requestsSeen.every((request) => request.fields.every((field) => field !== 'Amount')));
+});
+
 test('calculates Closed Won monthly metrics from one consistently filtered aggregate', async () => {
   let query;
   const service = new CrmService({

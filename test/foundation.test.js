@@ -140,6 +140,24 @@ test('plans the full lead-to-closed-won funnel as cross-module analysis', () => 
   assert.deepEqual(request.filters, []);
 });
 
+test('plans "which day had the highest Leads created" as a backend day-grouping analysis, never Amount', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('Which day had the highest number of Leads created this month?');
+  assert.equal(request.module, 'Leads');
+  assert.deepEqual(request.analysis, { type: 'highest_creation_day' });
+  assert.deepEqual(request.fields, ['id', 'Created_Time']);
+  assert.equal(request.aggregate, undefined);
+});
+
+test('does not let "total" wording turn a Leads created-this-month count into SUM(Amount)', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('What is the total number of leads created this month?');
+  assert.equal(request.module, 'Leads');
+  assert.equal(request.request_type, 'count');
+  assert.deepEqual(request.fields, ['id']);
+  assert.equal(request.aggregate, undefined);
+});
+
 test('accepts Copilot count requests without record fields', () => {
   const request = validateCrmQuery({
     module: 'Leads',

@@ -228,6 +228,19 @@ function planQuestion(question) {
     };
   }
 
+  if (module === 'Leads' && isHighestLeadCreationDayQuestion(lower)) {
+    return {
+      module: 'Leads',
+      complexity: 'MODERATE',
+      request_type: 'analysis',
+      analysis: { type: 'highest_creation_day' },
+      fields: ['id', 'Created_Time'],
+      filters,
+      limit: 200,
+      offset: 0
+    };
+  }
+
   const ownerName = extractOwnerName(text);
   if (ownerName) filters.push({ field: 'Owner', operator: 'equals', value: ownerName });
 
@@ -323,7 +336,7 @@ function planQuestion(question) {
     };
   }
 
-  const aggregateOperation = detectAggregateOperation(lower);
+  const aggregateOperation = module === 'Leads' ? null : detectAggregateOperation(lower);
   if (aggregateOperation) {
     return {
       module,
@@ -420,6 +433,13 @@ function isLeadToClosedWonQuestion(lowerText) {
     && /\b(?:lead|leads)\b/.test(lowerText);
 }
 
+function isHighestLeadCreationDayQuestion(lowerText) {
+  return /\bday\b/.test(lowerText)
+    && /(highest|most|maximum|max|busiest|top)/.test(lowerText)
+    && /\bleads?\b/.test(lowerText)
+    && /\bcreated\b/.test(lowerText);
+}
+
 function extractRequestedYear(lowerText) {
   const match = lowerText.match(/\b(?:created\s+in\s+|during\s+|for\s+)(20\d{2})\b/);
   return match ? Number(match[1]) : new Date().getFullYear();
@@ -449,6 +469,12 @@ function buildAssistantAnswer(question, result) {
   if (result?.analysis === 'lead_closed_won_conversion') {
     const metrics = result.metrics || {};
     return `Total Leads: ${metrics.total_leads}. Converted Leads: ${metrics.converted_leads}. Closed Won Deals: ${metrics.closed_won_deals}. Lead Conversion Rate: ${metrics.converted_leads} / ${metrics.total_leads} x 100 = ${formatPercent(metrics.lead_conversion_rate)}. Lead-to-Closed-Won Rate: ${metrics.closed_won_deals} / ${metrics.total_leads} x 100 = ${formatPercent(metrics.lead_to_closed_won_rate)}.`;
+  }
+
+  if (result?.analysis === 'highest_creation_day') {
+    return result.top_date
+      ? `${result.top_date} had the highest number of Leads created: ${result.top_count} (out of ${result.total_leads_checked} Leads checked for the selected period).`
+      : `No Leads were created in the selected period.`;
   }
 
   if (result?.analysis === 'conversion_funnel') {
