@@ -5,7 +5,7 @@ const CRM_MODULES = Object.freeze({
   Deals: ['id', 'Deal_Name', 'Amount', 'Stage', 'Closing_Date', 'Lead_Conversion_Time', 'Account_Name', 'Type', 'Probability', 'Owner', 'Created_Time', 'Modified_Time'],
   Tasks: ['id', 'Subject', 'Status', 'Due_Date', 'Priority', 'Who_Id', 'What_Id', 'Owner', 'Created_Time', 'Modified_Time'],
   Calls: ['id', 'Subject', 'Call_Type', 'Call_Start_Time', 'Call_Duration', 'Call_Result', 'Status', 'Who_Id', 'What_Id', 'Owner', 'Created_Time', 'Modified_Time'],
-  Meetings: ['id', 'Event_Title', 'Subject', 'Start_DateTime', 'End_DateTime', 'Location', 'Who_Id', 'What_Id', 'Owner', 'Created_Time', 'Modified_Time'],
+  Meetings: ['id', 'Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Who_Id', 'What_Id', 'Owner', 'Created_Time', 'Modified_Time', 'Participants'],
   Notes: ['id', 'Note_Title', 'Title', 'Note_Content', 'Parent_Id', 'Owner', 'Created_Time', 'Modified_Time'],
   Products: ['id', 'Product_Name', 'Product_Code', 'Unit_Price', 'Qty_in_Stock', 'Description', 'Product_Category', 'Owner', 'Created_Time', 'Modified_Time'],
   Vendors: ['id', 'Vendor_Name', 'Email', 'Phone', 'Website', 'City', 'State', 'Country', 'Category', 'Owner', 'Created_Time', 'Modified_Time'],
