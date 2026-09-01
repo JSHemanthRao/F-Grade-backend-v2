@@ -25,6 +25,8 @@ const env = Object.freeze({
   zohoMaxConcurrency: numberFromEnv('ZOHO_MAX_CONCURRENCY', 4),
   zohoMaxQueryBudget: numberFromEnv('ZOHO_MAX_QUERY_BUDGET', 20),
   zohoMetadataTtlMs: numberFromEnv('ZOHO_METADATA_TTL_MS', 300000)
+  ,
+  useZohoMetadataForStaticModules: process.env.USE_ZOHO_METADATA_FOR_STATIC_MODULES === 'true'
 });
 
 module.exports = { env };

@@ -13,6 +13,28 @@ class CrmService {
     this.zohoService = zohoService;
   }
 
+  async runDiagnostics() {
+    const modulesToCheck = ['Meetings', 'Events', 'Leads', 'Deals'];
+    const modules = {};
+    try {
+      const meta = await this.zohoService.getModulesMetadata();
+      modules.available = (meta.modules || []).map((m) => ({ api_name: m.api_name, module_name: m.module_name, plural_label: m.plural_label }));
+      modules.lookup = {};
+      for (const name of modulesToCheck) {
+        try {
+          const apiName = await this.zohoService.resolveModuleApiName(name);
+          const fields = await this.zohoService.getFieldMetadata(apiName);
+          modules.lookup[name] = { apiName, fields: fields.fields.slice(0, 50), metadataSample: fields.metadata.slice(0, 5) };
+        } catch (err) {
+          modules.lookup[name] = { error: err.message, details: err.details || null };
+        }
+      }
+      return modules;
+    } catch (err) {
+      throw err;
+    }
+  }
+
   async query(input, executionContext = createExecutionContext()) {
     const executionId = randomUUID();
     const startedAt = Date.now();

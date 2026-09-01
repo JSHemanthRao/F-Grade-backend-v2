@@ -80,7 +80,30 @@ class ZohoCrmService {
     const token = await this.authService.getAccessToken();
     const resolvedModule = await this.resolveModuleApiName(request.module);
     const staticFields = require('../constants/crmModules').CRM_MODULES[request.module] || [];
+
     if (CRM_API_NAMES[request.module]) {
+      // If enabled, prefer live metadata for modules that have static CRM_API_NAMES mapping.
+      if (env.useZohoMetadataForStaticModules) {
+        let metadataForStatic;
+        try {
+          metadataForStatic = await this.getFieldMetadata(resolvedModule);
+        } catch (err) {
+          // If metadata fetch fails, fall back to static COQL
+          const selectQuery = `${buildCoqlQuery(request)} limit ${request.offset}, ${request.limit}`;
+          return this.executeQueryRequest(selectQuery, token, config, request);
+        }
+        const requestedFields = Array.isArray(request.fields) ? request.fields : [];
+        const usableFields = requestedFields.length > 0
+          ? requestedFields.filter((field) => metadataForStatic.fields.includes(field))
+          : metadataForStatic.fields.slice(0, 6);
+        const finalFieldsStatic = usableFields.length > 0 ? usableFields : staticFields;
+        if (finalFieldsStatic.length === 0) {
+          const selectQuery = `${buildCoqlQuery(request)} limit ${request.offset}, ${request.limit}`;
+          return this.executeQueryRequest(selectQuery, token, config, request);
+        }
+        const selectQuery = `${buildDynamicCoqlQuery({ ...request, module: resolvedModule, fields: finalFieldsStatic })} limit ${request.offset}, ${request.limit}`;
+        return this.executeQueryRequest(selectQuery, token, config, request);
+      }
       const selectQuery = `${buildCoqlQuery(request)} limit ${request.offset}, ${request.limit}`;
       return this.executeQueryRequest(selectQuery, token, config, request);
     }
@@ -118,7 +141,7 @@ class ZohoCrmService {
       return { records, info };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
-      log('error', `[ZOHO QUERY FAILURE] operation=record_query query=${selectQuery} status=${error.response?.status || 'unknown'}`);
+      log('error', `[ZOHO QUERY FAILURE] operation=record_query query=${selectQuery} status=${error.response?.status || 'unknown'} message=${String(error.response?.data?.message || error.message).replace(/\n/g, ' ')}`);
       throw createAppError('ZOHO_QUERY_ERROR', 'Unable to retrieve CRM data.', mapZohoStatus(error.response?.status), {
         ...safeZohoDetails(error),
         operation: 'record_query'

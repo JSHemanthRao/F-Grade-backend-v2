@@ -5,6 +5,34 @@ const MAX_QUESTION_LENGTH = 2000;
 function createCrmController(crmService = new CrmService()) {
   const conversationContext = new Map();
   return {
+    test: async (req, res, next) => {
+      try {
+        const module = req.body?.module || 'Meetings';
+        const mock = {
+          success: true,
+          status: 'ok',
+          module,
+          request_type: 'records',
+          data: [{ id: 'mock-1', title: 'Mock record' }],
+          count: 1,
+          answer: `Mock response for module ${module}`
+        };
+        res.status(200).json(mock);
+      } catch (err) {
+        next(err);
+      }
+    },
+    diagnostics: async (req, res, next) => {
+      try {
+        if (typeof crmService.runDiagnostics !== 'function') {
+          return res.status(501).json({ success: false, status: 'error', error: { code: 'NOT_IMPLEMENTED', message: 'Diagnostics are not available.' } });
+        }
+        const result = await crmService.runDiagnostics();
+        res.status(200).json({ success: true, status: 'ok', result });
+      } catch (err) {
+        next(err);
+      }
+    },
     query: async (req, res, next) => {
       try {
         const result = await crmService.query(req.body);

@@ -93,6 +93,33 @@
         }
       }
     }
+    ,
+    "/api/crm/test": {
+      "post": {
+        "operationId": "testCrm",
+        "summary": "Lightweight CRM test endpoint",
+        "description": "Returns a deterministic mock CRM response useful for connector testing without Zoho authentication.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": false,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "module": { "type": "string" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Mock CRM response useful for connector verification.",
+            "schema": { "$ref": "#/definitions/CrmQueryResponse" }
+          }
+        }
+      }
+    }
   },
   "definitions": {
     "CrmQueryRequest": {
