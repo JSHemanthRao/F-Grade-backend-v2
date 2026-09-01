@@ -80,6 +80,11 @@ function isDashboardRequest(question) {
   return /(dashboard|visuali[sz]e|kpi|charts?|management report|analytics dashboard|performance dashboard)/i.test(question);
 }
 
+function isTodayActivityQuestion(lowerText) {
+  return /(today'?s activity|today activity|activity for today|what happened today|today's meetings|today meetings|today's logs|today logs|audit logs?|audit trail|daily activity|daily logs?)/.test(lowerText)
+    || (/\b(?:today|toda)\b/.test(lowerText) && /(activity|activities|meeting|meetings|event|events|call|calls|task|tasks|log|logs|audit)/.test(lowerText));
+}
+
 function buildDashboardSpecification(question, result) {
   const module = result?.module || 'CRM';
 
@@ -170,6 +175,18 @@ function planQuestion(question) {
   }
 
   const lower = text.toLowerCase();
+  if (isTodayActivityQuestion(lower)) {
+    return {
+      module: 'CRM',
+      complexity: 'MULTI-STEP',
+      request_type: 'analysis',
+      analysis: { type: 'today_activity' },
+      fields: ['id'],
+      filters: [],
+      limit: 200,
+      offset: 0
+    };
+  }
   const module = detectModule(lower);
   const requestedLimit = extractRecordLimit(lower);
   const recordSort = detectRecordSort(lower, module);
@@ -484,6 +501,15 @@ function buildAssistantAnswer(question, result) {
     return `Conversion funnel: ${totals.leads} leads, ${totals.contacts} contacts, ${totals.accounts} accounts, ${totals.deals} deals, and ${totals.closed_won_deals} Closed Won deals. Lead-to-Contact: ${formatPercent(rates.lead_to_contact)}. Contact-to-Account: ${formatPercent(rates.contact_to_account)}. Account-to-Deal: ${formatPercent(rates.account_to_deal)}. Deal-to-Closed-Won: ${formatPercent(rates.deal_to_closed_won)}.`;
   }
 
+  if (result?.analysis === 'today_activity') {
+    const rows = Array.isArray(result.activity_rows) ? result.activity_rows : [];
+    if (rows.length === 0) return 'Today\'s audit log: no verified CRM records were found for today.';
+    const header = '| Module | Count | Latest record | Date field |';
+    const separator = '| --- | ---: | --- | --- |';
+    const lines = rows.map((row) => `| ${row.module} | ${row.count} | ${row.latest_record} | ${row.date_field} |`);
+    return [`Today\'s audit log`, header, separator, ...lines, '', `Total verified records: ${result.total_count}`].join('\n');
+  }
+
   if (result?.request_type === 'aggregate') {
     const rows = Array.isArray(result.data) ? result.data : [];
     const lines = rows.map((row) => `${row.Owner ?? 'Unassigned'}: ${formatAmount(row.value, row.currency)}`);
@@ -516,12 +542,16 @@ function buildAssistantAnswer(question, result) {
     return `CRM summary: the live ${module} dataset shows ${createdLeads} leads created and ${convertedToDeals} converted-to-deal outcomes. Key metric: the conversion rate is ${rate}. Explanation: this was calculated from verified CRM records and reflects the actual relationship between created leads and converted deals in the selected date window.`;
   }
 
-  if (result?.request_type === 'count' || Number.isInteger(count)) {
-    return `CRM summary: I checked the live ${module} records for "${text}" and found ${count} matching ${module.toLowerCase()} records. Key metric: this is the total count for the current filters and date window. Explanation: the result is based on the exact Zoho CRM filters applied in the backend.`;
-  }
-
   if (Array.isArray(result?.data) && result.data.length > 0) {
     return `CRM summary: I reviewed the matching ${module} records for "${text}" and found ${result.data.length} relevant entries. Key metric: the result set is the latest matching data from the selected CRM filters. Explanation: the backend retrieved the exact records and kept the relevant fields needed for the question.`;
+  }
+
+  if (result?.request_type === 'records' && module === 'Accounts' && Number.isInteger(count) && count > 0) {
+    return `CRM summary: I checked the live Accounts records for "${text}" and found ${count} matching account records, but the detailed rows were not returned in this response. Key metric: the module is available and contains records; the current response did not include the record list. Explanation: the backend should keep the request on record retrieval rather than summarizing it as count-only.`;
+  }
+
+  if (result?.request_type === 'count' || Number.isInteger(count)) {
+    return `CRM summary: I checked the live ${module} records for "${text}" and found ${count} matching ${module.toLowerCase()} records. Key metric: this is the total count for the current filters and date window. Explanation: the result is based on the exact Zoho CRM filters applied in the backend.`;
   }
 
   return `CRM summary: I reviewed the live ${module} data for "${text}" and did not find any records that match the exact filters applied. Key metric: zero matching results. Explanation: the query was executed using the backend’s CRM filters, and no verified data was returned for that request.`;

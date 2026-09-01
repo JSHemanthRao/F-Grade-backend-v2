@@ -742,6 +742,74 @@ test('preserves the original filters when requesting the next page', async () =>
   assert.equal(queries[1], `${expectedQuery} limit 20, 20`);
 });
 
+test('resolves dynamic module metadata and uses the live api_name in Zoho queries', async () => {
+  const calls = [];
+  const fieldCalls = [];
+  const zohoService = new ZohoCrmService({
+    get: async (url, options) => {
+      calls.push({ url, options });
+      if (url.includes('/oauth/v2/token')) return { data: { access_token: 'test-token', expires_in: 3600 } };
+      if (url.includes('/settings/modules')) {
+        return { data: { modules: [{ api_name: 'Custom_Assets', module_name: 'Custom Assets', singular_label: 'Custom Asset' }] } };
+      }
+      if (url.includes('/settings/fields')) {
+        fieldCalls.push({ url, options });
+        return { data: { fields: [{ api_name: 'id' }, { api_name: 'Asset_Name' }] } };
+      }
+      return { data: { data: [], info: { count: 0, more_records: false } } };
+    },
+    post: async (url, body) => {
+      calls.push({ url, body });
+      if (url.includes('/oauth/v2/token')) return { data: { access_token: 'test-token', expires_in: 3600 } };
+      return { data: { data: [], info: { count: 0, more_records: false } } };
+    }
+  }, () => ({
+    accountsUrl: 'https://accounts.zoho.com',
+    apiBaseUrl: 'https://www.zohoapis.com/crm/v8',
+    clientId: 'id', clientSecret: 'secret', refreshToken: 'refresh', timeoutMs: 15000
+  }));
+
+  const result = await zohoService.query({
+    module: 'Custom Assets',
+    fields: ['id'],
+    filters: [],
+    limit: 20,
+    offset: 0
+  });
+
+  assert.equal(calls.some((call) => call.url.includes('/settings/modules')), true);
+  assert.equal(fieldCalls.some((call) => call.url.includes('/settings/fields')), true);
+  assert.equal(calls.some((call) => call.body?.select_query?.includes('from Custom_Assets')), true);
+  assert.equal(result.records.length, 0);
+});
+
+test('includes metadata-discovered custom modules in today activity analysis', async () => {
+  const queries = [];
+  const zohoService = {
+    getModulesMetadata: async () => ({ modules: [{ api_name: 'Custom_Audit', module_name: 'Custom Audit' }] }),
+    getFieldMetadata: async (module) => module === 'Custom_Audit'
+      ? { fields: ['id', 'Created_Time', 'Audit_Name'], metadata: [] }
+      : { fields: [], metadata: [] },
+    count: async (module, filters) => {
+      queries.push({ type: 'count', module, filters });
+      return { count: module === 'Custom_Audit' ? 2 : 0 };
+    },
+    query: async (request) => {
+      queries.push({ type: 'query', request });
+      return { records: [{ id: '1', Audit_Name: 'Imported record', Created_Time: '2026-09-01T09:00:00+05:30' }], info: { more_records: false } };
+    }
+  };
+
+  const service = new CrmService(zohoService);
+  const result = await service.query({ module: 'CRM', request_type: 'analysis', analysis: { type: 'today_activity' }, fields: ['id'], filters: [], limit: 200, offset: 0 });
+
+  assert.equal(result.analysis, 'today_activity');
+  assert.equal(result.activity_rows.some((row) => row.module === 'Custom_Audit'), true);
+  assert.equal(result.total_count >= 2, true);
+  assert.equal(queries.some((entry) => entry.type === 'count' && entry.module === 'Custom_Audit'), true);
+  assert.equal(queries.some((entry) => entry.type === 'query' && entry.request.module === 'Custom_Audit'), true);
+});
+
 test('concurrent requests share one OAuth refresh request', async () => {
   let tokenCalls = 0;
   const fakeClient = {

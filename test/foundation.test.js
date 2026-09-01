@@ -201,6 +201,33 @@ test('plans plain meeting requests as the Meetings module', async () => {
   assert.equal(response.body.module, 'Meetings');
 });
 
+test('plans today activity requests as a multi-module analysis', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('Give me todays activity with the logs');
+  assert.equal(request.request_type, 'analysis');
+  assert.deepEqual(request.analysis, { type: 'today_activity' });
+  assert.equal(request.module, 'CRM');
+});
+
+test('renders today activity as a table', async () => {
+  const app = createApp({ crmService: { query: async () => ({
+    module: 'CRM',
+    request_type: 'analysis',
+    analysis: 'today_activity',
+    total_count: 3,
+    activity_rows: [
+      { module: 'Meetings', count: 1, latest_record: 'Standup', date_field: 'Start_DateTime' },
+      { module: 'Calls', count: 2, latest_record: 'Follow-up call', date_field: 'Created_Time' }
+    ],
+    data: [],
+    pagination: { limit: 20, offset: 0, more_records: false }
+  }) } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Give me todays activity' });
+  assert.equal(response.status, 200);
+  assert.match(response.body.answer, /\| Module \| Count \| Latest record \| Date field \|/);
+  assert.match(response.body.answer, /\| Meetings \| 1 \| Standup \| Start_DateTime \|/);
+});
+
 test('plans first lead records as the latest requested page', async () => {
   let request;
   const app = createApp({ crmService: { query: async (input) => {
@@ -263,8 +290,15 @@ test('plans monthly Closed Won deal summaries with a Closing_Date filter', () =>
 
 test('uses Created_Time when a Deal prompt explicitly asks for created records', () => {
   const request = require('../src/controllers/crm.controller').planQuestion('Show closed won deals created this month');
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const expectedRange = [
+    `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`,
+    `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`
+  ];
   assert.equal(request.filters[0].field, 'Created_Time');
-  assert.deepEqual(request.filters[0].value, ['2026-08-01', '2026-09-01']);
+  assert.deepEqual(request.filters[0].value, expectedRange);
   assert.equal(request.filters[0].exclusive_end, true);
 });
 
@@ -404,13 +438,13 @@ test('Copilot schema treats conversion as an operation, not the invalid Converte
   assert.equal(openApi.info['x-copilot-studio-field-mappings'], undefined);
 });
 
-test('OpenAPI exposes only question input and response output', () => {
+test('OpenAPI exposes the assistant aliases and response output', () => {
   const operation = openApi.paths['/api/crm/assistant'].post;
   const request = openApi.definitions.AssistantRequest;
   const response = openApi.definitions.AssistantResponse;
 
   assert.equal(operation.operationId, 'askCrmAssistant');
-  assert.deepEqual(Object.keys(request.properties), ['question', 'conversation_id']);
+  assert.deepEqual(Object.keys(request.properties), ['question', 'prompt', 'message', 'conversation_id', 'query']);
   assert.deepEqual(request.required, ['question']);
   assert.equal(request.additionalProperties, false);
   assert.deepEqual(Object.keys(response.properties), ['response']);

@@ -86,6 +86,11 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'sales_performance');
       return result;
     }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'today_activity') {
+      const result = await this.todayActivityAnalysis(request, executionContext);
+      this.logExecution(executionId, startedAt, statsAtStart, 'today_activity');
+      return result;
+    }
     if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'closed_won_summary') {
       const result = await this.closedWonSummary(request, executionContext);
       this.logExecution(executionId, startedAt, statsAtStart, 'closed_won_summary');
@@ -121,7 +126,7 @@ class CrmService {
   }
 
   async count(request) {
-    const result = await this.zohoService.count(CRM_API_NAMES[request.module], request.filters);
+    const result = await this.zohoService.count(request.module, request.filters);
     return { module: request.module, request_type: request.request_type, count: result.count, data: [], summary: { operation: 'count', value: result.count }, pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false } };
   }
 
@@ -290,6 +295,48 @@ class CrmService {
       deal_owners: owners.owners.slice(0, 3),
       top_deal_owners: owners.owners.slice(0, 3),
       comparison: { lead_conversion_rate: leadConversionRate, deal_closed_won_rate: dealClosedWonRate, strongest_lead_source: leadSources.source_breakdown[0]?.source || null, strongest_deal_owner: owners.owners[0]?.owner || null }
+    };
+  }
+
+  async todayActivityAnalysis(request, executionContext = createExecutionContext()) {
+    const today = toIsoDate(new Date());
+    const moduleSpecs = [
+      { module: 'Meetings', dateField: 'Start_DateTime', fields: ['Event_Title', 'Subject', 'Start_DateTime', 'End_DateTime', 'Location', 'Owner'], labelField: 'Event_Title' },
+      { module: 'Calls', dateField: 'Created_Time', fields: ['Subject', 'Call_Type', 'Call_Start_Time', 'Status', 'Owner', 'Created_Time'], labelField: 'Subject' },
+      { module: 'Tasks', dateField: 'Due_Date', fields: ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'], labelField: 'Subject' },
+      { module: 'Notes', dateField: 'Created_Time', fields: ['Note_Title', 'Title', 'Owner', 'Created_Time'], labelField: 'Note_Title' }
+    ];
+
+    const customModuleSpecs = await discoverActivityModuleSpecs(this.zohoService);
+    const allModuleSpecs = [...moduleSpecs, ...customModuleSpecs];
+
+    const activityRows = [];
+    for (const spec of allModuleSpecs) {
+      const filters = [{ field: spec.dateField, operator: 'between', value: [today, today] }];
+      const [countResult, latestResult] = await Promise.all([
+        executeCached(executionContext, `today-count:${spec.module}:${today}`, () => this.count({ ...request, module: spec.module, filters, request_type: 'count', fields: ['id'] })),
+        executeCached(executionContext, `today-latest:${spec.module}:${today}`, () => this.zohoService.query({ module: spec.module, fields: spec.fields, filters, sort: { field: spec.dateField, order: 'desc' }, limit: 1, offset: 0 }))
+      ]);
+      const latestRecord = latestResult.records[0] || {};
+      const latestLabel = latestRecord[spec.labelField] || latestRecord.Subject || latestRecord.Title || latestRecord.Note_Title || 'Unnamed record';
+      activityRows.push({
+        module: spec.module,
+        count: countResult.count,
+        latest_record: String(latestLabel),
+        date_field: spec.dateField
+      });
+    }
+
+    const totalCount = activityRows.reduce((sum, row) => sum + Number(row.count || 0), 0);
+    return {
+      module: 'CRM',
+      request_type: 'analysis',
+      analysis: 'today_activity',
+      date: today,
+      total_count: totalCount,
+      activity_rows: activityRows,
+      data: activityRows,
+      pagination: { limit: request.limit, offset: request.offset, returned: activityRows.length, more_records: false }
     };
   }
 
@@ -531,10 +578,13 @@ class CrmService {
   }
 
   async compareLeadDealRelationships(request, dateFilter, leadMetadata) {
-    const relationshipField = (leadMetadata.metadata || []).find((field) => {
-      const lookupModule = field.lookup?.module?.api_name || field.lookup?.module || field.lookup?.module_name || field.module;
-      return field.data_type === 'lookup' && lookupModule === 'Deals';
-    });
+    const relationships = typeof this.zohoService.extractRelationships === 'function'
+      ? this.zohoService.extractRelationships(leadMetadata.metadata || [])
+      : (leadMetadata.metadata || []).map((field) => ({
+        field_api_name: field.api_name || null,
+        target_module_api_name: field.lookup?.module?.api_name || field.lookup?.module || field.lookup?.module_name || field.module || null
+      })).filter((relationship) => relationship.field_api_name && relationship.target_module_api_name);
+    const relationshipField = relationships.find((relationship) => relationship.target_module_api_name === 'Deals');
     if (!relationshipField) {
       throw createAppError(
         'ZOHO_DEAL_RELATIONSHIP_UNAVAILABLE',
@@ -553,7 +603,7 @@ class CrmService {
     while (moreRecords) {
       const leadResult = await this.zohoService.searchRecords(
         'Leads',
-        ['id', 'Converted__s', 'Converted_Date_Time', relationshipField.api_name],
+        ['id', 'Converted__s', 'Converted_Date_Time', relationshipField.field_api_name],
         leadFilters,
         page,
         200
@@ -563,7 +613,7 @@ class CrmService {
       page += 1;
     }
     const dealIds = new Set(leadRecords.map((record) => {
-      const lookup = record[relationshipField.api_name];
+      const lookup = record[relationshipField.field_api_name];
       return lookup && typeof lookup === 'object' ? lookup.id : lookup;
     }).filter(Boolean).map(String));
     const dealRecords = dealIds.size > 0
@@ -577,7 +627,7 @@ class CrmService {
         deal_records_checked: dealRecords.length,
         matched_lead_deal_records: matched,
         matched_records: matched,
-        relationship_method: `Lead.${relationshipField.api_name}.id matched to Deals.id`,
+        relationship_method: `Lead.${relationshipField.field_api_name}.id matched to Deals.id`,
         confidence: 'exact'
       }
     };
@@ -608,6 +658,13 @@ class CrmService {
 function normalizeGroupValue(value) {
   if (!value || typeof value !== 'object') return value;
   return value.name || value.full_name || value.email || value.id || null;
+}
+
+function toIsoDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function ownerLabel(value) {
@@ -647,6 +704,42 @@ async function validateMetadataFields(zohoService, request) {
       502
     );
   }
+}
+
+async function discoverActivityModuleSpecs(zohoService) {
+  if (!zohoService || typeof zohoService.getModulesMetadata !== 'function' || typeof zohoService.getFieldMetadata !== 'function') return [];
+
+  let metadata;
+  try {
+    metadata = await zohoService.getModulesMetadata();
+  } catch (_error) {
+    return [];
+  }
+
+  const moduleList = Array.isArray(metadata?.modules) ? metadata.modules : [];
+  const standardModules = new Set(['Leads', 'Contacts', 'Accounts', 'Deals', 'Tasks', 'Calls', 'Meetings', 'Notes', 'Products', 'Vendors', 'Quotes', 'Sales Orders', 'Purchase Orders', 'Campaigns', 'Renewal Accounts']);
+  const fieldCandidates = [
+    { field: 'Start_DateTime', labelField: 'Event_Title', fields: ['Event_Title', 'Subject', 'Start_DateTime', 'End_DateTime', 'Location', 'Owner'] },
+    { field: 'Due_Date', labelField: 'Subject', fields: ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'] },
+    { field: 'Created_Time', labelField: 'Subject', fields: ['Subject', 'Owner', 'Created_Time', 'Modified_Time'] },
+    { field: 'Modified_Time', labelField: 'Subject', fields: ['Subject', 'Owner', 'Created_Time', 'Modified_Time'] },
+    { field: 'Call_Start_Time', labelField: 'Subject', fields: ['Subject', 'Call_Type', 'Call_Start_Time', 'Status', 'Owner', 'Created_Time'] }
+  ];
+
+  const discovered = [];
+  for (const moduleInfo of moduleList) {
+    const apiName = moduleInfo?.api_name || moduleInfo?.module_name || moduleInfo?.singular_label;
+    if (!apiName || standardModules.has(apiName)) continue;
+    try {
+      const fieldMetadata = await zohoService.getFieldMetadata(apiName);
+      const fields = Array.isArray(fieldMetadata?.fields) ? fieldMetadata.fields : [];
+      const match = fieldCandidates.find((candidate) => fields.includes(candidate.field));
+      if (match) discovered.push({ module: apiName, dateField: match.field, fields: match.fields, labelField: match.labelField });
+    } catch (_error) {
+      continue;
+    }
+  }
+  return discovered;
 }
 
 function normalizeSemanticRequest(input) {

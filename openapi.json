@@ -19,6 +19,43 @@
     "application/json"
   ],
   "paths": {
+    "/api/crm/query": {
+      "post": {
+        "operationId": "queryCrm",
+        "summary": "Execute a structured CRM query",
+        "description": "Executes a direct CRM request using the backend's validated query shape.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/CrmQueryRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated CRM query result returned by the backend.",
+            "schema": {
+              "$ref": "#/definitions/CrmQueryResponse"
+            }
+          },
+          "400": {
+            "description": "Invalid module, field, filter, sort, or request shape.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "502": {
+            "description": "Zoho CRM configuration, authentication, or query failure.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
     "/api/crm/assistant": {
       "post": {
         "operationId": "askCrmAssistant",
@@ -58,6 +95,93 @@
     }
   },
   "definitions": {
+    "CrmQueryRequest": {
+      "type": "object",
+      "description": "Structured CRM request consumed by the backend query pipeline.",
+      "required": ["module"],
+      "properties": {
+        "module": {
+          "type": "string",
+          "description": "CRM module name, including supported standard modules and metadata-discovered custom modules."
+        },
+        "fields": {
+          "type": "array",
+          "description": "Requested Zoho field API names.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filters": {
+          "type": "array",
+          "description": "Filter clauses applied before query execution.",
+          "items": {
+            "type": "object"
+          }
+        },
+        "sort_field": {
+          "type": "string",
+          "description": "Field used for result ordering."
+        },
+        "sort_order": {
+          "type": "string",
+          "enum": ["asc", "desc"],
+          "description": "Sort direction."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum number of rows to return."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based row offset."
+        },
+        "request_type": {
+          "type": "string",
+          "description": "Backend request mode such as records, count, aggregate, or analysis."
+        }
+      },
+      "additionalProperties": true
+    },
+    "CrmQueryResponse": {
+      "type": "object",
+      "description": "Validated CRM query response returned by the backend.",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "request_type": {
+          "type": "string"
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "count": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        },
+        "answer": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
     "AssistantRequest": {
       "type": "object",
       "description": "Natural-language CRM question. Send the complete user request in question.",
@@ -69,11 +193,27 @@
           "minLength": 1,
           "maxLength": 2000
         },
+        "prompt": {
+          "type": "string",
+          "description": "Optional alias for question accepted by the assistant endpoint.",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "message": {
+          "type": "string",
+          "description": "Optional alias for question accepted by the assistant endpoint.",
+          "minLength": 1,
+          "maxLength": 2000
+        },
         "conversation_id": {
           "type": "string",
           "description": "Optional stable conversation identifier used to resolve natural-language follow-up questions.",
           "minLength": 1,
           "maxLength": 128
+        },
+        "query": {
+          "type": "object",
+          "description": "Optional structured query overrides merged into the assistant-planned CRM request."
         }
       },
       "additionalProperties": false

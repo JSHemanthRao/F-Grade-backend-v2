@@ -5,6 +5,7 @@ const { createAppError } = require('../utils/errors');
 const OPERATOR_SET = new Set(CRM_OPERATORS);
 const NULL_OPERATORS = new Set(['is_null', 'is_not_null']);
 const VALUE_OPERATORS = new Set(CRM_OPERATORS.filter((operator) => !NULL_OPERATORS.has(operator)));
+const STRICT_MODULES = new Set(['Leads', 'Contacts', 'Accounts', 'Deals', 'Tasks', 'Calls', 'Meetings', 'Notes', 'Products', 'Vendors', 'Quotes', 'Sales Orders', 'Purchase Orders', 'Campaigns', 'Renewal Accounts']);
 
 function isValue(value) {
   return value !== null && value !== undefined && ['string', 'number', 'boolean'].includes(typeof value);
@@ -28,17 +29,19 @@ function validateCrmQuery(body) {
 
   const { module, fields, filters = [], sort, sort_field, sort_order, limit = 20, offset = 0, request_type = 'records', aggregate, group_by } = body;
   const supportedFields = CRM_MODULES[module];
+  const isVirtualAnalysisModule = module === 'CRM' && request_type === 'analysis';
   const defaultModuleFields = supportedFields ? supportedFields.slice(0, 6) : [];
   const addError = (path, message) => errors.push({ path, message });
   const invalidFieldMessage = (field) => `Field '${field}' is not supported for module '${module}'. Use a valid Zoho CRM API field name. Allowed fields: ${supportedFields ? supportedFields.join(', ') : 'none'}.`;
 
   const requestTypes = new Set(['records', 'count', 'aggregate', 'analysis']);
   const metricRequest = request_type !== 'records';
-  if (typeof module !== 'string' || !supportedFields) addError('module', `module must be one of: ${Object.keys(CRM_MODULES).join(', ')}.`);
+  if (typeof module !== 'string' || module.trim().length === 0) addError('module', 'module must be a non-empty string.');
+  else if (!STRICT_MODULES.has(module) && request_type === 'records' && module !== 'CRM') addError('module', `module must be one of: ${[...STRICT_MODULES].join(', ')}.`);
   if (!requestTypes.has(request_type)) addError('request_type', 'request_type must be one of: records, count, aggregate, analysis.');
   if (!Array.isArray(fields) || fields.length === 0) {
     if (!metricRequest) {
-      if (supportedFields && supportedFields.length > 0) {
+      if ((supportedFields && supportedFields.length > 0) || isVirtualAnalysisModule) {
         // Connector payloads can omit fields for a module-only request. Fill with a safe default set
         // so the request still executes instead of failing validation.
       } else {
@@ -58,14 +61,16 @@ function validateCrmQuery(body) {
     ? fields
     : (metricRequest ? ['id'] : (supportedFields ? defaultModuleFields : []));
   if (request_type === 'aggregate') {
-    if (!aggregate || typeof aggregate !== 'object' || Array.isArray(aggregate)) {
-      addError('aggregate', 'aggregate is required for aggregate requests and must be an object.');
-    } else {
-      if (!['sum', 'avg', 'min', 'max', 'count'].includes(aggregate.operation)) addError('aggregate.operation', 'aggregate.operation must be one of: sum, avg, min, max, count.');
-      if (typeof aggregate.field !== 'string' || !supportedFields?.includes(aggregate.field)) addError('aggregate.field', invalidFieldMessage(aggregate.field));
-    }
+      if (!aggregate || typeof aggregate !== 'object' || Array.isArray(aggregate)) {
+        addError('aggregate', 'aggregate is required for aggregate requests and must be an object.');
+      } else {
+        if (!['sum', 'avg', 'min', 'max', 'count'].includes(aggregate.operation)) addError('aggregate.operation', 'aggregate.operation must be one of: sum, avg, min, max, count.');
+        if (typeof aggregate.field !== 'string' || aggregate.field.length === 0) addError('aggregate.field', 'aggregate.field must be a non-empty string.');
+        else if (supportedFields && !supportedFields.includes(aggregate.field)) addError('aggregate.field', invalidFieldMessage(aggregate.field));
+      }
   }
-  if (group_by !== undefined && (typeof group_by !== 'string' || !supportedFields?.includes(group_by))) addError('group_by', invalidFieldMessage(group_by));
+  if (group_by !== undefined && (typeof group_by !== 'string' || group_by.length === 0)) addError('group_by', 'group_by must be a non-empty string.');
+  else if (group_by !== undefined && supportedFields && !supportedFields.includes(group_by)) addError('group_by', invalidFieldMessage(group_by));
   if (Array.isArray(fields) && fields.length > 500) addError('fields', 'A COQL query cannot select more than 500 fields.');
   if (Array.isArray(filters) && filters.length > 25) addError('filters', 'A COQL query cannot contain more than 25 criteria.');
 
@@ -77,7 +82,8 @@ function validateCrmQuery(body) {
       addError(path, 'Each filter must be an object.');
       return;
     }
-    if (!supportedFields || typeof filter.field !== 'string' || !supportedFields.includes(filter.field)) addError(`${path}.field`, invalidFieldMessage(filter.field));
+    if (typeof filter.field !== 'string' || filter.field.length === 0) addError(`${path}.field`, 'Filter field must be a non-empty string.');
+    else if (supportedFields && !supportedFields.includes(filter.field)) addError(`${path}.field`, invalidFieldMessage(filter.field));
     if (typeof filter.operator !== 'string' || !OPERATOR_SET.has(filter.operator)) {
       addError(`${path}.operator`, `Operator must be one of: ${CRM_OPERATORS.join(', ')}.`);
       return;
@@ -106,7 +112,8 @@ function validateCrmQuery(body) {
   if (hasFlatSort) {
     if (sort !== undefined) addError('sort', 'Use sort_field and sort_order instead of the nested sort object.');
     if (sort_field === undefined) addError('sort_field', 'sort_field is required when sort_order is provided.');
-    else if (typeof sort_field !== 'string' || !supportedFields || !supportedFields.includes(sort_field)) addError('sort_field', invalidFieldMessage(sort_field));
+    else if (typeof sort_field !== 'string' || sort_field.length === 0) addError('sort_field', 'sort_field must be a non-empty string.');
+    else if (supportedFields && !supportedFields.includes(sort_field)) addError('sort_field', invalidFieldMessage(sort_field));
     if (sort_order === undefined) addError('sort_order', 'sort_order is required when sort_field is provided.');
     else if (!['asc', 'desc'].includes(sort_order)) addError('sort_order', "sort_order must be either 'asc' or 'desc'.");
     if (sort_field !== undefined && sort_order !== undefined && typeof sort_field === 'string' && supportedFields?.includes(sort_field) && ['asc', 'desc'].includes(sort_order)) {
@@ -117,7 +124,8 @@ function validateCrmQuery(body) {
   } else if (sort !== undefined) {
     if (!sort || typeof sort !== 'object' || Array.isArray(sort)) addError('sort', 'sort must be an object.');
     else {
-      if (!supportedFields || !supportedFields.includes(sort.field)) addError('sort.field', invalidFieldMessage(sort.field));
+      if (typeof sort.field !== 'string' || sort.field.length === 0) addError('sort.field', 'sort.field must be a non-empty string.');
+      else if (supportedFields && !supportedFields.includes(sort.field)) addError('sort.field', invalidFieldMessage(sort.field));
       if (!['asc', 'desc'].includes(sort.order)) addError('sort.order', "sort.order must be either 'asc' or 'desc'.");
     }
   }

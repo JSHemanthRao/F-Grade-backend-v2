@@ -1,8 +1,7 @@
 const axios = require('axios');
 const { getZohoConfig } = require('../config/zoho.config');
 const { ZohoAuthService } = require('./zohoAuth.service');
-const { buildCoqlQuery } = require('./coql.service');
-const { buildModuleCriteria } = require('./coql.service');
+const { buildCoqlQuery, buildFilterClauses, buildWhereClause, buildModuleCriteria } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
 const { env } = require('../config/env');
@@ -79,10 +78,34 @@ class ZohoCrmService {
     }
 
     const token = await this.authService.getAccessToken();
-    const selectQuery = `${buildCoqlQuery(request)} limit ${request.offset}, ${request.limit}`;
+    const resolvedModule = await this.resolveModuleApiName(request.module);
+    const staticFields = require('../constants/crmModules').CRM_MODULES[request.module] || [];
+    if (CRM_API_NAMES[request.module]) {
+      const selectQuery = `${buildCoqlQuery(request)} limit ${request.offset}, ${request.limit}`;
+      return this.executeQueryRequest(selectQuery, token, config, request);
+    }
+
+    let metadata;
+    try {
+      metadata = await this.getFieldMetadata(resolvedModule);
+    } catch (error) {
+      throw createAppError('ZOHO_METADATA_ERROR', `Unable to verify Zoho CRM field metadata for '${resolvedModule}'.`, mapZohoStatus(error.response?.status), safeZohoDetails(error));
+    }
+    const requestedFields = Array.isArray(request.fields) ? request.fields : [];
+    const usableFields = requestedFields.length > 0
+      ? requestedFields.filter((field) => metadata.fields.includes(field))
+      : metadata.fields.slice(0, 6);
+    const finalFields = usableFields.length > 0 ? usableFields : staticFields;
+    if (finalFields.length === 0) {
+      throw createAppError('ZOHO_FIELD_UNAVAILABLE', `Zoho CRM metadata for '${resolvedModule}' does not expose any of the requested fields.`, 502);
+    }
+    const selectQuery = `${buildDynamicCoqlQuery({ ...request, module: resolvedModule, fields: finalFields })} limit ${request.offset}, ${request.limit}`;
+    return this.executeQueryRequest(selectQuery, token, config, request);
+  }
+
+  async executeQueryRequest(selectQuery, token, config) {
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
     log('info', `[COQL query] ${selectQuery}`);
-
     try {
       const response = await this.executeRequest('post', `${apiBaseUrl}/coql`, { data: { select_query: selectQuery }, config: {
         headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
@@ -134,7 +157,7 @@ class ZohoCrmService {
   }
 
   async count(module, filters = []) {
-    const moduleName = Object.keys(CRM_API_NAMES).find((name) => CRM_API_NAMES[name] === module) || module;
+    const moduleName = await this.resolveModuleApiName(module);
     validateModuleFieldScope({ module: moduleName, filters });
     let config;
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
@@ -165,7 +188,7 @@ class ZohoCrmService {
   }
 
   async getRecordsByIds(module, ids, fields) {
-    const moduleName = Object.keys(CRM_API_NAMES).find((name) => CRM_API_NAMES[name] === module) || module;
+    const moduleName = await this.resolveModuleApiName(module);
     validateModuleFieldScope({ module: moduleName, fields });
     let config;
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
@@ -180,7 +203,7 @@ class ZohoCrmService {
   }
 
   async searchRecords(module, fields, filters, page = 1, perPage = 200) {
-    const moduleName = Object.keys(CRM_API_NAMES).find((name) => CRM_API_NAMES[name] === module) || module;
+    const moduleName = await this.resolveModuleApiName(module);
     validateModuleFieldScope({ module: moduleName, fields, filters });
     let config;
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
@@ -237,11 +260,15 @@ class ZohoCrmService {
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
         timeout: config.timeoutMs
       }});
-      const fields = Array.isArray(response.data?.fields) ? response.data.fields : [];
+      let fields = Array.isArray(response.data?.fields) ? response.data.fields : [];
       const value = {
         fields: fields.map((field) => field.api_name).filter(Boolean),
         metadata: fields
       };
+      if (value.fields.length === 0 && CRM_API_NAMES[module]) {
+        const fallbackFields = require('../constants/crmModules').CRM_MODULES[module] || [];
+        return { fields: fallbackFields, metadata: [] };
+      }
       this.metadataCache.set(module, { value, expiresAt: Date.now() + env.zohoMetadataTtlMs });
       return value;
     } catch (error) {
@@ -254,6 +281,77 @@ class ZohoCrmService {
       );
     }
   }
+
+  async getModulesMetadata() {
+    const cached = this.metadataCache.get('__modules__');
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    let config;
+    try {
+      config = this.configLoader();
+    } catch (_error) {
+      throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502);
+    }
+    const token = await this.authService.getAccessToken();
+    const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
+    try {
+      const response = await this.executeRequest('get', `${apiBaseUrl}/settings/modules`, { config: {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        timeout: config.timeoutMs
+      }});
+      const modules = Array.isArray(response.data?.modules) ? response.data.modules : [];
+      const value = {
+        modules,
+        byApiName: new Map(modules.filter((module) => module?.api_name).map((module) => [module.api_name, module]))
+      };
+      this.metadataCache.set('__modules__', { value, expiresAt: Date.now() + env.zohoMetadataTtlMs });
+      return value;
+    } catch (error) {
+      if (error.response?.status === 401) this.authService.clearToken();
+      throw createAppError('ZOHO_METADATA_ERROR', 'Unable to verify Zoho CRM module metadata.', mapZohoStatus(error.response?.status), safeZohoDetails(error));
+    }
+  }
+
+  async resolveModuleApiName(module) {
+    const cached = CRM_API_NAMES[module];
+    if (cached) return cached;
+    const metadata = await this.getModulesMetadata();
+    const byApiName = metadata.byApiName.get(module);
+    if (byApiName?.api_name) return byApiName.api_name;
+    const normalized = String(module || '').trim();
+    const match = metadata.modules.find((item) => String(item?.module_name || item?.plural_label || item?.singular_label || item?.api_name || '').toLowerCase() === normalized.toLowerCase());
+    if (match?.api_name) return match.api_name;
+    return normalized;
+  }
+
+  extractRelationships(metadata = []) {
+    const normalizeModule = (value) => {
+      if (!value) return null;
+      if (typeof value === 'string') return value;
+      if (typeof value === 'object') return value.api_name || value.module_name || value.name || value.label || null;
+      return null;
+    };
+    return metadata
+      .filter((field) => field && typeof field === 'object' && field.data_type === 'lookup')
+      .map((field) => ({
+        field_api_name: field.api_name || null,
+        field_label: field.display_label || field.field_label || field.label || field.api_name || null,
+        target_module_api_name: normalizeModule(field.lookup?.module) || normalizeModule(field.lookup?.module_name) || normalizeModule(field.module),
+        target_module_label: field.lookup?.module?.name || field.lookup?.module?.plural_label || field.lookup?.module_label || null,
+        related_list: field.related_list || field.lookup?.related_list || null,
+        searchable: field.searchable ?? null,
+        sortable: field.sortable ?? null,
+        multi_select_lookup: Boolean(field.data_type === 'multi_select_lookup' || field.multi_module_lookup)
+      }))
+      .filter((relationship) => relationship.field_api_name && relationship.target_module_api_name);
+  }
+}
+
+function buildDynamicCoqlQuery({ module, fields, filters, sort }) {
+  const clauses = buildFilterClauses(filters || []);
+  let query = `select ${fields.join(', ')} from ${module}`;
+  query += ` where ${clauses.length > 0 ? buildWhereClause(clauses) : '(id is not null)'}`;
+  if (sort) query += ` order by ${sort.field} ${sort.order}`;
+  return query;
 }
 
 function mapZohoStatus(status) {

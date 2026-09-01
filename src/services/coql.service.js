@@ -86,7 +86,8 @@ function buildFilterClauses(filters) {
 function buildCoqlQuery({ module, fields, filters, sort }) {
   validateModuleFieldScope({ module, fields, filters, sort });
   const clauses = buildFilterClauses(filters);
-  let query = `select ${fields.join(', ')} from ${CRM_API_NAMES[module]}`;
+  const moduleName = CRM_API_NAMES[module] || module;
+  let query = `select ${fields.join(', ')} from ${moduleName}`;
   query += ` where ${buildWhereClause(clauses)}`;
   if (sort) query += ` order by ${sort.field} ${sort.order}`;
   return query;
