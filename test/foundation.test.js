@@ -197,7 +197,7 @@ test('plans plain meeting requests as the Meetings module', async () => {
   const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'give me meetings' });
   assert.equal(response.status, 200);
   assert.equal(request.module, 'Meetings');
-  assert.deepEqual(request.fields, ['Event_Title', 'Subject', 'Start_DateTime', 'End_DateTime', 'Location', 'Owner']);
+  assert.deepEqual(request.fields, ['Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Owner', 'Participants']);
   assert.equal(response.body.module, 'Meetings');
 });
 

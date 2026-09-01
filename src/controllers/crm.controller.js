@@ -613,7 +613,7 @@ function defaultFields(module) {
   if (module === 'Leads') return ['First_Name', 'Last_Name', 'Company', 'Created_Time', 'Lead_Source', 'Owner'];
   if (module === 'Accounts') return ['Account_Name', 'Industry', 'Owner', 'Created_Time'];
   if (module === 'Contacts') return ['First_Name', 'Last_Name', 'Account_Name', 'Email', 'Owner'];
-  if (module === 'Meetings') return ['Event_Title', 'Subject', 'Start_DateTime', 'End_DateTime', 'Location', 'Owner'];
+  if (module === 'Meetings') return ['Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Owner', 'Participants'];
   return ['Deal_Name', 'Amount', 'Stage', 'Owner', 'Closing_Date'];
 }
 

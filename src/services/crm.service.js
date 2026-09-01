@@ -323,7 +323,7 @@ class CrmService {
   async todayActivityAnalysis(request, executionContext = createExecutionContext()) {
     const today = toIsoDate(new Date());
     const moduleSpecs = [
-      { module: 'Meetings', dateField: 'Start_DateTime', fields: ['Event_Title', 'Subject', 'Start_DateTime', 'End_DateTime', 'Location', 'Owner'], labelField: 'Event_Title' },
+      { module: 'Meetings', dateField: 'Start_DateTime', fields: ['Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Owner', 'Participants'], labelField: 'Event_Title' },
       { module: 'Calls', dateField: 'Created_Time', fields: ['Subject', 'Call_Type', 'Call_Start_Time', 'Status', 'Owner', 'Created_Time'], labelField: 'Subject' },
       { module: 'Tasks', dateField: 'Due_Date', fields: ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'], labelField: 'Subject' },
       { module: 'Notes', dateField: 'Created_Time', fields: ['Note_Title', 'Title', 'Owner', 'Created_Time'], labelField: 'Note_Title' }
@@ -741,7 +741,7 @@ async function discoverActivityModuleSpecs(zohoService) {
   const moduleList = Array.isArray(metadata?.modules) ? metadata.modules : [];
   const standardModules = new Set(['Leads', 'Contacts', 'Accounts', 'Deals', 'Tasks', 'Calls', 'Meetings', 'Notes', 'Products', 'Vendors', 'Quotes', 'Sales Orders', 'Purchase Orders', 'Campaigns', 'Renewal Accounts']);
   const fieldCandidates = [
-    { field: 'Start_DateTime', labelField: 'Event_Title', fields: ['Event_Title', 'Subject', 'Start_DateTime', 'End_DateTime', 'Location', 'Owner'] },
+  { field: 'Start_DateTime', labelField: 'Event_Title', fields: ['Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Owner', 'Participants'] },
     { field: 'Due_Date', labelField: 'Subject', fields: ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'] },
     { field: 'Created_Time', labelField: 'Subject', fields: ['Subject', 'Owner', 'Created_Time', 'Modified_Time'] },
     { field: 'Modified_Time', labelField: 'Subject', fields: ['Subject', 'Owner', 'Created_Time', 'Modified_Time'] },
