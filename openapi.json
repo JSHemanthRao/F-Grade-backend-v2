@@ -5,9 +5,9 @@
     "version": "1.0.0",
     "description": "Minimal OpenAPI spec exposing only the assistant endpoint for Copilot Studio testing."
   },
-  "host": "https://f-grade-backend-v2.onrender.com",
+  "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",
-  "schemes": ["http"],
+  "schemes": ["https"],
   "consumes": ["application/json"],
   "produces": ["application/json"],
   "paths": {
