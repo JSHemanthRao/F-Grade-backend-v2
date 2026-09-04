@@ -41,6 +41,22 @@
         }
       }
     }
+    ,
+    "/api/crm/assistant/fast-summary": {
+      "post": {
+        "operationId": "askCrmAssistantFastSummary",
+        "summary": "Fast counts-only summary of today's CRM activity",
+        "description": "Quick summary that returns counts per module for today's activity. Designed to finish quickly for connector time-limited environments.",
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssistantRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Fast summary response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssistantResponse" } } } },
+          "400": { "description": "Bad request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    }
   },
   "components": {
     "schemas": {

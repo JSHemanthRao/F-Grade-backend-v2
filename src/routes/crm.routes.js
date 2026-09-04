@@ -9,6 +9,7 @@ function createCrmRoutes(crmService) {
 	router.post('/test', controller.test);
 	router.get('/diagnostics', controller.diagnostics);
 	router.post('/assistant', controller.assistant);
+	router.post('/assistant/fast-summary', controller.fastSummary);
 	return router;
 }
 

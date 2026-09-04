@@ -93,9 +93,17 @@ class ZohoCrmService {
           return this.executeQueryRequest(selectQuery, token, config, request);
         }
         const requestedFields = Array.isArray(request.fields) ? request.fields : [];
+        // prefer COQL-safe fields from metadata to avoid unsupported column errors
+        let safeFields = metadataForStatic.fields;
+        try {
+          safeFields = await this.getCoqlSafeFields(resolvedModule);
+        } catch (_err) {
+          // ignore and fall back to metadataForStatic.fields
+          safeFields = metadataForStatic.fields;
+        }
         const usableFields = requestedFields.length > 0
-          ? requestedFields.filter((field) => metadataForStatic.fields.includes(field))
-          : metadataForStatic.fields.slice(0, 6);
+          ? requestedFields.filter((field) => safeFields.includes(field))
+          : safeFields.slice(0, 6);
         const finalFieldsStatic = usableFields.length > 0 ? usableFields : staticFields;
         if (finalFieldsStatic.length === 0) {
           const selectQuery = `${buildCoqlQuery(request)} limit ${request.offset}, ${request.limit}`;
@@ -115,9 +123,16 @@ class ZohoCrmService {
       throw createAppError('ZOHO_METADATA_ERROR', `Unable to verify Zoho CRM field metadata for '${resolvedModule}'.`, mapZohoStatus(error.response?.status), safeZohoDetails(error));
     }
     const requestedFields = Array.isArray(request.fields) ? request.fields : [];
+    // compute COQL-safe fields
+    let safeFields;
+    try {
+      safeFields = await this.getCoqlSafeFields(resolvedModule);
+    } catch (_err) {
+      safeFields = metadata.fields;
+    }
     const usableFields = requestedFields.length > 0
-      ? requestedFields.filter((field) => metadata.fields.includes(field))
-      : metadata.fields.slice(0, 6);
+      ? requestedFields.filter((field) => safeFields.includes(field))
+      : safeFields.slice(0, 6);
     const finalFields = usableFields.length > 0 ? usableFields : staticFields;
     if (finalFields.length === 0) {
       throw createAppError('ZOHO_FIELD_UNAVAILABLE', `Zoho CRM metadata for '${resolvedModule}' does not expose any of the requested fields.`, 502);
@@ -334,6 +349,22 @@ class ZohoCrmService {
         safeZohoDetails(error)
       );
     }
+  }
+
+  async getCoqlSafeFields(module) {
+    // Returns a list of api_name fields that are safe to include in COQL select
+    const meta = await this.getFieldMetadata(module);
+    const allowedTypes = new Set(['text', 'string', 'email', 'phone', 'integer', 'long', 'double', 'boolean', 'date', 'datetime', 'picklist', 'currency']);
+    const safe = (meta.metadata || []).filter((f) => {
+      if (!f || !f.api_name) return false;
+      const dtype = String(f.data_type || '').toLowerCase();
+      if (!allowedTypes.has(dtype)) return false;
+      // exclude multi-select lookup and multi-module lookups
+      if (f.multi_module_lookup || f.data_type === 'multi_select_lookup' || f.multi_select_lookup) return false;
+      return true;
+    }).map((f) => f.api_name).filter(Boolean);
+    // If safe list is empty, fall back to the generic field list
+    return safe.length > 0 ? safe : meta.fields;
   }
 
   async getModulesMetadata() {

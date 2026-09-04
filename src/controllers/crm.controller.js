@@ -79,6 +79,15 @@ function createCrmController(crmService = new CrmService()) {
         next(error);
       }
     }
+    ,
+    fastSummary: async (req, res, next) => {
+      try {
+        const result = await crmService.fastSummary(req.body);
+        res.status(200).json({ success: true, status: 'ok', ...result });
+      } catch (error) {
+        next(error);
+      }
+    }
   };
 }
 

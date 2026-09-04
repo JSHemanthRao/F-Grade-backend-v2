@@ -368,6 +368,46 @@ class CrmService {
     };
   }
 
+  async fastSummary(request, executionContext = createExecutionContext()) {
+    const today = toIsoDate(new Date());
+    const moduleSpecs = [
+      { module: 'Meetings', dateField: 'Start_DateTime' },
+      { module: 'Calls', dateField: 'Created_Time' },
+      { module: 'Tasks', dateField: 'Due_Date' },
+      { module: 'Notes', dateField: 'Created_Time' }
+    ];
+
+    const customModuleSpecs = await discoverActivityModuleSpecs(this.zohoService);
+    const allModuleSpecs = [...moduleSpecs, ...customModuleSpecs];
+
+    // Parallel count-only requests to minimize latency (no record fetches)
+    const counts = await Promise.allSettled(allModuleSpecs.map((spec) => {
+      const filters = [{ field: spec.dateField, operator: 'between', value: [today, today] }];
+      return this.count({ ...request, module: spec.module, filters, request_type: 'count', fields: ['id'] });
+    }));
+
+    const activityRows = allModuleSpecs.map((spec, idx) => {
+      const settled = counts[idx];
+      if (settled.status === 'fulfilled') {
+        return { module: spec.module, count: settled.value.count, latest_record: null, date_field: spec.dateField };
+      }
+      log('warn', `[CRM fastSummary] module=${spec.module} count failed: ${String(settled.reason?.message || settled.reason)}`);
+      return { module: spec.module, count: 0, latest_record: null, date_field: spec.dateField };
+    });
+
+    const totalCount = activityRows.reduce((sum, row) => sum + Number(row.count || 0), 0);
+    return {
+      module: 'CRM',
+      request_type: 'analysis',
+      analysis: 'today_activity_fast',
+      date: today,
+      total_count: totalCount,
+      activity_rows: activityRows,
+      data: activityRows,
+      pagination: { limit: request.limit, offset: request.offset, returned: activityRows.length, more_records: false }
+    };
+  }
+
   async closedWonSummary(request, executionContext = createExecutionContext()) {
     validateAggregateQuery({
       module: 'Deals',
