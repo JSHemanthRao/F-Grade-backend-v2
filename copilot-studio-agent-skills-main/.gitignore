@@ -1,0 +1,18 @@
+# Node / npm (only test-agent.mjs uses a package, installed locally by the user)
+node_modules/
+package-lock.json
+npm-debug.log*
+
+# Environment / secrets — never commit
+.env
+*.env
+.mcs/
+*.pem
+*.key
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

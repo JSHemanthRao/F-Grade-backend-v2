@@ -1,0 +1,135 @@
+// Live end-to-end test for a Microsoft Copilot Studio agent.
+//
+// Uses Microsoft's official @microsoft/agents-copilotstudio-client, which speaks the
+// Server-Sent-Events "direct to engine" protocol. Raw REST calls to
+// POST /conversations/{id} return HTTP 400 - do not try to hand-roll this.
+//
+// Setup (once per machine):
+//   npm install @microsoft/agents-copilotstudio-client
+//   (package.json must contain "type": "module")
+//
+// Usage:
+//   node test-agent.mjs
+//   node test-agent.mjs "your own question"
+//   node test-agent.mjs "question" --verbose      # dump every activity
+//
+// ---------------------------------------------------------------- CONFIG
+const CONFIG = {
+  tenantId:      '<TENANT_GUID>',
+  clientId:      '<APP_REGISTRATION_CLIENT_ID>',  // needs CopilotStudio.Copilots.Invoke
+  environmentId: '<ENVIRONMENT_GUID>',
+  schemaName:    '<publisherPrefix>_<AgentSchemaName>',
+  signInAs:      '<user@tenant.onmicrosoft.com>',
+  // Substrings that prove a specific tool actually fired (optional).
+  expectCitations: ['learn.microsoft.com'],
+  defaultQuestion: 'What is Azure API Management and what are its main components?'
+}
+// ------------------------------------------------------------------------
+
+import { CopilotStudioClient, ConnectionSettings } from '@microsoft/agents-copilotstudio-client'
+
+const args = process.argv.slice(2)
+const verbose = args.includes('--verbose')
+const question = args.find(a => !a.startsWith('--')) ?? CONFIG.defaultQuestion
+const scope = 'https://api.powerplatform.com/CopilotStudio.Copilots.Invoke offline_access openid profile'
+
+async function form (url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(body)
+  })
+  return { ok: r.ok, data: await r.json() }
+}
+
+async function getToken () {
+  const { data: dc } = await form(
+    `https://login.microsoftonline.com/${CONFIG.tenantId}/oauth2/v2.0/devicecode`,
+    { client_id: CONFIG.clientId, scope })
+  if (dc.error) throw new Error(`${dc.error}: ${dc.error_description}`)
+
+  console.log(`\n  Open   https://microsoft.com/devicelogin`)
+  console.log(`  Code   ${dc.user_code}`)
+  console.log(`  Sign in as ${CONFIG.signInAs}\n`)
+
+  const deadline = Date.now() + 600_000
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, (dc.interval || 5) * 1000))
+    const { ok, data } = await form(
+      `https://login.microsoftonline.com/${CONFIG.tenantId}/oauth2/v2.0/token`,
+      { grant_type: 'urn:ietf:params:oauth:grant-type:device_code', client_id: CONFIG.clientId, device_code: dc.device_code })
+    if (ok) return data.access_token
+    if (data.error !== 'authorization_pending') throw new Error(`${data.error}: ${data.error_description}`)
+  }
+  throw new Error('Sign-in timed out.')
+}
+
+// Copilot Studio embeds citation anchors as private-use chars and puts the real
+// source URLs in entities / channelData - not in activity.text. Scan the whole activity.
+function urlsIn (activity) {
+  const found = new Set()
+  const json = JSON.stringify(activity ?? {})
+  for (const m of json.matchAll(/https?:\/\/[^"'\\\s\)\]]+/g)) found.add(m[0])
+  return [...found]
+}
+
+const token = await getToken()
+console.log('Signed in.')
+
+const client = new CopilotStudioClient(
+  new ConnectionSettings({
+    environmentId: CONFIG.environmentId,
+    schemaName: CONFIG.schemaName,
+    cloud: 'Prod'
+  }), token)
+
+console.log('Starting conversation...')
+const start = await client.startConversationWithResponse(true)
+const conversationId = start.conversationId ?? start.conversation?.id
+for (const a of (start.activities ?? [])) {
+  if (a.type === 'message' && a.text) console.log(`  [agent] ${a.text}`)
+  if (verbose) console.log('  [start raw]', JSON.stringify(a, null, 2))
+}
+
+console.log(`\n=== Question ===\n${question}\n`)
+console.log('=== Answer ===')
+
+let answer = ''
+const allUrls = new Set()
+let blocked = false
+
+for await (const a of client.executeStreaming({ type: 'message', text: question }, conversationId)) {
+  if (verbose) console.log('  [raw]', JSON.stringify(a, null, 2))
+
+  // The orchestrator blocks the whole turn if a connector needs user consent.
+  if (a.name === 'connectors/connectionManagerCard') blocked = true
+
+  if (a.type === 'message' && a.text) {
+    console.log(a.text)
+    answer += a.text + '\n'
+  }
+  urlsIn(a).forEach(u => allUrls.add(u))
+}
+
+console.log('')
+if (blocked) {
+  console.log('BLOCKED: the agent returned a connection-manager card.')
+  console.log('  A connector tool is set to connectionProperties.mode: Invoker ("End user credentials"),')
+  console.log('  so every turn stalls until the invoking user authorizes their own connection.')
+  console.log('  Fix: set mode: Maker in the tool YAML, then pac copilot push && pac copilot publish.')
+  process.exit(1)
+}
+
+const cited = CONFIG.expectCitations.filter(c => [...allUrls].some(u => u.includes(c)) || answer.includes(c))
+if (!answer.trim()) {
+  console.log('FAIL: no answer text returned. Re-run with --verbose.')
+  process.exit(1)
+}
+if (cited.length) {
+  console.log(`PASS: answered and cited ${cited.join(', ')} -> the tool fired.`)
+} else {
+  console.log('Answered, but no expected citation found.')
+  console.log('  Note: Copilot Studio renders citations as anchor glyphs in text; sources appear in entities.')
+  if (allUrls.size) console.log('  URLs seen:', [...allUrls].slice(0, 10).join(', '))
+  else console.log('  No URLs at all -> the model likely answered from its own knowledge, not the tool.')
+}
