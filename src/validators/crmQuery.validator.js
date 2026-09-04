@@ -1,4 +1,4 @@
-const { CRM_MODULES } = require('../constants/crmModules');
+const { CRM_MODULES, CRM_API_NAMES } = require('../constants/crmModules');
 const { CRM_OPERATORS } = require('../constants/crmOperators');
 const { createAppError } = require('../utils/errors');
 
@@ -28,7 +28,15 @@ function validateCrmQuery(body) {
   }
 
   const { module, fields, filters = [], sort, sort_field, sort_order, limit = 20, offset = 0, request_type = 'records', aggregate, group_by } = body;
-  const supportedFields = CRM_MODULES[module];
+  // Allow either user-friendly module keys (e.g., 'Meetings') or API names (e.g., 'Events')
+  const resolveModuleKey = (mod) => {
+    if (!mod) return undefined;
+    if (CRM_MODULES[mod]) return mod;
+    const mapped = Object.keys(CRM_API_NAMES).find((k) => CRM_API_NAMES[k] === mod);
+    return mapped;
+  };
+  const resolvedModuleKey = resolveModuleKey(module);
+  const supportedFields = resolvedModuleKey ? CRM_MODULES[resolvedModuleKey] : undefined;
   const isVirtualAnalysisModule = module === 'CRM' && request_type === 'analysis';
   const defaultModuleFields = supportedFields ? supportedFields.slice(0, 6) : [];
   const addError = (path, message) => errors.push({ path, message });
@@ -142,7 +150,17 @@ function validateCrmQuery(body) {
 }
 
 function validateModuleFieldScope({ module, fields = [], filters = [], sort, aggregate, group_by } = {}) {
-  const supportedFields = CRM_MODULES[module];
+  const resolveModuleKey = (mod) => {
+    if (!mod) return undefined;
+    if (CRM_MODULES[mod]) return mod;
+    const mapped = Object.keys(CRM_API_NAMES).find((k) => CRM_API_NAMES[k] === mod);
+    return mapped;
+  };
+  const resolvedModuleKey = resolveModuleKey(module);
+  const supportedFields = resolvedModuleKey ? CRM_MODULES[resolvedModuleKey] : undefined;
+  // If we don't have a static mapping for this module, skip strict field-scope validation
+  // and allow downstream metadata-based checks to handle unsupported fields.
+  if (!resolvedModuleKey || !supportedFields) return;
   const errors = [];
   const addInvalid = (path, field) => errors.push({ path, field });
   const isSupported = (field) => typeof field === 'string' && supportedFields?.includes(field);

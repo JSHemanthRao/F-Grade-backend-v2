@@ -1,271 +1,66 @@
 {
   "swagger": "2.0",
   "info": {
-    "title": "F-Grade Corporate AI CRM API",
+    "title": "F-Grade CRM Assistant API",
     "version": "1.0.0",
-    "description": "Universal CRM retrieval backend for the F-Grade Corporate AI Agent.",
-    "x-copilot-studio-tool-description": "Use this tool for any legitimate CRM question. Resolve the exact module, intent, date basis, filters, relationships, and output from the user's current message and CRM metadata. Send the complete natural-language question unchanged. Do not invent module names, field names, filters, relationships, or conversion logic. All standard and custom CRM modules must be discoverable from metadata. If the user asks for Accounts, return account records by default unless they ask for a count or summary. Conversion questions must remain natural language and be handled by the backend. Never emit a Leads field named Converted. For multi-module questions, retrieve each module separately and combine only verified results.",
-    "x-copilot-studio-input-policy": "question is required and must contain the user's complete natural-language CRM request. Use conversation_id only for a true follow-up. Do not transform, summarize, or reinterpret the question. If the current message changes the module, metric, date range, scope, or output, rebuild the request from the current intent and discard incompatible prior context. Route Meetings or Events to the meeting/event module instead of Deals. If the user asks for Accounts, return account records by default unless they explicitly ask for a count or summary."
+    "description": "Minimal OpenAPI spec exposing only the assistant endpoint for Copilot Studio testing."
   },
-  "host": "f-grade-backend-v2.onrender.com",
+  "host": "https://f-grade-backend-v2.onrender.com",
   "basePath": "/",
-  "schemes": [
-    "https"
-  ],
-  "consumes": [
-    "application/json"
-  ],
-  "produces": [
-    "application/json"
-  ],
+  "schemes": ["http"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
   "paths": {
-    "/api/crm/query": {
-      "post": {
-        "operationId": "queryCrm",
-        "summary": "Execute a structured CRM query",
-        "description": "Executes a direct CRM request using the backend's validated query shape.",
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/CrmQueryRequest"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Validated CRM query result returned by the backend.",
-            "schema": {
-              "$ref": "#/definitions/CrmQueryResponse"
-            }
-          },
-          "400": {
-            "description": "Invalid module, field, filter, sort, or request shape.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "502": {
-            "description": "Zoho CRM configuration, authentication, or query failure.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    },
     "/api/crm/assistant": {
       "post": {
         "operationId": "askCrmAssistant",
         "summary": "Answer a natural-language CRM question",
-        "description": "Resolves record, count, aggregate, grouped, and lead-conversion questions and executes the required filtered Zoho CRM query or queries.",
+        "description": "Resolves record, count, aggregate, and lead-conversion questions and executes the required queries.",
         "parameters": [
           {
             "name": "body",
             "in": "body",
             "required": true,
-            "schema": {
-              "$ref": "#/definitions/AssistantRequest"
-            }
+            "schema": { "$ref": "#/definitions/AssistantRequest" }
           }
         ],
         "responses": {
-          "200": {
-            "description": "Complete answer and requested CRM data returned by the backend for the user's question.",
-            "schema": {
-              "$ref": "#/definitions/AssistantResponse"
-            }
-          },
-          "400": {
-            "description": "Invalid question, field, date, owner, or aggregate request.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "502": {
-            "description": "Zoho CRM configuration, authentication, or query failure.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    }
-    ,
-    "/api/crm/test": {
-      "post": {
-        "operationId": "testCrm",
-        "summary": "Lightweight CRM test endpoint",
-        "description": "Returns a deterministic mock CRM response useful for connector testing without Zoho authentication.",
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": false,
-            "schema": {
-              "type": "object",
-              "properties": {
-                "module": { "type": "string" }
-              }
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Mock CRM response useful for connector verification.",
-            "schema": { "$ref": "#/definitions/CrmQueryResponse" }
-          }
+          "200": { "description": "Assistant response", "schema": { "$ref": "#/definitions/AssistantResponse" } },
+          "400": { "description": "Bad request", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "502": { "description": "Upstream Zoho error", "schema": { "$ref": "#/definitions/ErrorResponse" } }
         }
       }
     }
   },
   "definitions": {
-    "CrmQueryRequest": {
-      "type": "object",
-      "description": "Structured CRM request consumed by the backend query pipeline.",
-      "required": ["module"],
-      "properties": {
-        "module": {
-          "type": "string",
-          "description": "CRM module name, including supported standard modules and metadata-discovered custom modules."
-        },
-        "fields": {
-          "type": "array",
-          "description": "Requested Zoho field API names.",
-          "items": {
-            "type": "string"
-          }
-        },
-        "filters": {
-          "type": "array",
-          "description": "Filter clauses applied before query execution.",
-          "items": {
-            "type": "object"
-          }
-        },
-        "sort_field": {
-          "type": "string",
-          "description": "Field used for result ordering."
-        },
-        "sort_order": {
-          "type": "string",
-          "enum": ["asc", "desc"],
-          "description": "Sort direction."
-        },
-        "limit": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 200,
-          "description": "Maximum number of rows to return."
-        },
-        "offset": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Zero-based row offset."
-        },
-        "request_type": {
-          "type": "string",
-          "description": "Backend request mode such as records, count, aggregate, or analysis."
-        }
-      },
-      "additionalProperties": true
-    },
-    "CrmQueryResponse": {
-      "type": "object",
-      "description": "Validated CRM query response returned by the backend.",
-      "properties": {
-        "success": {
-          "type": "boolean"
-        },
-        "status": {
-          "type": "string"
-        },
-        "module": {
-          "type": "string"
-        },
-        "request_type": {
-          "type": "string"
-        },
-        "data": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        },
-        "count": {
-          "type": "integer"
-        },
-        "total": {
-          "type": "integer"
-        },
-        "answer": {
-          "type": "string"
-        },
-        "summary": {
-          "type": "object"
-        }
-      },
-      "additionalProperties": true
-    },
     "AssistantRequest": {
       "type": "object",
-      "description": "Natural-language CRM question. Send the complete user request in question.",
       "required": ["question"],
       "properties": {
-        "question": {
-          "type": "string",
-          "description": "The complete natural-language CRM question provided by the user.",
-          "minLength": 1,
-          "maxLength": 2000
-        },
-        "prompt": {
-          "type": "string",
-          "description": "Optional alias for question accepted by the assistant endpoint.",
-          "minLength": 1,
-          "maxLength": 2000
-        },
-        "message": {
-          "type": "string",
-          "description": "Optional alias for question accepted by the assistant endpoint.",
-          "minLength": 1,
-          "maxLength": 2000
-        },
-        "conversation_id": {
-          "type": "string",
-          "description": "Optional stable conversation identifier used to resolve natural-language follow-up questions.",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "query": {
-          "type": "object",
-          "description": "Optional structured query overrides merged into the assistant-planned CRM request."
-        }
-      },
-      "additionalProperties": false
+        "question": { "type": "string", "minLength": 1 },
+        "conversation_id": { "type": "string" },
+        "query": { "type": "object" }
+      }
     },
     "AssistantResponse": {
       "type": "object",
-      "required": ["response"],
       "properties": {
-        "response": {
-          "type": "string",
-          "description": "Complete answer and requested CRM data returned by the backend for the user's question."
-        }
+        "success": { "type": "boolean" },
+        "status": { "type": "string" },
+        "module": { "type": "string" },
+        "request_type": { "type": "string" },
+        "data": { "type": "array", "items": { "type": "object" } },
+        "count": { "type": "integer" },
+        "total": { "type": "integer" },
+        "answer": { "type": "string" },
+        "summary": { "type": "string" }
       },
-      "additionalProperties": false
+      "additionalProperties": true
     },
     "ErrorResponse": {
       "type": "object",
-      "required": ["response"],
-      "properties": {
-        "response": {
-          "type": "string",
-          "description": "Complete answer explaining why the backend could not answer the user's question."
-        }
-      },
-      "additionalProperties": false
+      "properties": { "success": { "type": "boolean" }, "status": { "type": "string" }, "response": { "type": "string" } },
+      "additionalProperties": true
     }
   }
 }

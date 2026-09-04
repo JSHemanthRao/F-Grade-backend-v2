@@ -62,6 +62,7 @@ function createCrmController(crmService = new CrmService()) {
         const previous = conversationId ? conversationContext.get(conversationId) : null;
         const resolvedQuestion = resolveFollowUpQuestion(question, previous);
         const plannedRequest = planQuestion(resolvedQuestion);
+        console.log('CRM assistant plannedRequest:', JSON.stringify(plannedRequest, null, 2));
         const result = await crmService.query({
           ...(req.body?.query || {}),
           ...plannedRequest

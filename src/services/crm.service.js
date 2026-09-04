@@ -335,18 +335,24 @@ class CrmService {
     const activityRows = [];
     for (const spec of allModuleSpecs) {
       const filters = [{ field: spec.dateField, operator: 'between', value: [today, today] }];
-      const [countResult, latestResult] = await Promise.all([
-        executeCached(executionContext, `today-count:${spec.module}:${today}`, () => this.count({ ...request, module: spec.module, filters, request_type: 'count', fields: ['id'] })),
-        executeCached(executionContext, `today-latest:${spec.module}:${today}`, () => this.zohoService.query({ module: spec.module, fields: spec.fields, filters, sort: { field: spec.dateField, order: 'desc' }, limit: 1, offset: 0 }))
-      ]);
-      const latestRecord = latestResult.records[0] || {};
-      const latestLabel = latestRecord[spec.labelField] || latestRecord.Subject || latestRecord.Title || latestRecord.Note_Title || 'Unnamed record';
-      activityRows.push({
-        module: spec.module,
-        count: countResult.count,
-        latest_record: String(latestLabel),
-        date_field: spec.dateField
-      });
+      try {
+        const [countResult, latestResult] = await Promise.all([
+          executeCached(executionContext, `today-count:${spec.module}:${today}`, () => this.count({ ...request, module: spec.module, filters, request_type: 'count', fields: ['id'] })),
+          executeCached(executionContext, `today-latest:${spec.module}:${today}`, () => this.zohoService.query({ module: spec.module, fields: spec.fields, filters, sort: { field: spec.dateField, order: 'desc' }, limit: 1, offset: 0 }))
+        ]);
+        const latestRecord = latestResult.records[0] || {};
+        const latestLabel = latestRecord[spec.labelField] || latestRecord.Subject || latestRecord.Title || latestRecord.Note_Title || 'Unnamed record';
+        activityRows.push({
+          module: spec.module,
+          count: countResult.count,
+          latest_record: String(latestLabel),
+          date_field: spec.dateField
+        });
+      } catch (err) {
+        log('warn', `[CRM todayActivity] module=${spec.module} failed: ${String(err.message || err)}`);
+        activityRows.push({ module: spec.module, count: 0, latest_record: null, date_field: spec.dateField });
+        continue;
+      }
     }
 
     const totalCount = activityRows.reduce((sum, row) => sum + Number(row.count || 0), 0);

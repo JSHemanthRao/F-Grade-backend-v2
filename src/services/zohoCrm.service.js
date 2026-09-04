@@ -141,7 +141,38 @@ class ZohoCrmService {
       return { records, info };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
-      log('error', `[ZOHO QUERY FAILURE] operation=record_query query=${selectQuery} status=${error.response?.status || 'unknown'} message=${String(error.response?.data?.message || error.message).replace(/\n/g, ' ')}`);
+      const upstreamMessage = String(error.response?.data?.message || error.message || '');
+      log('error', `[ZOHO QUERY FAILURE] operation=record_query query=${selectQuery} status=${error.response?.status || 'unknown'} message=${upstreamMessage.replace(/\n/g, ' ')}`);
+
+      // If Zoho COQL failed due to unsupported column(s), retry using the REST records API as a fallback.
+      try {
+        const isUnsupported = /unsupported column/i.test(upstreamMessage)
+          || /unsupported columns/i.test(upstreamMessage)
+          || /unsupported field/i.test(upstreamMessage)
+          || /column given seems to be invalid/i.test(upstreamMessage)
+          || /column given is invalid/i.test(upstreamMessage)
+          || /column .* invalid/i.test(upstreamMessage);
+        const requestArg = arguments[3];
+        if (isUnsupported && requestArg) {
+          const moduleMatch = String(selectQuery).match(/from\s+([\w_\.]+)/i);
+          const moduleName = moduleMatch ? moduleMatch[1] : requestArg.module;
+          const fields = Array.isArray(requestArg.fields) && requestArg.fields.length > 0 ? requestArg.fields.join(',') : undefined;
+          log('warn', `[ZOHO QUERY FALLBACK] COQL unsupported column detected; falling back to REST GET for module=${moduleName}`);
+          const params = {};
+          if (fields) params.fields = fields;
+          params.per_page = requestArg.limit || 200;
+          // Use GET /{module} to retrieve records (REST endpoint handles complex fields better)
+          const restResponse = await this.executeRequest('get', `${apiBaseUrl}/${moduleName}`, { config: { params, headers: { Authorization: `Zoho-oauthtoken ${token}` }, timeout: config.timeoutMs }, retrySameRequest: false });
+          const records = Array.isArray(restResponse.data?.data) ? restResponse.data.data : [];
+          const info = restResponse.data?.info || {};
+          log('info', `[ZOHO QUERY FALLBACK] REST returned ${records.length} records for module=${moduleName}`);
+          return { records, info };
+        }
+      } catch (fallbackErr) {
+        log('error', `[ZOHO QUERY FALLBACK FAILURE] ${String(fallbackErr?.message || fallbackErr)}`);
+        // fall through to throw original error below
+      }
+
       throw createAppError('ZOHO_QUERY_ERROR', 'Unable to retrieve CRM data.', mapZohoStatus(error.response?.status), {
         ...safeZohoDetails(error),
         operation: 'record_query'
@@ -189,7 +220,7 @@ class ZohoCrmService {
     const criteria = buildModuleCriteria(filters);
     log('info', `[CRM count API] module=${module} criteria=${criteria || '(none)'}`);
     try {
-      const response = await this.executeRequest('get', `${apiBaseUrl}/${module}/actions/count`, { config: {
+      const response = await this.executeRequest('get', `${apiBaseUrl}/${moduleName}/actions/count`, { config: {
         params: criteria ? { criteria } : undefined,
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
         timeout: config.timeoutMs
@@ -217,7 +248,7 @@ class ZohoCrmService {
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
     const token = await this.authService.getAccessToken();
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
-    const response = await this.executeRequest('get', `${apiBaseUrl}/${module}`, { config: {
+    const response = await this.executeRequest('get', `${apiBaseUrl}/${moduleName}`, { config: {
       params: { ids: ids.join(','), fields: fields.join(',') },
       headers: { Authorization: `Zoho-oauthtoken ${token}` },
       timeout: config.timeoutMs
@@ -234,7 +265,7 @@ class ZohoCrmService {
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
     const { buildCriteria } = require('./coql.service');
     const criteria = buildCriteria(filters);
-    const response = await this.executeRequest('get', `${apiBaseUrl}/${module}/search`, { config: {
+    const response = await this.executeRequest('get', `${apiBaseUrl}/${moduleName}/search`, { config: {
       params: { criteria, fields: fields.join(','), page, per_page: perPage },
       headers: { Authorization: `Zoho-oauthtoken ${token}` },
       timeout: config.timeoutMs
