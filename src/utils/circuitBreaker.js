@@ -48,7 +48,8 @@ class CircuitBreaker {
 
 function isTransientFailure(error) {
   const status = error.response?.status || error.statusCode;
-  return !status || status === 408 || status === 429 || status >= 500;
+  if (!status) return Boolean(error.code || error.request);
+  return status === 408 || status === 429 || status >= 500;
 }
 
 module.exports = { CircuitBreaker, isTransientFailure };

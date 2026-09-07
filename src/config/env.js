@@ -30,7 +30,7 @@ const env = Object.freeze({
   useZohoMetadataForStaticModules: process.env.USE_ZOHO_METADATA_FOR_STATIC_MODULES === 'true'
   ,
   // Path to a directory containing Copilot Studio skills. Can be overridden with SKILLS_PATH env var.
-  skillsPath: process.env.SKILLS_PATH || path.resolve(__dirname, '..', '..', 'aitour-building-copilots-with-copilot-studio', 'lab', 'lab-default', 'copilot-skillslike', 'skills')
+  skillsPath: process.env.SKILLS_PATH || path.resolve(__dirname, '..', '..', 'skills')
 });
 
 module.exports = { env };

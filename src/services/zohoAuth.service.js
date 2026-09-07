@@ -1,6 +1,5 @@
 const axios = require('axios');
 const { getZohoConfig } = require('../config/zoho.config');
-const { log } = require('../utils/logger');
 
 const EXPIRY_BUFFER_MS = 300000;
 
@@ -49,13 +48,6 @@ class ZohoAuthService {
         timeout: config.timeoutMs
       });
       const payload = response.data || {};
-      // Log token payload scopes for debugging OAuth scope mismatches
-      try {
-        const scopeInfo = payload.scope || payload.scopes || payload.scope_details || '';
-        if (scopeInfo) log('info', `[ZOHO TOKEN SCOPE] ${String(scopeInfo)}`);
-      } catch (e) {
-        // ignore logging errors
-      }
       if (!payload.access_token) throw new Error('Zoho did not return an access token.');
       this.accessToken = payload.access_token;
       this.apiDomain = payload.api_domain || null;

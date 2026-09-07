@@ -209,6 +209,34 @@ test('plans today activity requests as a multi-module analysis', () => {
   assert.equal(request.module, 'CRM');
 });
 
+test('keeps explicit todays meetings on the Events module path', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion("Show today's meetings");
+  assert.equal(request.module, 'Meetings');
+  assert.equal(request.request_type, 'records');
+  assert.equal(request.analysis, undefined);
+  assert.equal(request.filters[0].field, 'Start_DateTime');
+});
+
+test('routes explicit calls and weekly meetings to their correct modules and dates', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const calls = planQuestion("Show me today's calls");
+  const meetings = planQuestion('Show me meetings this week');
+  assert.equal(calls.module, 'Calls');
+  assert.deepEqual(calls.fields, ['Subject', 'Call_Type', 'Call_Start_Time', 'Status', 'Owner', 'Created_Time']);
+  assert.equal(calls.filters[0].field, 'Created_Time');
+  assert.equal(meetings.module, 'Meetings');
+  assert.equal(meetings.filters[0].field, 'Start_DateTime');
+  assert.equal(meetings.filters[0].value.length, 2);
+});
+
+test('routes field-list questions to dynamic module metadata', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion('Show the email and phone fields for Leads');
+  assert.equal(request.module, 'Leads');
+  assert.deepEqual(request.analysis, { type: 'metadata_fields' });
+});
+
 test('renders today activity as a table', async () => {
   const app = createApp({ crmService: { query: async () => ({
     module: 'CRM',
@@ -440,22 +468,28 @@ test('Copilot schema treats conversion as an operation, not the invalid Converte
 
 test('OpenAPI exposes the assistant aliases and response output', () => {
   const operation = openApi.paths['/api/crm/assistant'].post;
-  const request = openApi.definitions.AssistantRequest;
-  const response = openApi.definitions.AssistantResponse;
+  const request = openApi.components.schemas.AssistantRequest;
+  const response = openApi.components.schemas.AssistantResponse;
 
   assert.equal(operation.operationId, 'askCrmAssistant');
-  assert.deepEqual(Object.keys(request.properties), ['question', 'prompt', 'message', 'conversation_id', 'query']);
+  assert.ok(Object.keys(request.properties).includes('question'));
+  assert.ok(Object.keys(request.properties).includes('conversation_id'));
   assert.deepEqual(request.required, ['question']);
-  assert.equal(request.additionalProperties, false);
-  assert.deepEqual(Object.keys(response.properties), ['response']);
-  assert.deepEqual(response.required, ['response']);
-  assert.equal(response.additionalProperties, false);
-  assert.equal(response.properties.response.description, "Complete answer and requested CRM data returned by the backend for the user's question.");
+  assert.equal(request.additionalProperties, true);
+  assert.ok(Object.keys(response.properties).includes('module_api_name'));
+  assert.equal(response.additionalProperties, true);
+  assert.ok(openApi.components.securitySchemes.apiKeyAuth);
 });
 
 test('module-specific CRM routes remain unavailable', async () => {
   const response = await requestJson(createApp(), '/api/crm/deals', 'GET');
   assert.equal(response.status, 404);
+});
+
+test('the mock CRM endpoint is not exposed as a production route', async () => {
+  const response = await requestJson(createApp(), '/api/crm/test', 'POST', { module: 'Deals' });
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error.code, 'NOT_FOUND');
 });
 
 test('rejects invalid module and returns a field-specific error', async () => {

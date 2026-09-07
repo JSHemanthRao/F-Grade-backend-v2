@@ -42,11 +42,11 @@ function validateCrmQuery(body) {
   const addError = (path, message) => errors.push({ path, message });
   const invalidFieldMessage = (field) => `Field '${field}' is not supported for module '${module}'. Use a valid Zoho CRM API field name. Allowed fields: ${supportedFields ? supportedFields.join(', ') : 'none'}.`;
 
-  const requestTypes = new Set(['records', 'count', 'aggregate', 'analysis']);
+  const requestTypes = new Set(['records', 'count', 'aggregate', 'analysis', 'search', 'bulk_read']);
   const metricRequest = request_type !== 'records';
   if (typeof module !== 'string' || module.trim().length === 0) addError('module', 'module must be a non-empty string.');
   else if (!STRICT_MODULES.has(module) && request_type === 'records' && module !== 'CRM') addError('module', `module must be one of: ${[...STRICT_MODULES].join(', ')}.`);
-  if (!requestTypes.has(request_type)) addError('request_type', 'request_type must be one of: records, count, aggregate, analysis.');
+  if (!requestTypes.has(request_type)) addError('request_type', 'request_type must be one of: records, count, aggregate, analysis, search, bulk_read.');
   if (!Array.isArray(fields) || fields.length === 0) {
     if (!metricRequest) {
       if ((supportedFields && supportedFields.length > 0) || isVirtualAnalysisModule) {
@@ -61,7 +61,8 @@ function validateCrmQuery(body) {
     if (duplicates.length > 0) addError('fields', `fields must not contain duplicates: ${[...new Set(duplicates)].join(', ')}.`);
     fields.forEach((field, index) => {
       if (typeof field !== 'string' || field.length === 0) addError(`fields[${index}]`, 'Field names must be non-empty strings.');
-      else if (supportedFields && !supportedFields.includes(field)) addError(`fields[${index}]`, invalidFieldMessage(field));
+      else if (field === 'Converted') addError(`fields[${index}]`, invalidFieldMessage(field));
+      else if (supportedFields && !supportedFields.includes(field) && !isApiFieldName(field)) addError(`fields[${index}]`, invalidFieldMessage(field));
     });
   }
 
@@ -74,11 +75,11 @@ function validateCrmQuery(body) {
       } else {
         if (!['sum', 'avg', 'min', 'max', 'count'].includes(aggregate.operation)) addError('aggregate.operation', 'aggregate.operation must be one of: sum, avg, min, max, count.');
         if (typeof aggregate.field !== 'string' || aggregate.field.length === 0) addError('aggregate.field', 'aggregate.field must be a non-empty string.');
-        else if (supportedFields && !supportedFields.includes(aggregate.field)) addError('aggregate.field', invalidFieldMessage(aggregate.field));
+        else if (supportedFields && !supportedFields.includes(aggregate.field) && !isApiFieldName(aggregate.field)) addError('aggregate.field', invalidFieldMessage(aggregate.field));
       }
   }
   if (group_by !== undefined && (typeof group_by !== 'string' || group_by.length === 0)) addError('group_by', 'group_by must be a non-empty string.');
-  else if (group_by !== undefined && supportedFields && !supportedFields.includes(group_by)) addError('group_by', invalidFieldMessage(group_by));
+  else if (group_by !== undefined && supportedFields && !supportedFields.includes(group_by) && !isApiFieldName(group_by)) addError('group_by', invalidFieldMessage(group_by));
   if (Array.isArray(fields) && fields.length > 500) addError('fields', 'A COQL query cannot select more than 500 fields.');
   if (Array.isArray(filters) && filters.length > 25) addError('filters', 'A COQL query cannot contain more than 25 criteria.');
 
@@ -91,7 +92,8 @@ function validateCrmQuery(body) {
       return;
     }
     if (typeof filter.field !== 'string' || filter.field.length === 0) addError(`${path}.field`, 'Filter field must be a non-empty string.');
-    else if (supportedFields && !supportedFields.includes(filter.field)) addError(`${path}.field`, invalidFieldMessage(filter.field));
+    else if (filter.field === 'Converted') addError(`${path}.field`, invalidFieldMessage(filter.field));
+    else if (supportedFields && !supportedFields.includes(filter.field) && !isApiFieldName(filter.field)) addError(`${path}.field`, invalidFieldMessage(filter.field));
     if (typeof filter.operator !== 'string' || !OPERATOR_SET.has(filter.operator)) {
       addError(`${path}.operator`, `Operator must be one of: ${CRM_OPERATORS.join(', ')}.`);
       return;
@@ -121,7 +123,7 @@ function validateCrmQuery(body) {
     if (sort !== undefined) addError('sort', 'Use sort_field and sort_order instead of the nested sort object.');
     if (sort_field === undefined) addError('sort_field', 'sort_field is required when sort_order is provided.');
     else if (typeof sort_field !== 'string' || sort_field.length === 0) addError('sort_field', 'sort_field must be a non-empty string.');
-    else if (supportedFields && !supportedFields.includes(sort_field)) addError('sort_field', invalidFieldMessage(sort_field));
+    else if (supportedFields && !supportedFields.includes(sort_field) && !isApiFieldName(sort_field)) addError('sort_field', invalidFieldMessage(sort_field));
     if (sort_order === undefined) addError('sort_order', 'sort_order is required when sort_field is provided.');
     else if (!['asc', 'desc'].includes(sort_order)) addError('sort_order', "sort_order must be either 'asc' or 'desc'.");
     if (sort_field !== undefined && sort_order !== undefined && typeof sort_field === 'string' && supportedFields?.includes(sort_field) && ['asc', 'desc'].includes(sort_order)) {
@@ -133,7 +135,7 @@ function validateCrmQuery(body) {
     if (!sort || typeof sort !== 'object' || Array.isArray(sort)) addError('sort', 'sort must be an object.');
     else {
       if (typeof sort.field !== 'string' || sort.field.length === 0) addError('sort.field', 'sort.field must be a non-empty string.');
-      else if (supportedFields && !supportedFields.includes(sort.field)) addError('sort.field', invalidFieldMessage(sort.field));
+      else if (supportedFields && !supportedFields.includes(sort.field) && !isApiFieldName(sort.field)) addError('sort.field', invalidFieldMessage(sort.field));
       if (!['asc', 'desc'].includes(sort.order)) addError('sort.order', "sort.order must be either 'asc' or 'desc'.");
     }
   }
@@ -199,6 +201,10 @@ function validateAggregateQuery({ module, fields = [], filters = [], aggregate, 
     );
   }
   return true;
+}
+
+function isApiFieldName(field) {
+  return typeof field === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(field) && field !== 'Converted';
 }
 
 module.exports = { validateCrmQuery, validateModuleFieldScope, validateAggregateQuery };

@@ -3,7 +3,8 @@
   "info": {
     "title": "F-Grade CRM Assistant API",
     "version": "1.0.0",
-    "description": "Minimal OpenAPI spec exposing only the assistant endpoint for Copilot Studio testing."
+    "description": "Read-only natural-language Zoho CRM assistant for Microsoft Copilot Studio. The backend resolves modules and fields, selects an approved read API, validates the request, and returns normalized CRM data.",
+    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho CRM. The backend resolves the correct module and fields. Never emit a Leads field named Converted; conversion questions must remain natural language."
   },
   "servers": [
     {
@@ -25,6 +26,7 @@
             }
           }
         },
+        "security": [{ "apiKeyAuth": [] }],
         "responses": {
           "200": {
             "description": "Assistant response",
@@ -38,6 +40,9 @@
             "description": "Upstream Zoho error",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
           }
+          ,
+          "401": { "description": "Authentication required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "Read-only operation or permission denied", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     }
@@ -49,8 +54,9 @@
         "description": "Quick summary that returns counts per module for today's activity. Designed to finish quickly for connector time-limited environments.",
         "requestBody": {
           "required": false,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssistantRequest" } } }
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FastSummaryRequest" } } }
         },
+        "security": [{ "apiKeyAuth": [] }],
         "responses": {
           "200": { "description": "Fast summary response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssistantResponse" } } } },
           "400": { "description": "Bad request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
@@ -59,15 +65,31 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Optional when the backend is deployed without BACKEND_API_KEY; required when that environment variable is configured."
+      }
+    },
     "schemas": {
       "AssistantRequest": {
         "type": "object",
         "required": ["question"],
         "properties": {
-          "question": { "type": "string", "minLength": 1 },
+          "question": { "type": "string", "minLength": 1, "description": "Natural-language read-only Zoho CRM question." },
+          "prompt": { "type": "string", "description": "Compatibility alias for question." },
+          "message": { "type": "string", "description": "Compatibility alias for question." },
           "conversation_id": { "type": "string" },
-          "query": { "type": "object" }
-        }
+          "module": { "type": "string" },
+          "request_type": { "type": "string", "description": "records | count | aggregate | analysis | search | bulk_read" },
+          "analysis": { "type": "object", "description": "Optional analysis type and parameters" },
+          "query": { "type": "object", "description": "Optional structured query (filters, fields, sort, limit, offset)" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+          "offset": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": true
       },
       "AssistantResponse": {
         "type": "object",
@@ -75,18 +97,43 @@
           "success": { "type": "boolean" },
           "status": { "type": "string" },
           "module": { "type": "string" },
+          "module_api_name": { "type": "string" },
           "request_type": { "type": "string" },
-          "data": { "type": "array", "items": { "type": "object" } },
+          "analysis": { "type": "string" },
+          "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
           "count": { "type": "integer" },
           "total": { "type": "integer" },
           "answer": { "type": "string" },
-          "summary": { "type": "string" }
+          "metrics": { "type": "object", "additionalProperties": true },
+          "summary": { "oneOf": [ { "type": "string" }, { "type": "object", "additionalProperties": true } ] },
+          "pagination": { "type": "object", "properties": { "limit": { "type": "integer" }, "offset": { "type": "integer" }, "returned": { "type": "integer" }, "more_records": { "type": "boolean" } }, "additionalProperties": false }
+        },
+        "additionalProperties": true
+      },
+      "FastSummaryRequest": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+          "offset": { "type": "integer", "minimum": 0 }
         },
         "additionalProperties": true
       },
       "ErrorResponse": {
         "type": "object",
-        "properties": { "success": { "type": "boolean" }, "status": { "type": "string" }, "response": { "type": "string" } },
+        "properties": {
+          "success": { "type": "boolean" },
+          "status": { "type": "string" },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "details": {}
+            },
+            "required": ["code", "message"],
+            "additionalProperties": true
+          }
+        },
         "additionalProperties": true
       }
     }

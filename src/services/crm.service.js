@@ -42,7 +42,7 @@ class CrmService {
     log('info', `[CRM EXECUTION START] executionId=${executionId}`);
     log('info', `[CRM filters received] ${JSON.stringify(Array.isArray(input?.filters) ? input.filters : [])}`);
     log('info', `[CRM request received] ${JSON.stringify({ module: input?.module, fields: input?.fields, filters: input?.filters, limit: input?.limit, offset: input?.offset, sort_field: input?.sort_field || input?.sort?.field, sort_order: input?.sort_order || input?.sort?.order, request_type: input?.request_type || 'records' })}`);
-    const normalizedInput = normalizeSemanticRequest(input);
+    const normalizedInput = await this.resolveSemanticFields(normalizeSemanticRequest(input));
     const executionPlan = classifyExecution(normalizedInput);
     log('info', `[CRM execution plan] classification=${executionPlan.classification} steps=${executionPlan.steps.join(' | ')}`);
     let request;
@@ -61,6 +61,16 @@ class CrmService {
     if (request.request_type === 'count') {
       const result = await this.count(request);
       this.logExecution(executionId, startedAt, statsAtStart, 'count');
+      return result;
+    }
+    if (request.request_type === 'bulk_read') {
+      const result = await this.zohoService.bulkRead({ module: request.module, fields: request.fields, criteria: buildModuleCriteriaForBulk(request.filters) });
+      this.logExecution(executionId, startedAt, statsAtStart, 'bulk_read');
+      return { module: request.module, module_api_name: await this.zohoService.resolveModuleApiName(request.module), request_type: 'bulk_read', job_id: result.job_id, status: result.status, download_url: result.download_url, data: normalizeBulkResult(result.result), pagination: { limit: request.limit, offset: request.offset, returned: normalizeBulkResult(result.result).length, more_records: false } };
+    }
+    if (request.request_type === 'search') {
+      const result = await this.search(request, normalizedInput.search || {});
+      this.logExecution(executionId, startedAt, statsAtStart, 'search');
       return result;
     }
     if (request.request_type === 'aggregate') {
@@ -123,12 +133,39 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'count_and_records');
       return result;
     }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'metadata_fields') {
+      const moduleName = await this.zohoService.resolveModuleApiName(normalizedInput.module_name || normalizedInput.module);
+      const metadata = await this.zohoService.getFieldMetadata(moduleName);
+      this.logExecution(executionId, startedAt, statsAtStart, 'metadata_fields');
+      return { module: normalizedInput.module_name || normalizedInput.module, module_api_name: moduleName, request_type: 'metadata', fields: metadata.metadata, data: metadata.metadata, pagination: { limit: request.limit, offset: request.offset, returned: metadata.metadata.length, more_records: false } };
+    }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'users') {
+      const users = await this.zohoService.getUsers();
+      this.logExecution(executionId, startedAt, statsAtStart, 'users');
+      return { module: 'Users', module_api_name: 'users', request_type: 'users', count: users.length, data: users, pagination: { limit: request.limit, offset: request.offset, returned: users.length, more_records: false } };
+    }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'organization') {
+      const organization = await this.zohoService.getOrganization();
+      this.logExecution(executionId, startedAt, statsAtStart, 'organization');
+      return { module: 'Organization', request_type: 'organization', data: Array.isArray(organization) ? organization : [organization], pagination: { limit: request.limit, offset: request.offset, returned: 1, more_records: false } };
+    }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'audit_logs') {
+      const result = await this.zohoService.getAuditLogs(normalizedInput.audit || {});
+      this.logExecution(executionId, startedAt, statsAtStart, 'audit_logs');
+      return { module: 'Audit Logs', request_type: 'audit_logs', count: result.records.length, data: result.records, pagination: { limit: request.limit, offset: request.offset, returned: result.records.length, more_records: Boolean(result.info.more_records) } };
+    }
+    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'files') {
+      const result = await this.zohoService.getFiles(normalizedInput.files || {});
+      this.logExecution(executionId, startedAt, statsAtStart, 'files');
+      return { module: 'Files', request_type: 'files', count: result.files.length, data: result.files, pagination: { limit: request.limit, offset: request.offset, returned: result.files.length, more_records: Boolean(result.info.more_records) } };
+    }
     const result = await this.zohoService.query(request);
     const data = result.records.map(sanitizeZohoRecord);
     const info = result.info || {};
 
     const response = {
       module: request.module,
+      module_api_name: result.module_api_name || await this.zohoService.resolveModuleApiName(request.module),
       count: Number.isInteger(info.count) ? info.count : data.length,
       data,
       pagination: {
@@ -150,6 +187,18 @@ class CrmService {
   async count(request) {
     const result = await this.zohoService.count(request.module, request.filters);
     return { module: request.module, request_type: request.request_type, count: result.count, data: [], summary: { operation: 'count', value: result.count }, pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false } };
+  }
+
+  async search(request, search = {}) {
+    const result = await this.zohoService.searchRecords(request.module, request.fields, request.filters, Math.floor(request.offset / request.limit) + 1, request.limit, search);
+    const data = result.records.map(sanitizeZohoRecord);
+    return { module: request.module, module_api_name: result.module_api_name || await this.zohoService.resolveModuleApiName(request.module), request_type: 'search', count: data.length, data, pagination: { limit: request.limit, offset: request.offset, returned: data.length, more_records: Boolean(result.info.more_records) } };
+  }
+
+  async resolveSemanticFields(input) {
+    if (!Array.isArray(input?.field_labels) || input.field_labels.length === 0 || !input.module || input.module === 'CRM') return input;
+    const fields = await this.zohoService.resolveFieldApiNames(input.module, input.field_labels);
+    return { ...input, fields, field_labels: undefined };
   }
 
   async aggregate(request, aggregate) {
@@ -741,6 +790,17 @@ function ownerLabel(value) {
 
 function aggregateNumber(row = {}, key) {
   return Number(row[key] ?? row[key.replace(/[()]/g, '')] ?? row.value ?? 0) || 0;
+}
+
+function buildModuleCriteriaForBulk(filters = []) {
+  return buildFilterClauses(filters).join(' and ');
+}
+
+function normalizeBulkResult(result) {
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result?.data)) return result.data;
+  if (Array.isArray(result?.records)) return result.records;
+  return [];
 }
 
 function createExecutionContext() {

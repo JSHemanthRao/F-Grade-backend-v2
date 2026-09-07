@@ -36,7 +36,9 @@ function createCrmController(crmService = new CrmService()) {
     query: async (req, res, next) => {
       try {
         const result = await crmService.query(req.body);
-        res.status(200).json({ success: true, status: 'ok', ...result });
+        // Ensure structured summary objects are serialized to strings for connector compatibility
+        const safe = stringifySummary(Object.assign({}, result));
+        res.status(200).json({ success: true, status: 'ok', ...safe });
       } catch (error) {
         next(error);
       }
@@ -62,11 +64,7 @@ function createCrmController(crmService = new CrmService()) {
         const previous = conversationId ? conversationContext.get(conversationId) : null;
         const resolvedQuestion = resolveFollowUpQuestion(question, previous);
         const plannedRequest = planQuestion(resolvedQuestion);
-        console.log('CRM assistant plannedRequest:', JSON.stringify(plannedRequest, null, 2));
-        const result = await crmService.query({
-          ...(req.body?.query || {}),
-          ...plannedRequest
-        });
+        const result = await crmService.query({ ...(req.body?.query || {}), ...plannedRequest });
         if (conversationId) {
           conversationContext.set(conversationId, { question: resolvedQuestion, plannedRequest });
           if (conversationContext.size > 1000) conversationContext.delete(conversationContext.keys().next().value);
@@ -74,7 +72,8 @@ function createCrmController(crmService = new CrmService()) {
         const answer = isDashboardRequest(resolvedQuestion)
           ? JSON.stringify(buildDashboardSpecification(resolvedQuestion, result), null, 2)
           : buildAssistantAnswer(resolvedQuestion, result);
-        res.status(200).json({ success: true, status: 'ok', question, answer, ...result });
+        const safe = stringifySummary(Object.assign({}, result));
+        res.status(200).json({ success: true, status: 'ok', question, answer, ...safe });
       } catch (error) {
         next(error);
       }
@@ -83,12 +82,27 @@ function createCrmController(crmService = new CrmService()) {
     fastSummary: async (req, res, next) => {
       try {
         const result = await crmService.fastSummary(req.body);
-        res.status(200).json({ success: true, status: 'ok', ...result });
+        const safe = stringifySummary(Object.assign({}, result));
+        res.status(200).json({ success: true, status: 'ok', ...safe });
       } catch (error) {
         next(error);
       }
     }
   };
+}
+
+function stringifySummary(obj) {
+  try {
+    if (!obj || typeof obj !== 'object') return obj;
+    if (obj.summary && typeof obj.summary === 'object') {
+      obj.summary = JSON.stringify(obj.summary);
+    }
+    // Also stringify any nested 'metrics' or other complex properties used by connectors
+    if (obj.metrics && typeof obj.metrics === 'object') obj.metrics = JSON.stringify(obj.metrics);
+    return obj;
+  } catch (err) {
+    return obj;
+  }
 }
 
 function resolveFollowUpQuestion(question, previous) {
@@ -119,6 +133,8 @@ function isDashboardRequest(question) {
 }
 
 function isTodayActivityQuestion(lowerText) {
+  if (/\b(?:meeting|meetings|event|events|call|calls|task|tasks)\b/.test(lowerText)
+    && !/(activity|activities|logs?|audit)/.test(lowerText)) return false;
   return /(today'?s activity|today activity|activity for today|what happened today|today's meetings|today meetings|today's logs|today logs|audit logs?|audit trail|daily activity|daily logs?)/.test(lowerText)
     || (/\b(?:today|toda)\b/.test(lowerText) && /(activity|activities|meeting|meetings|event|events|call|calls|task|tasks|log|logs|audit)/.test(lowerText));
 }
@@ -213,6 +229,26 @@ function planQuestion(question) {
   }
 
   const lower = text.toLowerCase();
+  const detectedModule = extractExplicitModule(lower) || detectModule(lower);
+  if (/\b(?:bulk read|bulk|export|very large|large dataset)\b/.test(lower)) {
+    return { module: detectedModule, complexity: 'COMPLEX', request_type: 'bulk_read', fields: defaultFields(detectedModule), filters: [], limit: 200, offset: 0 };
+  }
+  if (/(?:available|list|show|get)\s+(?:the\s+)?fields?\b|field\s+metadata/.test(lower)
+    || /(?:show|list|get)\s+(?:the\s+)?[a-z0-9_, ]+fields?\s+for\b/.test(lower)) {
+    return { module: detectedModule, module_name: detectedModule, complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'metadata_fields' }, fields: ['id'], filters: [], limit: 200, offset: 0 };
+  }
+  if (/\b(?:show|list|get)\s+(?:all\s+)?(?:crm\s+)?users?\b|\bactive users?\b/.test(lower)) {
+    return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'users' }, fields: ['id'], filters: [], limit: 200, offset: 0 };
+  }
+  if (/\b(?:organization|organisation|org)\s+(?:details|information|info)\b/.test(lower)) {
+    return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'organization' }, fields: ['id'], filters: [], limit: 20, offset: 0 };
+  }
+  if (/\b(?:audit logs?|audit trail)\b/.test(lower)) {
+    return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'audit_logs' }, audit: {}, fields: ['id'], filters: [], limit: 200, offset: 0 };
+  }
+  if (/\b(?:files?|documents?)\b/.test(lower) && /\b(?:show|list|get|read|find)\b/.test(lower)) {
+    return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'files' }, files: {}, fields: ['id'], filters: [], limit: 200, offset: 0 };
+  }
   if (isTodayActivityQuestion(lower)) {
     return {
       module: 'CRM',
@@ -225,10 +261,25 @@ function planQuestion(question) {
       offset: 0
     };
   }
-  const module = detectModule(lower);
+  const module = detectedModule;
   const requestedLimit = extractRecordLimit(lower);
   const recordSort = detectRecordSort(lower, module);
   const filters = [];
+  const fieldLabels = extractFieldLabels(lower);
+  const searchTerm = extractSearchTerm(text);
+  if (searchTerm) {
+    return {
+      module,
+      complexity: 'MODERATE',
+      request_type: 'search',
+      fields: ['id'],
+      field_labels: fieldLabels,
+      filters: [],
+      search: { word: searchTerm },
+      limit: requestedLimit,
+      offset: 0
+    };
+  }
   const dateFilter = detectDateFilter(lower, module);
   if (dateFilter) filters.push(dateFilter);
 
@@ -434,7 +485,8 @@ function planQuestion(question) {
     return {
       module,
       request_type: 'records',
-      fields: defaultFields(module),
+      fields: fieldLabels.length > 0 ? ['id'] : defaultFields(module),
+      ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
       filters,
       sort_field: recordSort.field,
       sort_order: recordSort.order,
@@ -447,7 +499,8 @@ function planQuestion(question) {
     module,
     complexity: 'SIMPLE',
     request_type: 'records',
-    fields: defaultFields(module),
+    fields: fieldLabels.length > 0 ? ['id'] : defaultFields(module),
+    ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
     filters,
     sort_field: recordSort.field,
     sort_order: recordSort.order,
@@ -611,6 +664,8 @@ function formatAmount(value, currency) {
 
 function detectModule(lowerText) {
   if (/(meeting|meetings|event|events|appointment|appointments)/.test(lowerText)) return 'Meetings';
+  if (/\b(?:call|calls)\b/.test(lowerText)) return 'Calls';
+  if (/\b(?:task|tasks)\b/.test(lowerText)) return 'Tasks';
   if (/(lead|leads)/.test(lowerText) && /(converted|conversion|become.*deal|became.*deal)/.test(lowerText)) return 'Leads';
   if (/(deal|deals)/.test(lowerText)) return 'Deals';
   if (/(lead|leads)/.test(lowerText)) return 'Leads';
@@ -619,11 +674,19 @@ function detectModule(lowerText) {
   return 'Deals';
 }
 
+function extractExplicitModule(lowerText) {
+  const match = lowerText.match(/\b(?:module|object|records? from)\s+([a-z][a-z0-9 _-]{1,80})/i);
+  if (!match) return null;
+  return match[1].trim().replace(/\b(?:with|where|today|this|that|records?)\b.*$/i, '').trim() || null;
+}
+
 function defaultFields(module) {
   if (module === 'Leads') return ['First_Name', 'Last_Name', 'Company', 'Created_Time', 'Lead_Source', 'Owner'];
   if (module === 'Accounts') return ['Account_Name', 'Industry', 'Owner', 'Created_Time'];
   if (module === 'Contacts') return ['First_Name', 'Last_Name', 'Account_Name', 'Email', 'Owner'];
   if (module === 'Meetings') return ['Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Owner', 'Participants'];
+  if (module === 'Calls') return ['Subject', 'Call_Type', 'Call_Start_Time', 'Status', 'Owner', 'Created_Time'];
+  if (module === 'Tasks') return ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'];
   return ['Deal_Name', 'Amount', 'Stage', 'Owner', 'Closing_Date'];
 }
 
@@ -660,6 +723,20 @@ function extractAmountThreshold(lowerText) {
   return null;
 }
 
+function extractFieldLabels(lowerText) {
+  const match = lowerText.match(/\bwith\s+(.+?)(?=\s+(?:fields?|where|for|created|sorted|ordered|limit|top)\b|[?.!]|$)/i);
+  if (!match) return [];
+  return match[1].split(/\s*(?:,|\band\b)\s*/i).map((value) => value.trim()).filter(Boolean);
+}
+
+function extractSearchTerm(text) {
+  const match = text.match(/\b(?:named|called|matching)\s+["']?([^"']+?)["']?(?:\s+in\s+(?:leads?|contacts?|accounts?|deals?))?\s*$/i)
+    || text.match(/\b(?:search(?:\s+for)?|find)\s+(?:a|an|the)?\s*(?:lead|leads|contact|contacts|account|accounts|deal|deals|customer|customers)?\s*(?:named|called|matching)?\s*["']?([^"']+?)["']?\s*$/i);
+  if (!match) return null;
+  const value = match[1].trim().replace(/[?.!]$/, '');
+  return value.length >= 2 ? value : null;
+}
+
 function detectDateFilter(lowerText, module) {
   const currentDate = new Date();
   const dateField = dateFieldForQuestion(lowerText, module);
@@ -680,6 +757,14 @@ function detectDateFilter(lowerText, module) {
 
   if (/(last month|previous month)/.test(lowerText)) {
     return calendarFilter(dateField, monthRange(currentDate, -1));
+  }
+
+  if (/(this week|current week)/.test(lowerText)) {
+    return calendarFilter(dateField, weekRange(currentDate, 0));
+  }
+
+  if (/(last week|previous week)/.test(lowerText)) {
+    return calendarFilter(dateField, weekRange(currentDate, -1));
   }
 
   if (/(this quarter|current quarter)/.test(lowerText)) {
@@ -756,6 +841,15 @@ function monthRange(referenceDate, offsetMonths) {
   const start = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + offsetMonths, 1);
   const end = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + offsetMonths + 1, 1);
   end.setDate(end.getDate() - 1);
+  return [toIsoDate(start), toIsoDate(end)];
+}
+
+function weekRange(referenceDate, offsetWeeks) {
+  const start = new Date(referenceDate);
+  const day = start.getDay();
+  start.setDate(start.getDate() - (day === 0 ? 6 : day - 1) + (offsetWeeks * 7));
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
   return [toIsoDate(start), toIsoDate(end)];
 }
 

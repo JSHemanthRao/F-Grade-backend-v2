@@ -510,6 +510,7 @@ test('authenticates, calls Zoho COQL, and normalizes the CRM response', async ()
   assert.equal(calls[1].options.headers.Authorization, 'Zoho-oauthtoken server-token');
   assert.deepEqual(result, {
     module: 'Deals',
+    module_api_name: 'Deals',
     count: 1,
     data: [{ id: '7', Deal_Name: 'Acme', Owner: 'Asha' }],
     pagination: { limit: 20, offset: 0, more_records: false }
@@ -830,4 +831,81 @@ test('concurrent requests share one OAuth refresh request', async () => {
   const request = { module: 'Deals', fields: ['Deal_Name'], filters: [], limit: 20, offset: 0 };
   await Promise.all([service.query(request), service.query(request)]);
   assert.equal(tokenCalls, 1);
+});
+
+test('resolves display field labels from live metadata', async () => {
+  const zoho = new ZohoCrmService({
+    get: async (url) => ({ data: { fields: [
+      { api_name: 'Email', display_label: 'Email Address', data_type: 'email' },
+      { api_name: 'Custom_Field__s', display_label: 'Customer Segment', data_type: 'picklist' }
+    ] } })
+  }, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
+    getAccessToken: async () => 'redacted-test-token',
+    getApiDomain: () => null,
+    clearToken: () => {}
+  });
+  assert.deepEqual(await zoho.resolveFieldApiNames('Leads', ['Email Address', 'Customer Segment']), ['Email', 'Custom_Field__s']);
+});
+
+test('uses the Zoho Search word parameter for text search requests', async () => {
+  let request;
+  const zoho = new ZohoCrmService({
+    get: async (url, options) => {
+      request = { url, options };
+      return { data: { data: [{ id: '1' }], info: { more_records: false } } };
+    }
+  }, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
+    getAccessToken: async () => 'redacted-test-token',
+    getApiDomain: () => null,
+    clearToken: () => {}
+  });
+  await zoho.searchRecords('Contacts', ['id'], [], 1, 20, { word: 'Acme' });
+  assert.equal(request.url, 'https://www.zohoapis.com/crm/v8/Contacts/search');
+  assert.equal(request.options.params.word, 'Acme');
+  assert.equal(request.options.params.criteria, undefined);
+});
+
+test('supports organization, audit, files, and bounded bulk read operations', async () => {
+  const requests = [];
+  const zoho = new ZohoCrmService({
+    get: async (url) => {
+      requests.push({ method: 'get', url });
+      if (url.endsWith('/org')) return { data: { org: { id: 'org-1' } } };
+      if (url.endsWith('/settings/audit_log_export')) return { data: { audit_log_export: [{ id: 'audit-1' }] } };
+      if (url.endsWith('/files')) return { data: { id: 'file-1' } };
+      if (/\/read\/job-1$/.test(url)) return { data: { data: [{ id: 'job-1', state: 'COMPLETED', result: { download_url: '/crm/bulk/v8/read/job-1/result' } }] } };
+      if (/\/read\/job-1\/result$/.test(url)) return { data: { data: [{ id: '1' }] } };
+      throw new Error(`Unexpected GET ${url}`);
+    },
+    post: async (url) => {
+      requests.push({ method: 'post', url });
+      return { data: { details: { id: 'job-1', state: 'IN_PROGRESS' } } };
+    }
+  }, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
+    getAccessToken: async () => 'redacted-test-token',
+    getApiDomain: () => null,
+    clearToken: () => {}
+  });
+
+  assert.deepEqual(await zoho.getOrganization(), { id: 'org-1' });
+  assert.equal((await zoho.getAuditLogs()).records.length, 1);
+  await assert.rejects(
+    () => zoho.getFiles({ id: 'file-1' }),
+    (error) => error.code === 'ZOHO_FILES_UNSUPPORTED' && error.statusCode === 501
+  );
+  const bulk = await zoho.bulkRead({ module: 'Leads', fields: ['id'], pollDelayMs: 0 });
+  assert.deepEqual(bulk, { job_id: 'job-1', status: 'COMPLETED', result: { data: [{ id: '1' }] }, download_url: '/crm/bulk/v8/read/job-1/result' });
+  assert.ok(requests.some((request) => request.method === 'post' && request.url.endsWith('/crm/bulk/v8/read')));
+});
+
+test('blocks unsupported write methods in the Zoho client', async () => {
+  const zoho = new ZohoCrmService({}, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
+    getAccessToken: async () => 'redacted-test-token',
+    getApiDomain: () => null,
+    clearToken: () => {}
+  });
+  await assert.rejects(
+    () => zoho.executeRequest('delete', 'https://www.zohoapis.com/crm/v8/Leads/1', {}),
+    (error) => error.code === 'READ_ONLY_OPERATION_BLOCKED' && error.statusCode === 403
+  );
 });
