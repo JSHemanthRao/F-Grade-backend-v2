@@ -80,6 +80,15 @@ class ZohoCrmService {
 
     const token = await this.authService.getAccessToken();
     const resolvedModule = await this.resolveModuleApiName(request.module);
+    const expectedModuleApiName = CRM_API_NAMES[request.module];
+    if (expectedModuleApiName && resolvedModule !== expectedModuleApiName) {
+      throw createAppError(
+        'CRM_MODULE_ROUTING_ERROR',
+        `CRM module '${request.module}' resolved to '${resolvedModule}' instead of '${expectedModuleApiName}'.`,
+        500,
+        { requested_module: request.module, resolved_module: resolvedModule, expected_module_api_name: expectedModuleApiName }
+      );
+    }
     const staticFields = require('../constants/crmModules').CRM_MODULES[request.module] || [];
 
     let metadata;

@@ -230,6 +230,21 @@ test('routes explicit calls and weekly meetings to their correct modules and dat
   assert.equal(meetings.filters[0].value.length, 2);
 });
 
+test('preserves explicit Products, Calls, Tasks, and Meetings module targets', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  assert.equal(planQuestion('show products').module, 'Products');
+  assert.equal(planQuestion("today's calls").module, 'Calls');
+  assert.equal(planQuestion('latest tasks').module, 'Tasks');
+  assert.equal(planQuestion('show meetings').module, 'Meetings');
+});
+
+test('rejects an explicit module when planning would substitute another target', async () => {
+  const app = createApp({ crmService: { query: async () => { throw new Error('CRM query must not run'); } } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'In these 10 leads how many are Closed Won?' });
+  assert.equal(response.status, 500);
+  assert.equal(response.body.error.code, 'CRM_MODULE_ROUTING_ERROR');
+});
+
 test('routes field-list questions to dynamic module metadata', () => {
   const { planQuestion } = require('../src/controllers/crm.controller');
   const request = planQuestion('Show the email and phone fields for Leads');

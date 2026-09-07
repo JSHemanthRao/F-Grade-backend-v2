@@ -1,4 +1,6 @@
 const { CrmService } = require('../services/crm.service');
+const { createAppError } = require('../utils/errors');
+const { CRM_API_NAMES, CRM_MODULES } = require('../constants/crmModules');
 
 const MAX_QUESTION_LENGTH = 2000;
 
@@ -63,7 +65,9 @@ function createCrmController(crmService = new CrmService()) {
           : null;
         const previous = conversationId ? conversationContext.get(conversationId) : null;
         const resolvedQuestion = resolveFollowUpQuestion(question, previous);
+        const explicitModule = extractExplicitModule(resolvedQuestion.toLowerCase());
         const plannedRequest = planQuestion(resolvedQuestion);
+        assertExplicitModuleRouting(explicitModule, plannedRequest.module);
         const result = await crmService.query({ ...(req.body?.query || {}), ...plannedRequest });
         if (conversationId) {
           conversationContext.set(conversationId, { question: resolvedQuestion, plannedRequest });
@@ -675,9 +679,42 @@ function detectModule(lowerText) {
 }
 
 function extractExplicitModule(lowerText) {
+  const modulePatterns = [
+    ['Meetings', /\b(?:meeting|meetings|event|events|appointment|appointments)\b/i],
+    ['Calls', /\b(?:call|calls)\b/i],
+    ['Tasks', /\b(?:task|tasks)\b/i],
+    ['Products', /\b(?:product|products)\b/i],
+    ['Leads', /\b(?:lead|leads)\b/i],
+    ['Contacts', /\b(?:contact|contacts)\b/i],
+    ['Accounts', /\b(?:account|accounts)\b/i],
+    ['Deals', /\b(?:deal|deals)\b/i],
+    ['Vendors', /\b(?:vendor|vendors)\b/i],
+    ['Quotes', /\b(?:quote|quotes)\b/i],
+    ['Campaigns', /\b(?:campaign|campaigns)\b/i],
+    ['Renewal Accounts', /\brenewal accounts?\b/i],
+    ['Sales Orders', /\bsales orders?\b/i],
+    ['Purchase Orders', /\bpurchase orders?\b/i]
+  ];
+  const matches = modulePatterns
+    .map(([module, pattern]) => ({ module, index: lowerText.search(pattern) }))
+    .filter((match) => match.index >= 0)
+    .sort((left, right) => left.index - right.index);
+  if (matches.length > 0) return matches[0].module;
+
   const match = lowerText.match(/\b(?:module|object|records? from)\s+([a-z][a-z0-9 _-]{1,80})/i);
   if (!match) return null;
-  return match[1].trim().replace(/\b(?:with|where|today|this|that|records?)\b.*$/i, '').trim() || null;
+  const requested = match[1].trim().replace(/\b(?:with|where|today|this|that|records?)\b.*$/i, '').trim();
+  return Object.keys(CRM_MODULES).find((module) => module.toLowerCase() === requested.toLowerCase()) || requested || null;
+}
+
+function assertExplicitModuleRouting(explicitModule, plannedModule) {
+  if (!explicitModule || explicitModule === plannedModule) return;
+  throw createAppError(
+    'CRM_MODULE_ROUTING_ERROR',
+    `Explicit CRM module '${explicitModule}' could not be preserved; planner selected '${plannedModule}'.`,
+    500,
+    { explicit_module: explicitModule, planned_module: plannedModule }
+  );
 }
 
 function defaultFields(module) {
