@@ -79,8 +79,9 @@ class ZohoCrmService {
     }
 
     const token = await this.authService.getAccessToken();
-    const resolvedModule = await this.resolveModuleApiName(request.module);
-    const expectedModuleApiName = CRM_API_NAMES[request.module];
+    const requestedModule = request.module;
+    const resolvedModule = request.module_api_name || await this.resolveModuleApiName(requestedModule, { preferStatic: true });
+    const expectedModuleApiName = CRM_API_NAMES[requestedModule];
     if (expectedModuleApiName && resolvedModule !== expectedModuleApiName) {
       throw createAppError(
         'CRM_MODULE_ROUTING_ERROR',
@@ -89,14 +90,14 @@ class ZohoCrmService {
         { requested_module: request.module, resolved_module: resolvedModule, expected_module_api_name: expectedModuleApiName }
       );
     }
-    const staticFields = require('../constants/crmModules').CRM_MODULES[request.module] || [];
+    const staticFields = require('../constants/crmModules').CRM_MODULES[requestedModule] || [];
 
     let metadata;
     try {
       metadata = await this.getFieldMetadata(resolvedModule);
     } catch (error) {
       const requestedFields = Array.isArray(request.fields) ? request.fields : [];
-      const canUseStaticFallback = Boolean(CRM_API_NAMES[request.module])
+      const canUseStaticFallback = Boolean(CRM_API_NAMES[requestedModule])
         && requestedFields.every((field) => staticFields.includes(field));
       if (!canUseStaticFallback) {
         throw createAppError('ZOHO_METADATA_ERROR', `Unable to verify Zoho CRM field metadata for '${resolvedModule}'.`, mapZohoStatus(error.response?.status), safeZohoDetails(error, 'ZohoCRM.settings.fields.READ'));
@@ -262,7 +263,7 @@ class ZohoCrmService {
     if (!module || !Array.isArray(fields) || fields.length === 0) {
       throw createAppError('INVALID_BULK_READ_REQUEST', 'Bulk read requires a module and at least one field.', 400);
     }
-    const moduleName = await this.resolveModuleApiName(module);
+    const moduleName = await this.resolveModuleApiName(module, { preferStatic: true });
     validateModuleFieldScope({ module: moduleName, fields });
     const response = await this.readPost('/read', {
       query: { module: { api_name: moduleName }, fields, ...(criteria ? { criteria } : {}) }
@@ -370,7 +371,7 @@ class ZohoCrmService {
   }
 
   async resolveFieldApiNames(module, labels) {
-    const metadata = await this.getFieldMetadata(await this.resolveModuleApiName(module));
+    const metadata = await this.getFieldMetadata(await this.resolveModuleApiName(module, { preferStatic: true }));
     const normalized = new Map();
     for (const field of metadata.metadata || []) {
       for (const value of [field.api_name, field.display_label, field.field_label, field.label]) {
@@ -496,19 +497,20 @@ class ZohoCrmService {
   async resolveModuleApiName(module, { preferStatic = false } = {}) {
     const normalized = String(module || '').trim();
     if (preferStatic && CRM_API_NAMES[module]) return CRM_API_NAMES[module];
-    try {
-      const metadata = await this.getModulesMetadata();
-      const match = metadata.modules.find((item) => [item?.api_name, item?.module_name, item?.plural_label, item?.singular_label].filter(Boolean).some((value) => String(value).toLowerCase() === normalized.toLowerCase()));
-      if (match) {
-        if (match.api_supported === false || match.viewable === false) {
-          throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is not available for read operations.`, 400, { module: normalized, module_api_name: match.api_name, api_supported: match.api_supported, viewable: match.viewable });
-        }
-        return match.api_name || normalized;
-      }
-    } catch (error) {
-      if (error.code === 'MODULE_UNAVAILABLE') throw error;
+    const expectedApiName = CRM_API_NAMES[module];
+    const metadata = await this.getModulesMetadata();
+    const match = metadata.modules.find((item) => [item?.api_name, item?.module_name, item?.plural_label, item?.singular_label].filter(Boolean).some((value) => String(value).toLowerCase() === normalized.toLowerCase() || (expectedApiName && String(value).toLowerCase() === expectedApiName.toLowerCase())));
+    if (!match || !match.api_name) {
+      throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is unavailable for read operations.`, 404, { requested_module: normalized, resolved_api_name: expectedApiName || normalized, reason: 'Module was not present in live Zoho module metadata.' });
     }
-    return CRM_API_NAMES[module] || normalized;
+    if (match.api_supported === false || match.viewable === false) {
+      throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is not available for read operations.`, 400, { requested_module: normalized, resolved_api_name: match.api_name, reason: 'Zoho metadata marks the module as unsupported or not viewable.', api_supported: match.api_supported, viewable: match.viewable });
+    }
+    if (expectedApiName && match.api_name !== expectedApiName) {
+      throw createAppError('CRM_MODULE_ROUTING_ERROR', `Zoho module '${normalized}' resolved to '${match.api_name}', expected '${expectedApiName}'.`, 500, { requested_module: normalized, resolved_api_name: match.api_name, expected_api_name: expectedApiName });
+    }
+    log('info', `[CRM MODULE ROUTING] requested=${normalized} resolved=${match.api_name}`);
+    return match.api_name;
   }
 
   async getModuleMetadata(module) {

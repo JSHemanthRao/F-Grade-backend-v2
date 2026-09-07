@@ -3,8 +3,8 @@
   "info": {
     "title": "F-Grade CRM Assistant API",
     "version": "1.0.0",
-    "description": "Read-only natural-language Zoho CRM assistant for Microsoft Copilot Studio. The backend resolves modules and fields, selects an approved read API, validates the request, and returns normalized CRM data.",
-    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho CRM. The backend resolves the correct module and fields. Never emit a Leads field named Converted; conversion questions must remain natural language."
+    "description": "Read-only natural-language Zoho CRM assistant for Microsoft Copilot Studio. The backend resolves the explicitly requested module to its exact Zoho API module, validates live module and field metadata, selects an approved read API, and returns normalized CRM data. It never substitutes another module; zero records remain zero records and module errors are returned.",
+    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho CRM. Treat the user's explicit module as authoritative: Products means Products, Deals means Deals, Calls means Calls, Tasks means Tasks, and Meetings means Events. Never substitute Deals or any other module. Never emit a Leads field named Converted; conversion questions must remain natural language."
   },
   "servers": [
     {
@@ -17,7 +17,7 @@
       "post": {
         "operationId": "askCrmAssistant",
         "summary": "Answer a natural-language CRM question",
-        "description": "Resolves record, count, aggregate, and lead-conversion questions and executes the required queries.",
+        "description": "Resolves record, count, aggregate, search, and lead-conversion questions against the exact explicitly requested CRM module. Products never becomes Deals; Meetings maps only to Events. Module availability and query errors are returned without fallback substitution.",
         "requestBody": {
           "required": true,
           "content": {
@@ -82,7 +82,7 @@
           "prompt": { "type": "string", "description": "Compatibility alias for question." },
           "message": { "type": "string", "description": "Compatibility alias for question." },
           "conversation_id": { "type": "string" },
-          "module": { "type": "string" },
+          "module": { "type": "string", "description": "Exact CRM display module to query. The backend preserves this module and never substitutes another; Meetings maps to Events." },
           "request_type": { "type": "string", "description": "records | count | aggregate | analysis | search | bulk_read" },
           "analysis": { "type": "object", "description": "Optional analysis type and parameters" },
           "query": { "type": "object", "description": "Optional structured query (filters, fields, sort, limit, offset)" },

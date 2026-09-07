@@ -53,6 +53,12 @@ class CrmService {
       throw error;
     }
     await validateMetadataFields(this.zohoService, request);
+    if (request.module !== 'CRM' && typeof this.zohoService.resolveModuleApiName === 'function') {
+      const hasLiveModuleMetadata = typeof this.zohoService.getModulesMetadata === 'function'
+        && typeof this.zohoService.httpClient?.get === 'function';
+      const resolveOptions = hasLiveModuleMetadata ? undefined : { preferStatic: true };
+      request.module_api_name = await this.zohoService.resolveModuleApiName(request.module, resolveOptions);
+    }
     if (typeof this.zohoService.resolveOwnerFilters === 'function') {
       request.filters = await this.zohoService.resolveOwnerFilters(request.filters);
     }
@@ -64,9 +70,10 @@ class CrmService {
       return result;
     }
     if (request.request_type === 'bulk_read') {
-      const result = await this.zohoService.bulkRead({ module: request.module, fields: request.fields, criteria: buildModuleCriteriaForBulk(request.filters) });
+      const result = await this.zohoService.bulkRead({ module: request.module_api_name || request.module, fields: request.fields, criteria: buildModuleCriteriaForBulk(request.filters) });
       this.logExecution(executionId, startedAt, statsAtStart, 'bulk_read');
-      return { module: request.module, module_api_name: await this.zohoService.resolveModuleApiName(request.module), request_type: 'bulk_read', job_id: result.job_id, status: result.status, download_url: result.download_url, data: normalizeBulkResult(result.result), pagination: { limit: request.limit, offset: request.offset, returned: normalizeBulkResult(result.result).length, more_records: false } };
+      const data = normalizeBulkResult(result.result);
+      return { module: request.module, module_api_name: request.module_api_name || await this.zohoService.resolveModuleApiName(request.module), request_type: 'bulk_read', job_id: result.job_id, status: result.status, download_url: result.download_url, returned: data.length, more_records: false, records: data, data, pagination: { limit: request.limit, offset: request.offset, returned: data.length, more_records: false } };
     }
     if (request.request_type === 'search') {
       const result = await this.search(request, normalizedInput.search || {});
@@ -159,14 +166,18 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'files');
       return { module: 'Files', request_type: 'files', count: result.files.length, data: result.files, pagination: { limit: request.limit, offset: request.offset, returned: result.files.length, more_records: Boolean(result.info.more_records) } };
     }
-    const result = await this.zohoService.query(request);
+    const result = await this.zohoService.query({ ...request, module: request.module_api_name || request.module });
     const data = result.records.map(sanitizeZohoRecord);
     const info = result.info || {};
 
     const response = {
       module: request.module,
-      module_api_name: result.module_api_name || await this.zohoService.resolveModuleApiName(request.module),
+      module_api_name: result.module_api_name || request.module_api_name || await this.zohoService.resolveModuleApiName(request.module),
+      request_type: request.request_type,
       count: Number.isInteger(info.count) ? info.count : data.length,
+      returned: data.length,
+      more_records: Boolean(info.more_records),
+      records: data,
       data,
       pagination: {
         limit: request.limit,
@@ -185,12 +196,13 @@ class CrmService {
   }
 
   async count(request) {
-    const result = await this.zohoService.count(request.module, request.filters);
-    return { module: request.module, request_type: request.request_type, count: result.count, data: [], summary: { operation: 'count', value: result.count }, pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false } };
+    const moduleApiName = request.module_api_name || request.module;
+    const result = await this.zohoService.count(moduleApiName, request.filters);
+    return { module: request.module, module_api_name: moduleApiName, request_type: request.request_type, count: result.count, returned: 0, more_records: false, records: [], data: [], summary: { operation: 'count', value: result.count }, pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false } };
   }
 
   async search(request, search = {}) {
-    const result = await this.zohoService.searchRecords(request.module, request.fields, request.filters, Math.floor(request.offset / request.limit) + 1, request.limit, search);
+    const result = await this.zohoService.searchRecords(request.module_api_name || request.module, request.fields, request.filters, Math.floor(request.offset / request.limit) + 1, request.limit, search);
     const data = result.records.map(sanitizeZohoRecord);
     return { module: request.module, module_api_name: result.module_api_name || await this.zohoService.resolveModuleApiName(request.module), request_type: 'search', count: data.length, data, pagination: { limit: request.limit, offset: request.offset, returned: data.length, more_records: Boolean(result.info.more_records) } };
   }
@@ -204,7 +216,9 @@ class CrmService {
   async aggregate(request, aggregate) {
     validateAggregateQuery({ module: request.module, fields: request.fields, filters: request.filters, aggregate, groupBy: request.group_by, sort: request.sort });
     const expression = `${aggregate.operation.toUpperCase()}(${aggregate.field})`;
-    const selectQuery = `select ${request.group_by ? `${request.group_by}, ` : ''}${expression} from ${CRM_API_NAMES[request.module]} where ${buildWhereClause(buildFilterClauses(request.filters))}${request.group_by ? ` group by ${request.group_by}` : ''}`;
+    const moduleApiName = request.module_api_name || CRM_API_NAMES[request.module];
+    if (!moduleApiName) throw createAppError('MODULE_UNAVAILABLE', `No Zoho API module mapping exists for '${request.module}'.`, 404, { requested_module: request.module, resolved_api_name: null, reason: 'No exact module mapping is available.' });
+    const selectQuery = `select ${request.group_by ? `${request.group_by}, ` : ''}${expression} from ${moduleApiName} where ${buildWhereClause(buildFilterClauses(request.filters))}${request.group_by ? ` group by ${request.group_by}` : ''}`;
     const result = await this.zohoService.aggregate(selectQuery);
     const aggregateKey = expression;
     const rows = result.rows.map((row) => ({

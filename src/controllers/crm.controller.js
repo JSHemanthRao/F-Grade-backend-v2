@@ -120,7 +120,10 @@ function resolveFollowUpQuestion(question, previous) {
 }
 
 function hasExplicitModuleIntent(text) {
-  return /\b(?:lead|leads|deal|deals|account|accounts|contact|contacts)\b/i.test(text);
+  return Object.keys(CRM_API_NAMES).some((module) => {
+    const words = module.toLowerCase().split(/\s+/).map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return new RegExp(`\\b${words.join('\\s+')}\\b`, 'i').test(text);
+  }) || /\b(?:meeting|meetings|event|events|call|calls|task|tasks|product|products)\b/i.test(text);
 }
 
 function isClarification(text) {
@@ -514,7 +517,7 @@ function planQuestion(question) {
 }
 
 function extractRecordLimit(lowerText) {
-  const match = lowerText.match(/(?:first|latest|last|oldest|top|show|give me)\s+(\d+)\b/i);
+  const match = lowerText.match(/(?:first|latest|last|oldest|top|show(?:\s+me)?|give me)\s+(\d+)\b/i);
   if (!match) return 20;
   return Math.min(Math.max(Number(match[1]), 1), 200);
 }
@@ -667,15 +670,51 @@ function formatAmount(value, currency) {
 }
 
 function detectModule(lowerText) {
-  if (/(meeting|meetings|event|events|appointment|appointments)/.test(lowerText)) return 'Meetings';
-  if (/\b(?:call|calls)\b/.test(lowerText)) return 'Calls';
-  if (/\b(?:task|tasks)\b/.test(lowerText)) return 'Tasks';
-  if (/(lead|leads)/.test(lowerText) && /(converted|conversion|become.*deal|became.*deal)/.test(lowerText)) return 'Leads';
-  if (/(deal|deals)/.test(lowerText)) return 'Deals';
-  if (/(lead|leads)/.test(lowerText)) return 'Leads';
-  if (/(account|accounts)/.test(lowerText)) return 'Accounts';
-  if (/(contact|contacts)/.test(lowerText)) return 'Contacts';
-  return 'Deals';
+  const aliases = [
+    ['Renewal Accounts', /\brenewal accounts?\b/],
+    ['Price Books', /\bprice books?\b/],
+    ['Remote Assist', /\bremote assist\b/],
+    ['ZohoSign Documents', /\bzohosign documents?\b/],
+    ['ZohoSign Recipients', /\bzohosign recipients?\b/],
+    ['ZohoSign Document Events', /\bzohosign document events?\b/],
+    ['Google Ads', /\bgoogle ads?\b/],
+    ['Enterprise leads', /\benterprise leads?\b/],
+    ['Service Provider', /\bservice providers?\b/],
+    ['Co-operative Banks', /\bco-?operative banks?\b/],
+    ['Voice of the Customer', /\bvoice of the customer\b/],
+    ['Meetings', /\b(?:meeting|meetings|event|events|appointment|appointments)\b/],
+    ['Calls', /\b(?:call|calls)\b/],
+    ['Tasks', /\b(?:task|tasks)\b/],
+    ['Products', /\b(?:product|products)\b/],
+    ['Reports', /\breports?\b/],
+    ['Analytics', /\banalytics\b/],
+    ['SalesInbox', /\bsales\s*inbox\b/],
+    ['Leads', /\b(?:lead|leads)\b/],
+    ['Deals', /\b(?:deal|deals)\b/],
+    ['Accounts', /\b(?:account|accounts)\b/],
+    ['Contacts', /\b(?:contact|contacts)\b/],
+    ['Vendors', /\b(?:vendor|vendors)\b/],
+    ['Campaigns', /\bcampaigns?\b/],
+    ['Cases', /\bcases?\b/],
+    ['Solutions', /\bsolutions?\b/],
+    ['Documents', /\bdocuments?\b/],
+    ['Forecasts', /\bforecasts?\b/],
+    ['Visits', /\bvisits?\b/],
+    ['Social', /\bsocial\b/],
+    ['Users', /\busers?\b/],
+    ['Desk', /\bdesk\b/],
+    ['My Jobs', /\bmy jobs?\b/],
+    ['Messages', /\bmessages?\b/],
+    ['Partners', /\bpartners?\b/],
+    ['Projects', /\bprojects?\b/],
+    ['Zoho Finance', /\bzoho finance\b/]
+  ];
+  const match = aliases
+    .map(([module, pattern]) => ({ module, index: lowerText.search(pattern) }))
+    .filter((candidate) => candidate.index >= 0)
+    .sort((left, right) => left.index - right.index)[0];
+  if (match) return match.module;
+  return null;
 }
 
 function extractExplicitModule(lowerText) {
@@ -724,7 +763,8 @@ function defaultFields(module) {
   if (module === 'Meetings') return ['Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Owner', 'Participants'];
   if (module === 'Calls') return ['Subject', 'Call_Type', 'Call_Start_Time', 'Status', 'Owner', 'Created_Time'];
   if (module === 'Tasks') return ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'];
-  return ['Deal_Name', 'Amount', 'Stage', 'Owner', 'Closing_Date'];
+  if (module === 'Products') return ['Product_Name', 'Product_Code', 'Unit_Price', 'Created_Time', 'Owner'];
+  return ['id'];
 }
 
 function defaultSortField(module) {

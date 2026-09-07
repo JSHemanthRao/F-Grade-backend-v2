@@ -5,7 +5,7 @@ const { createAppError } = require('../utils/errors');
 const OPERATOR_SET = new Set(CRM_OPERATORS);
 const NULL_OPERATORS = new Set(['is_null', 'is_not_null']);
 const VALUE_OPERATORS = new Set(CRM_OPERATORS.filter((operator) => !NULL_OPERATORS.has(operator)));
-const STRICT_MODULES = new Set(['Leads', 'Contacts', 'Accounts', 'Deals', 'Tasks', 'Calls', 'Meetings', 'Notes', 'Products', 'Vendors', 'Quotes', 'Sales Orders', 'Purchase Orders', 'Campaigns', 'Renewal Accounts']);
+const STRICT_MODULES = new Set(Object.keys(CRM_MODULES));
 
 function isValue(value) {
   return value !== null && value !== undefined && ['string', 'number', 'boolean'].includes(typeof value);

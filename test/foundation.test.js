@@ -4,6 +4,7 @@ const http = require('node:http');
 const createApp = require('../src/app').createApp;
 const { CRM_MODULES } = require('../src/constants/crmModules');
 const { validateCrmQuery } = require('../src/validators/crmQuery.validator');
+const { CrmService } = require('../src/services/crm.service');
 const openApi = require('../openapi.json');
 
 function requestJson(app, path, method, body) {
@@ -236,6 +237,79 @@ test('preserves explicit Products, Calls, Tasks, and Meetings module targets', (
   assert.equal(planQuestion("today's calls").module, 'Calls');
   assert.equal(planQuestion('latest tasks').module, 'Tasks');
   assert.equal(planQuestion('show meetings').module, 'Meetings');
+});
+
+test('passes the requested Products API module through the CRM service for latest, limited, and date-filtered requests', async () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const requests = [];
+  const zoho = {
+    executionStats: {},
+    resolveModuleApiName: async (module) => ({ Products: 'Products' })[module] || module,
+    getFieldMetadata: async () => ({ fields: ['id', 'Product_Name', 'Product_Code', 'Unit_Price', 'Created_Time', 'Owner'], metadata: [] }),
+    resolveOwnerFilters: async (filters) => filters,
+    query: async (request) => { requests.push(request); return { records: [], info: { more_records: false }, module_api_name: request.module }; }
+  };
+  const service = new CrmService(zoho);
+  for (const question of ['Show me the latest products.', 'Show me 10 products.', 'Show me products created this month.']) {
+    await service.query(planQuestion(question));
+  }
+  assert.deepEqual(requests.map((request) => request.module), ['Products', 'Products', 'Products']);
+  assert.equal(requests[0].sort.field, 'Created_Time');
+  assert.equal(requests[0].sort.order, 'desc');
+  assert.equal(requests[1].limit, 10);
+  assert.equal(requests[2].filters[0].field, 'Created_Time');
+  assert.ok(requests.every((request) => !request.fields.includes('Deal_Name')));
+});
+
+test('passes Deals, Calls, Tasks, Contacts, and Meetings to their exact Zoho API modules', async () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const expected = { Deals: 'Deals', Calls: 'Calls', Tasks: 'Tasks', Contacts: 'Contacts', Meetings: 'Events' };
+  const requests = [];
+  const zoho = {
+    executionStats: {},
+    resolveModuleApiName: async (module) => expected[module] || module,
+    getFieldMetadata: async () => ({ fields: ['id', 'Subject', 'Created_Time', 'Start_DateTime', 'Event_Title'], metadata: [] }),
+    resolveOwnerFilters: async (filters) => filters,
+    query: async (request) => { requests.push(request); return { records: [], info: { more_records: false }, module_api_name: request.module }; }
+  };
+  const service = new CrmService(zoho);
+  for (const question of ['Show me the latest deals.', 'Show me latest calls.', "Show me today's calls.", 'Show me meetings this week.', 'Show me tasks.', 'Show me contacts.']) {
+    await service.query(planQuestion(question));
+  }
+  assert.deepEqual(requests.map((request) => request.module), ['Deals', 'Calls', 'Calls', 'Events', 'Tasks', 'Contacts']);
+  assert.equal(requests[3].module, 'Events');
+});
+
+test('does not fall back from zero Products records or an unavailable module to Deals', async () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const requests = [];
+  const zoho = {
+    executionStats: {},
+    resolveModuleApiName: async (module) => {
+      if (module === 'Unavailable Module') {
+        const error = new Error('module unavailable');
+        error.code = 'MODULE_UNAVAILABLE';
+        error.statusCode = 404;
+        throw error;
+      }
+      return module;
+    },
+    getFieldMetadata: async () => ({ fields: ['id', 'Product_Name', 'Created_Time'], metadata: [] }),
+    resolveOwnerFilters: async (filters) => filters,
+    query: async (request) => { requests.push(request); return { records: [], info: { more_records: false }, module_api_name: request.module }; }
+  };
+  const service = new CrmService(zoho);
+  const result = await service.query(planQuestion('Show me products.'));
+  assert.equal(result.data.length, 0);
+  assert.deepEqual(requests.map((request) => request.module), ['Products']);
+  zoho.resolveModuleApiName = async () => {
+    const error = new Error('module unavailable');
+    error.code = 'MODULE_UNAVAILABLE';
+    error.statusCode = 404;
+    throw error;
+  };
+  await assert.rejects(() => service.query({ module: 'Products', fields: ['id'], filters: [] }), (error) => error.code === 'MODULE_UNAVAILABLE');
+  assert.deepEqual(requests.map((request) => request.module), ['Products']);
 });
 
 test('rejects an explicit module when planning would substitute another target', async () => {
