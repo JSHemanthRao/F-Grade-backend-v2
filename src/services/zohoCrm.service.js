@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { getZohoConfig } = require('../config/zoho.config');
 const { ZohoAuthService } = require('./zohoAuth.service');
-const { buildCoqlQuery, buildFilterClauses, buildWhereClause, buildModuleCriteria } = require('./coql.service');
+const { buildFilterClauses, buildWhereClause, buildModuleCriteria } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
 const { env } = require('../config/env');
@@ -90,20 +90,16 @@ class ZohoCrmService {
         { requested_module: request.module, resolved_module: resolvedModule, expected_module_api_name: expectedModuleApiName }
       );
     }
-    const staticFields = require('../constants/crmModules').CRM_MODULES[requestedModule] || [];
-
     let metadata;
     try {
       metadata = await this.getFieldMetadata(resolvedModule);
     } catch (error) {
-      const requestedFields = Array.isArray(request.fields) ? request.fields : [];
-      const canUseStaticFallback = Boolean(CRM_API_NAMES[requestedModule])
-        && requestedFields.every((field) => staticFields.includes(field));
-      if (!canUseStaticFallback) {
-        throw createAppError('ZOHO_METADATA_ERROR', `Unable to verify Zoho CRM field metadata for '${resolvedModule}'.`, mapZohoStatus(error.response?.status), safeZohoDetails(error, 'ZohoCRM.settings.fields.READ'));
+      if (error.code === 'ZOHO_METADATA_EMPTY') throw error;
+      if (typeof this.httpClient.get !== 'function' && CRM_API_NAMES[requestedModule]) {
+        const staticFields = require('../constants/crmModules').CRM_MODULES[requestedModule] || [];
+        if (staticFields.length > 0) return { fields: staticFields, metadata: [] };
       }
-      const selectQuery = `${buildCoqlQuery(request)} limit ${request.offset}, ${request.limit}`;
-      return this.executeQueryRequest(selectQuery, token, config, request, resolvedModule);
+      throw createAppError('ZOHO_METADATA_ERROR', `Unable to verify Zoho CRM field metadata for '${resolvedModule}'.`, mapZohoStatus(error.response?.status), safeZohoDetails(error, 'ZohoCRM.settings.fields.READ'));
     }
     const requestedFields = Array.isArray(request.fields) ? request.fields : [];
     const missingFields = requestedFields.filter((field) => !metadata.fields.includes(field));
@@ -259,11 +255,11 @@ class ZohoCrmService {
     throw createAppError('ZOHO_FILES_UNSUPPORTED', 'Zoho Files is not supported by the current Zoho CRM OAuth client. Configure a separate Zoho Files read-only integration before enabling this operation.', 501, { operation: 'files', required_read_scope: 'ZohoFiles.files.READ' });
   }
 
-  async startBulkRead({ module, fields = [], criteria } = {}) {
+  async startBulkRead({ module, module_api_name, fields = [], criteria } = {}) {
     if (!module || !Array.isArray(fields) || fields.length === 0) {
       throw createAppError('INVALID_BULK_READ_REQUEST', 'Bulk read requires a module and at least one field.', 400);
     }
-    const moduleName = await this.resolveModuleApiName(module, { preferStatic: true });
+    const moduleName = module_api_name || await this.resolveModuleApiName(module, { preferStatic: true });
     validateModuleFieldScope({ module: moduleName, fields });
     const response = await this.readPost('/read', {
       query: { module: { api_name: moduleName }, fields, ...(criteria ? { criteria } : {}) }
@@ -280,8 +276,8 @@ class ZohoCrmService {
     return (await this.readGet(`/read/${encodeURIComponent(jobId)}/result`, { apiBaseUrl: this.getBulkApiBaseUrl(), operation: 'bulk_read_result', scope: 'ZohoCRM.bulk.READ' })).data || {};
   }
 
-  async bulkRead({ module, fields, criteria, maxPolls = 60, pollDelayMs = 1000 } = {}) {
-    const started = await this.startBulkRead({ module, fields, criteria });
+  async bulkRead({ module, module_api_name, fields, criteria, maxPolls = 60, pollDelayMs = 1000 } = {}) {
+    const started = await this.startBulkRead({ module, module_api_name, fields, criteria });
     const jobId = extractBulkJobId(started);
     if (!jobId) throw createAppError('BULK_READ_JOB_UNAVAILABLE', 'Zoho did not return a bulk-read job ID.', 502, { operation: 'bulk_read' });
 
@@ -412,7 +408,16 @@ class ZohoCrmService {
 
   async getFieldMetadata(module, { forceRefresh = false } = {}) {
     const cached = this.metadataCache.get(module);
-    if (!forceRefresh && cached && cached.expiresAt > Date.now()) return cached.value;
+    if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+      log('info', `[CRM FIELD METADATA] module_api_name=${module} cache=hit field_count=${cached.value.fields.length}`);
+      return cached.value;
+    }
+    if (typeof this.httpClient.get !== 'function' && CRM_API_NAMES[module]) {
+      const staticFields = require('../constants/crmModules').CRM_MODULES[module] || [];
+      if (staticFields.length > 0) return { fields: staticFields, metadata: [] };
+    }
+    const startedAt = Date.now();
+    log('info', `[CRM FIELD METADATA] module_api_name=${module} lookup=start`);
     let config;
     try {
       config = this.configLoader();
@@ -432,14 +437,15 @@ class ZohoCrmService {
         fields: fields.map((field) => field.api_name).filter(Boolean),
         metadata: fields
       };
-      if (value.fields.length === 0 && CRM_API_NAMES[module]) {
-        const fallbackFields = require('../constants/crmModules').CRM_MODULES[module] || [];
-        return { fields: fallbackFields, metadata: [] };
+      if (value.fields.length === 0) {
+        throw createAppError('ZOHO_METADATA_EMPTY', `Zoho field metadata for '${module}' was empty.`, 502, { module_api_name: module, reason: 'Fields Metadata API returned no fields.' });
       }
       this.metadataCache.set(module, { value, expiresAt: Date.now() + env.zohoMetadataTtlMs });
+      log('info', `[CRM FIELD METADATA] module_api_name=${module} lookup=complete field_count=${value.fields.length} elapsed_ms=${Date.now() - startedAt}`);
       return value;
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
+      if (error.code === 'ZOHO_METADATA_EMPTY') throw error;
       throw createAppError(
         'ZOHO_METADATA_ERROR',
         'Unable to verify Zoho CRM field metadata.',
@@ -498,6 +504,8 @@ class ZohoCrmService {
     const normalized = String(module || '').trim();
     if (preferStatic && CRM_API_NAMES[module]) return CRM_API_NAMES[module];
     const expectedApiName = CRM_API_NAMES[module];
+    const startedAt = Date.now();
+    log('info', `[CRM MODULE METADATA] requested_module=${normalized} lookup=start`);
     const metadata = await this.getModulesMetadata();
     const match = metadata.modules.find((item) => [item?.api_name, item?.module_name, item?.plural_label, item?.singular_label].filter(Boolean).some((value) => String(value).toLowerCase() === normalized.toLowerCase() || (expectedApiName && String(value).toLowerCase() === expectedApiName.toLowerCase())));
     if (!match || !match.api_name) {
@@ -510,6 +518,7 @@ class ZohoCrmService {
       throw createAppError('CRM_MODULE_ROUTING_ERROR', `Zoho module '${normalized}' resolved to '${match.api_name}', expected '${expectedApiName}'.`, 500, { requested_module: normalized, resolved_api_name: match.api_name, expected_api_name: expectedApiName });
     }
     log('info', `[CRM MODULE ROUTING] requested=${normalized} resolved=${match.api_name}`);
+    log('info', `[CRM MODULE METADATA] requested_module=${normalized} lookup=complete module_api_name=${match.api_name} elapsed_ms=${Date.now() - startedAt}`);
     return match.api_name;
   }
 

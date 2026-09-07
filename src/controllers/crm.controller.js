@@ -761,7 +761,7 @@ function defaultFields(module) {
   if (module === 'Accounts') return ['Account_Name', 'Industry', 'Owner', 'Created_Time'];
   if (module === 'Contacts') return ['First_Name', 'Last_Name', 'Account_Name', 'Email', 'Owner'];
   if (module === 'Meetings') return ['Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Owner', 'Participants'];
-  if (module === 'Calls') return ['Subject', 'Call_Type', 'Call_Start_Time', 'Status', 'Owner', 'Created_Time'];
+  if (module === 'Calls') return ['Subject', 'Call_Type', 'Call_Start_Time', 'Call_Result', 'Owner', 'Created_Time'];
   if (module === 'Tasks') return ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'];
   if (module === 'Products') return ['Product_Name', 'Product_Code', 'Unit_Price', 'Created_Time', 'Owner'];
   return ['id'];

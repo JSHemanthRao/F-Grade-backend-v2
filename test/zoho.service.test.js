@@ -902,6 +902,49 @@ test('supports organization, audit, files, and bounded bulk read operations', as
   assert.ok(requests.some((request) => request.method === 'post' && request.url.endsWith('/crm/bulk/v8/read')));
 });
 
+test('resolves activity fields from the final API module only', async () => {
+  const queries = [];
+  const fieldsByModule = {
+    Calls: [{ api_name: 'Subject', data_type: 'text' }, { api_name: 'Call_Start_Time', data_type: 'datetime' }],
+    Tasks: [{ api_name: 'Subject', data_type: 'text' }, { api_name: 'Due_Date', data_type: 'date' }],
+    Events: [{ api_name: 'Event_Title', data_type: 'text' }, { api_name: 'Start_DateTime', data_type: 'datetime' }]
+  };
+  const zoho = new ZohoCrmService({
+    get: async (_url, options) => ({ data: { fields: fieldsByModule[options?.params?.module] || [] } }),
+    post: async (_url, body) => { queries.push(body.select_query); return { data: { data: [], info: { more_records: false } } }; }
+  }, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
+    getAccessToken: async () => 'redacted-test-token',
+    getApiDomain: () => null,
+    clearToken: () => {}
+  });
+
+  await zoho.query({ module: 'Calls', module_api_name: 'Calls', fields: ['Subject'], filters: [], limit: 1, offset: 0 });
+  await zoho.query({ module: 'Tasks', module_api_name: 'Tasks', fields: ['Subject'], filters: [], limit: 1, offset: 0 });
+  await zoho.query({ module: 'Meetings', module_api_name: 'Events', fields: ['Event_Title'], filters: [], limit: 1, offset: 0 });
+  assert.match(queries[0], /select Subject from Calls/);
+  assert.match(queries[1], /select Subject from Tasks/);
+  assert.match(queries[2], /select Event_Title from Events/);
+  assert.doesNotMatch(queries[0], /Events|Deals/);
+  assert.doesNotMatch(queries[1], /Events|Deals/);
+});
+
+test('empty activity field metadata returns a metadata error before querying Zoho records', async () => {
+  let coqlCalls = 0;
+  const zoho = new ZohoCrmService({
+    get: async () => ({ data: { fields: [] } }),
+    post: async () => { coqlCalls += 1; return { data: { data: [] } }; }
+  }, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
+    getAccessToken: async () => 'redacted-test-token',
+    getApiDomain: () => null,
+    clearToken: () => {}
+  });
+  await assert.rejects(
+    () => zoho.query({ module: 'Calls', module_api_name: 'Calls', fields: ['Subject'], filters: [], limit: 1, offset: 0 }),
+    (error) => error.code === 'ZOHO_METADATA_EMPTY'
+  );
+  assert.equal(coqlCalls, 0);
+});
+
 test('blocks unsupported write methods in the Zoho client', async () => {
   const zoho = new ZohoCrmService({}, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
     getAccessToken: async () => 'redacted-test-token',

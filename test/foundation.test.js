@@ -224,7 +224,7 @@ test('routes explicit calls and weekly meetings to their correct modules and dat
   const calls = planQuestion("Show me today's calls");
   const meetings = planQuestion('Show me meetings this week');
   assert.equal(calls.module, 'Calls');
-  assert.deepEqual(calls.fields, ['Subject', 'Call_Type', 'Call_Start_Time', 'Status', 'Owner', 'Created_Time']);
+  assert.deepEqual(calls.fields, ['Subject', 'Call_Type', 'Call_Start_Time', 'Call_Result', 'Owner', 'Created_Time']);
   assert.equal(calls.filters[0].field, 'Created_Time');
   assert.equal(meetings.module, 'Meetings');
   assert.equal(meetings.filters[0].field, 'Start_DateTime');
@@ -276,8 +276,8 @@ test('passes Deals, Calls, Tasks, Contacts, and Meetings to their exact Zoho API
   for (const question of ['Show me the latest deals.', 'Show me latest calls.', "Show me today's calls.", 'Show me meetings this week.', 'Show me tasks.', 'Show me contacts.']) {
     await service.query(planQuestion(question));
   }
-  assert.deepEqual(requests.map((request) => request.module), ['Deals', 'Calls', 'Calls', 'Events', 'Tasks', 'Contacts']);
-  assert.equal(requests[3].module, 'Events');
+  assert.deepEqual(requests.map((request) => request.module), ['Deals', 'Calls', 'Calls', 'Meetings', 'Tasks', 'Contacts']);
+  assert.equal(requests[3].module_api_name, 'Events');
 });
 
 test('does not fall back from zero Products records or an unavailable module to Deals', async () => {

@@ -70,7 +70,7 @@ class CrmService {
       return result;
     }
     if (request.request_type === 'bulk_read') {
-      const result = await this.zohoService.bulkRead({ module: request.module_api_name || request.module, fields: request.fields, criteria: buildModuleCriteriaForBulk(request.filters) });
+      const result = await this.zohoService.bulkRead({ module: request.module, module_api_name: request.module_api_name, fields: request.fields, criteria: buildModuleCriteriaForBulk(request.filters) });
       this.logExecution(executionId, startedAt, statsAtStart, 'bulk_read');
       const data = normalizeBulkResult(result.result);
       return { module: request.module, module_api_name: request.module_api_name || await this.zohoService.resolveModuleApiName(request.module), request_type: 'bulk_read', job_id: result.job_id, status: result.status, download_url: result.download_url, returned: data.length, more_records: false, records: data, data, pagination: { limit: request.limit, offset: request.offset, returned: data.length, more_records: false } };
@@ -166,7 +166,7 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'files');
       return { module: 'Files', request_type: 'files', count: result.files.length, data: result.files, pagination: { limit: request.limit, offset: request.offset, returned: result.files.length, more_records: Boolean(result.info.more_records) } };
     }
-    const result = await this.zohoService.query({ ...request, module: request.module_api_name || request.module });
+    const result = await this.zohoService.query(request);
     const data = result.records.map(sanitizeZohoRecord);
     const info = result.info || {};
 

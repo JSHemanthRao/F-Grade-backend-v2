@@ -4,7 +4,7 @@
     "title": "F-Grade CRM Assistant API",
     "version": "1.0.0",
     "description": "Read-only natural-language Zoho CRM assistant for Microsoft Copilot Studio. The backend resolves the explicitly requested module to its exact Zoho API module, validates live module and field metadata, selects an approved read API, and returns normalized CRM data. It never substitutes another module; zero records remain zero records and module errors are returned.",
-    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho CRM. Treat the user's explicit module as authoritative: Products means Products, Deals means Deals, Calls means Calls, Tasks means Tasks, and Meetings means Events. Never substitute Deals or any other module. Never emit a Leads field named Converted; conversion questions must remain natural language."
+    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho CRM. The user's explicit module is authoritative: Calls means Calls, Tasks means Tasks, Meetings means Events, Products means Products, and Deals means Deals. Never substitute another module. Never invent fields; resolve fields against the selected module's live metadata. Zero records remain zero records. Return backend module, metadata, or query errors instead of replacing them with another module's data. Never emit a Leads field named Converted; conversion questions must remain natural language."
   },
   "servers": [
     {
