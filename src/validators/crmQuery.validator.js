@@ -42,7 +42,7 @@ function validateCrmQuery(body) {
   const addError = (path, message) => errors.push({ path, message });
   const invalidFieldMessage = (field) => `Field '${field}' is not supported for module '${module}'. Use a valid Zoho CRM API field name. Allowed fields: ${supportedFields ? supportedFields.join(', ') : 'none'}.`;
 
-  const requestTypes = new Set(['records', 'count', 'aggregate', 'analysis', 'search', 'bulk_read']);
+  const requestTypes = new Set(['records', 'count', 'aggregate', 'comparison', 'analysis', 'search', 'bulk_read']);
   const metricRequest = request_type !== 'records';
   if (typeof module !== 'string' || module.trim().length === 0) addError('module', 'module must be a non-empty string.');
   else if (!STRICT_MODULES.has(module) && request_type === 'records' && module !== 'CRM') addError('module', `module must be one of: ${[...STRICT_MODULES].join(', ')}.`);
@@ -77,6 +77,9 @@ function validateCrmQuery(body) {
         if (typeof aggregate.field !== 'string' || aggregate.field.length === 0) addError('aggregate.field', 'aggregate.field must be a non-empty string.');
         else if (supportedFields && !supportedFields.includes(aggregate.field) && !isApiFieldName(aggregate.field)) addError('aggregate.field', invalidFieldMessage(aggregate.field));
       }
+  }
+  if (request_type === 'comparison' && (!aggregate || typeof aggregate !== 'object' || !['sum', 'avg', 'min', 'max', 'count'].includes(aggregate.operation) || typeof aggregate.field !== 'string')) {
+    addError('aggregate', 'comparison requests require an aggregate with operation count, sum, avg, min, or max and a field.');
   }
   if (group_by !== undefined && (typeof group_by !== 'string' || group_by.length === 0)) addError('group_by', 'group_by must be a non-empty string.');
   else if (group_by !== undefined && supportedFields && !supportedFields.includes(group_by) && !isApiFieldName(group_by)) addError('group_by', invalidFieldMessage(group_by));
@@ -148,7 +151,7 @@ function validateCrmQuery(body) {
     400,
     { errors }
   );
-  return { module, fields: normalizedFields, filters: normalizedFilters, sort: normalizedSort, limit, offset, request_type, aggregate, group_by };
+  return { module, fields: normalizedFields, filters: normalizedFilters, sort: normalizedSort, limit, offset, request_type, aggregate, group_by, comparison: body.comparison, date_range: body.date_range, analysis: body.analysis };
 }
 
 function validateModuleFieldScope({ module, fields = [], filters = [], sort, aggregate, group_by } = {}) {

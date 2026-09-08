@@ -1,7 +1,7 @@
 const { env } = require('./env');
 
-function required(primaryName, legacyName) {
-  const value = process.env[primaryName] || (legacyName && process.env[legacyName]);
+function required(primaryName, ...aliases) {
+  const value = [primaryName, ...aliases].map((name) => process.env[name]).find(Boolean);
   if (!value) {
     const error = new Error(`Missing required Zoho environment variable: ${primaryName}`);
     error.code = 'ZOHO_CONFIGURATION_ERROR';
@@ -33,9 +33,9 @@ function getZohoConfig() {
     accountsUrl: (process.env.ZOHO_ACCOUNTS_URL || deriveAccountsUrl(apiBaseUrl)).replace(/\/$/, ''),
     apiBaseUrl,
     bulkApiBaseUrl: process.env.ZOHO_BULK_API_BASE_URL || deriveBulkApiBaseUrl(apiBaseUrl),
-    clientId: required('ZOHO_CLIENT_ID', 'CLIENT_ID'),
-    clientSecret: required('ZOHO_CLIENT_SECRET', 'CLIENT_SECRET'),
-    refreshToken: required('ZOHO_REFRESH_TOKEN', 'REFRESH_TOKEN'),
+    clientId: required('ZOHO_CRM_CLIENT_ID', 'ZOHO_CLIENT_ID', 'CLIENT_ID'),
+    clientSecret: required('ZOHO_CRM_CLIENT_SECRET', 'ZOHO_CLIENT_SECRET', 'CLIENT_SECRET'),
+    refreshToken: required('ZOHO_CRMREFRESH_TOKEN_CRM', 'ZOHO_CRM_REFRESH_TOKEN', 'ZOHO_REFRESH_TOKEN', 'REFRESH_TOKEN'),
     timeoutMs: env.zohoRequestTimeoutMs
   };
 }

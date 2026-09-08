@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const createCrmRoutes = require('./routes/crm.routes');
+const createBooksRoutes = require('./routes/books.routes');
 const healthRoutes = require('./routes/health.routes');
 const createSkillsRoutes = require('./routes/skills.routes');
 const { errorHandler } = require('./middleware/errorHandler');
@@ -19,6 +20,7 @@ function createApp({ crmService } = {}) {
   app.use('/health', healthRoutes);
   app.use('/api/skills', createSkillsRoutes());
   app.use('/api/crm', createCrmRoutes(crmService));
+  app.use('/api/books', createBooksRoutes());
   app.use((req, res) => {
     res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found.' } });
   });

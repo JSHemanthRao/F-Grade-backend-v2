@@ -40,8 +40,7 @@ class CrmService {
     const startedAt = Date.now();
     const statsAtStart = { ...(this.zohoService.executionStats || {}) };
     log('info', `[CRM EXECUTION START] executionId=${executionId}`);
-    log('info', `[CRM filters received] ${JSON.stringify(Array.isArray(input?.filters) ? input.filters : [])}`);
-    log('info', `[CRM request received] ${JSON.stringify({ module: input?.module, fields: input?.fields, filters: input?.filters, limit: input?.limit, offset: input?.offset, sort_field: input?.sort_field || input?.sort?.field, sort_order: input?.sort_order || input?.sort?.order, request_type: input?.request_type || 'records' })}`);
+    log('info', `[CRM request received] ${JSON.stringify({ module: input?.module, request_type: input?.request_type || 'records', query_type: input?.request_type || 'records', field_count: Array.isArray(input?.fields) ? input.fields.length : 0, filter_count: Array.isArray(input?.filters) ? input.filters.length : 0, date_range: input?.date_range || null })}`);
     const normalizedInput = await this.resolveSemanticFields(normalizeSemanticRequest(input));
     const executionPlan = classifyExecution(normalizedInput);
     log('info', `[CRM execution plan] classification=${executionPlan.classification} steps=${executionPlan.steps.join(' | ')}`);
@@ -52,18 +51,22 @@ class CrmService {
       log('warn', `[CRM validation failure] ${JSON.stringify(error.details || { message: error.message })}`);
       throw error;
     }
-    await validateMetadataFields(this.zohoService, request);
     if (request.module !== 'CRM' && typeof this.zohoService.resolveModuleApiName === 'function') {
       const hasLiveModuleMetadata = typeof this.zohoService.getModulesMetadata === 'function'
         && typeof this.zohoService.httpClient?.get === 'function';
       const resolveOptions = hasLiveModuleMetadata ? undefined : { preferStatic: true };
       request.module_api_name = await this.zohoService.resolveModuleApiName(request.module, resolveOptions);
     }
+    await validateMetadataFields(this.zohoService, request);
     if (typeof this.zohoService.resolveOwnerFilters === 'function') {
       request.filters = await this.zohoService.resolveOwnerFilters(request.filters);
     }
-    log('info', `[CRM normalized request] ${JSON.stringify({ module: request.module, fields: request.fields, filters: request.filters, limit: request.limit, offset: request.offset, sort_field: request.sort?.field, sort_order: request.sort?.order, request_type: request.request_type })}`);
-    log('info', `[CRM filters normalized] ${JSON.stringify(request.filters)}`);
+    log('info', `[CRM normalized request] ${JSON.stringify({ module: request.module, module_api_name: request.module_api_name, request_type: request.request_type, query_type: request.request_type, field_count: request.fields.length, filter_count: request.filters.length, date_range: request.date_range || null })}`);
+    if (request.request_type === 'comparison') {
+      const result = await this.compare(request, normalizedInput.comparison || request.comparison, normalizedInput.date_range || request.date_range);
+      this.logExecution(executionId, startedAt, statsAtStart, 'comparison');
+      return result;
+    }
     if (request.request_type === 'count') {
       const result = await this.count(request);
       this.logExecution(executionId, startedAt, statsAtStart, 'count');
@@ -172,7 +175,7 @@ class CrmService {
 
     const response = {
       module: request.module,
-      module_api_name: result.module_api_name || request.module_api_name || await this.zohoService.resolveModuleApiName(request.module),
+      module_api_name: result.module_api_name || request.module_api_name || (typeof this.zohoService.resolveModuleApiName === 'function' ? await this.zohoService.resolveModuleApiName(request.module) : request.module),
       request_type: request.request_type,
       count: Number.isInteger(info.count) ? info.count : data.length,
       returned: data.length,
@@ -193,6 +196,31 @@ class CrmService {
     const current = this.zohoService.executionStats || {};
     const delta = (key) => Math.max(0, (current[key] || 0) - (statsAtStart[key] || 0));
     log('info', `[CRM EXECUTION COMPLETE] executionId=${executionId} operation=${operation} durationMs=${Date.now() - startedAt} crmCalls=${delta('calls')} successfulCalls=${delta('successfulCalls')} failedCalls=${delta('failedCalls')} retries=${delta('retries')}`);
+  }
+
+  async compare(request, comparison = {}, dateRange = {}) {
+    const current = dateRange.current;
+    const previous = dateRange.previous;
+    if (!current || !previous) throw createAppError('INVALID_CRM_COMPARISON', 'Comparison requests require current and previous date ranges.', 400);
+    const dateField = comparison.date_field || 'Created_Time';
+    const operation = comparison.operation || request.aggregate?.operation || 'count';
+    const aggregate = { operation, field: comparison.field || request.aggregate?.field || 'id' };
+    const filtersFor = (period) => [...(request.filters || []), { field: dateField, operator: 'between', value: [period.start, period.end], exclusive_end: true }];
+    const readValue = async (period) => {
+      if (operation === 'count') return (await this.count({ ...request, request_type: 'count', filters: filtersFor(period) })).count;
+      const result = await this.aggregate({ ...request, request_type: 'aggregate', filters: filtersFor(period) }, aggregate);
+      return Number(result.data?.[0]?.value ?? result.summary?.rows?.[0]?.value ?? 0) || 0;
+    };
+    const [currentValue, previousValue] = await Promise.all([readValue(current), readValue(previous)]);
+    const difference = currentValue - previousValue;
+    const percentageChange = previousValue === 0 ? (currentValue === 0 ? 0 : null) : Number(((difference / previousValue) * 100).toFixed(2));
+    return {
+      request_type: 'comparison',
+      module: request.module,
+      module_api_name: request.module_api_name || await this.zohoService.resolveModuleApiName(request.module, { preferStatic: true }),
+      comparison: { current_period: current.period, previous_period: previous.period, current_value: currentValue, previous_value: previousValue, difference, percentage_change: percentageChange },
+      date_range: { field: dateField, current, previous }
+    };
   }
 
   async count(request) {
@@ -833,19 +861,31 @@ async function executeCached(context, key, operation) {
 }
 
 async function validateMetadataFields(zohoService, request) {
-  const conversionFields = new Set(['Converted__s', 'Converted_Date_Time']);
-  const requestedFields = Array.isArray(request.fields) ? request.fields : [];
-  const requestedConversionField = requestedFields.find((field) => conversionFields.has(field));
-  if (!requestedConversionField || request.module !== 'Leads') return;
-
-  const metadata = await zohoService.getFieldMetadata('Leads');
-  if (!new Set(metadata.fields).has(requestedConversionField)) {
-    throw createAppError(
-      'ZOHO_FIELD_UNAVAILABLE',
-      `Zoho Leads metadata does not expose '${requestedConversionField}'.`,
-      502
-    );
+  if (request.module === 'CRM' || typeof zohoService.getFieldMetadata !== 'function') return;
+  const moduleApiName = request.module_api_name || request.module;
+  const metadata = await zohoService.getFieldMetadata(moduleApiName);
+  if (!metadata || !Array.isArray(metadata.fields) || metadata.fields.length === 0) {
+    throw createAppError('ZOHO_METADATA_EMPTY', `Zoho field metadata for '${moduleApiName}' was unavailable.`, 502, { module_api_name: moduleApiName });
   }
+  const conversionFields = new Set(['Converted__s', 'Converted_Date_Time']);
+  if (request.analysis?.type === 'lead_conversion') {
+    const missingConversionFields = [...conversionFields].filter((field) => !metadata.fields.includes(field));
+    if (missingConversionFields.length > 0) throw createAppError('ZOHO_CONVERSION_FIELDS_UNAVAILABLE', 'Zoho Leads metadata does not expose the fields required for conversion analysis.', 502, { module: moduleApiName, fields: missingConversionFields });
+    return;
+  }
+  const requestedFields = Array.isArray(request.fields) ? request.fields : [];
+  const missingRequestedFields = requestedFields.filter((field) => conversionFields.has(field) && !metadata.fields.includes(field));
+  if (missingRequestedFields.length > 0) throw createAppError('ZOHO_FIELD_UNAVAILABLE', `Zoho CRM metadata for '${moduleApiName}' does not expose the requested field(s).`, 502, { module: moduleApiName, fields: missingRequestedFields });
+  if (!Array.isArray(metadata.metadata) || metadata.metadata.length === 0) return;
+  const fields = [
+    ...(Array.isArray(request.fields) ? request.fields : []),
+    ...(Array.isArray(request.filters) ? request.filters.map((filter) => filter.field) : []),
+    request.aggregate?.field,
+    request.group_by,
+    request.sort?.field
+  ].filter(Boolean);
+  const missing = [...new Set(fields.filter((field) => !metadata.fields.includes(field)))];
+  if (missing.length > 0) throw createAppError('ZOHO_FIELD_UNAVAILABLE', `Zoho CRM metadata for '${moduleApiName}' does not expose the requested field(s).`, 502, { module: moduleApiName, fields: missing });
 }
 
 async function discoverActivityModuleSpecs(zohoService) {

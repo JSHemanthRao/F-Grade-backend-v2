@@ -1,0 +1,173 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "F-Grade Zoho Books Read-Only Assistant API",
+    "version": "1.0.0",
+    "description": "Read-only Zoho Books assistant for natural-language module reads, metadata-driven field resolution, filters, pagination, and safe module history access. This contract intentionally excludes CRM operations and write actions.",
+    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho Books modules such as Invoices, Bills, Items, Customers, or vendor/payment records. The backend resolves the module and field names from the Books metadata and enforces read-only routing. Never invent customs, joins, or write actions."
+  },
+  "servers": [
+    { "url": "https://f-grade-backend-v2.onrender.com/", "description": "Production server" },
+    { "url": "http://localhost:3000/", "description": "Local development server" }
+  ],
+  "paths": {
+    "/api/books/query": {
+      "post": {
+        "operationId": "booksReadQuery",
+        "summary": "Execute a read-only Books query",
+        "description": "Reads Books records using an allowlisted module and metadata-aware field names. Only GET-based read queries and safe metadata/history lookups are allowed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BooksQueryRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Books query result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BooksQueryResponse" } } } },
+          "400": { "description": "Invalid Books request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Books module or route not available", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "502": { "description": "Zoho Books upstream error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/books/history/{module}": {
+      "get": {
+        "operationId": "booksModuleHistory",
+        "summary": "Read Books module history or comments where supported",
+        "description": "Reads module-specific history/comments when the official Zoho Books API exposes them. This is not a global audit log endpoint.",
+        "parameters": [
+          { "$ref": "#/components/parameters/BooksModulePath" },
+          { "$ref": "#/components/parameters/LimitParam" },
+          { "$ref": "#/components/parameters/OffsetParam" }
+        ],
+        "responses": {
+          "200": { "description": "History result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BooksHistoryResponse" } } } }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Optional when the backend is deployed without BACKEND_API_KEY; required when that environment variable is configured."
+      }
+    },
+    "parameters": {
+      "BooksModulePath": {
+        "name": "module",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "Books module name such as Invoices, Bills, Items, or an explicit module_api_name for a custom module."
+      },
+      "LimitParam": {
+        "name": "limit",
+        "in": "query",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 200 },
+        "description": "Maximum rows to return."
+      },
+      "OffsetParam": {
+        "name": "offset",
+        "in": "query",
+        "schema": { "type": "integer", "minimum": 0 },
+        "description": "Pagination offset."
+      }
+    },
+    "schemas": {
+      "BooksQueryRequest": {
+        "type": "object",
+        "required": ["module"],
+        "properties": {
+          "module": { "type": "string", "description": "Books module name, for example Invoices or Items." },
+          "module_api_name": { "type": "string", "description": "Exact Books API module name when a custom module is resolved dynamically." },
+          "request_type": { "type": "string", "enum": ["records", "count", "search", "aggregate", "comparison", "analysis"], "description": "Read-only Books query type." },
+          "fields": { "type": "array", "items": { "type": "string" }, "description": "Metadata-resolved Books field names. Never invent field names." },
+          "filters": { "type": "array", "items": { "$ref": "#/components/schemas/BooksFilter" } },
+          "sort": { "$ref": "#/components/schemas/BooksSort" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+          "offset": { "type": "integer", "minimum": 0 },
+          "date_range": { "type": "object", "additionalProperties": true },
+          "comparison": { "type": "object", "additionalProperties": true },
+          "analysis": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": true
+      },
+      "BooksFilter": {
+        "type": "object",
+        "required": ["field", "operator", "value"],
+        "properties": {
+          "field": { "type": "string", "description": "Books field name or metadata-resolved custom field." },
+          "operator": {
+            "type": "string",
+            "enum": ["equals", "not_equals", "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal", "between", "in", "contains", "starts_with", "ends_with", "is_empty", "is_not_empty"]
+          },
+          "value": { "description": "Scalar value or array for ranges and in-list checks." }
+        },
+        "additionalProperties": true
+      },
+      "BooksSort": {
+        "type": "object",
+        "required": ["field", "order"],
+        "properties": {
+          "field": { "type": "string" },
+          "order": { "type": "string", "enum": ["asc", "desc"] }
+        },
+        "additionalProperties": true
+      },
+      "BooksQueryResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "status": { "type": "string" },
+          "domain": { "type": "string", "enum": ["books"] },
+          "module": { "type": "string" },
+          "module_api_name": { "type": "string" },
+          "request_type": { "type": "string" },
+          "returned": { "type": "integer" },
+          "more_records": { "type": "boolean" },
+          "records": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "pagination": { "type": "object", "additionalProperties": true },
+          "answer": { "type": "string" }
+        },
+        "additionalProperties": true
+      },
+      "BooksHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "status": { "type": "string" },
+          "domain": { "type": "string", "enum": ["books"] },
+          "module": { "type": "string" },
+          "request_type": { "type": "string", "enum": ["history"] },
+          "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "pagination": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": true
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "status": { "type": "string" },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "details": {}
+            },
+            "required": ["code", "message"],
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

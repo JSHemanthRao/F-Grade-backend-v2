@@ -1,6 +1,7 @@
 const { CrmService } = require('../services/crm.service');
 const { createAppError } = require('../utils/errors');
 const { CRM_API_NAMES, CRM_MODULES } = require('../constants/crmModules');
+const { resolveRelativePeriod, relativePeriodFromText } = require('../utils/relativeDate');
 
 const MAX_QUESTION_LENGTH = 2000;
 
@@ -113,8 +114,9 @@ function resolveFollowUpQuestion(question, previous) {
   const text = String(question || '').trim();
   if (!previous || hasExplicitModuleIntent(text) || isClarification(text)) return text;
   if (!isFollowUpQuestion(text)) return text;
-  if (/(this year|current year|last year|previous year|this month|current month|last month|previous month|today|yesterday|\b20\d{2}\b|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(text)) {
-    return `${previous.question} created ${text}`;
+  if (/(this year|current year|last year|previous year|next year|this quarter|last quarter|next quarter|this month|current month|last month|previous month|next month|this week|last week|next week|today|yesterday|tomorrow|\b20\d{2}\b|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(text)) {
+    const withoutPreviousPeriod = previous.question.replace(/\b(?:today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)\b/gi, '').replace(/\s+/g, ' ').trim();
+    return `${withoutPreviousPeriod} created ${text}`;
   }
   return previous.question;
 }
@@ -290,6 +292,24 @@ function planQuestion(question) {
   const dateFilter = detectDateFilter(lower, module);
   if (dateFilter) filters.push(dateFilter);
 
+  const comparison = detectPeriodComparison(lower);
+  if (comparison) {
+    const aggregateOperation = detectAggregateOperation(lower) || { operation: 'count', field: 'id' };
+    return {
+      module,
+      module_api_name: CRM_API_NAMES[module],
+      complexity: 'MODERATE',
+      request_type: 'comparison',
+      fields: ['id'],
+      filters: filters.filter((filter) => filter.field !== dateFieldForQuestion(lower, module)),
+      date_range: { current: resolveRelativePeriod(comparison.current), previous: resolveRelativePeriod(comparison.previous) },
+      comparison: { current_period: comparison.current, previous_period: comparison.previous, date_field: dateFieldForQuestion(lower, module), operation: aggregateOperation.operation, field: aggregateOperation.field },
+      aggregate: aggregateOperation,
+      limit: requestedLimit,
+      offset: 0
+    };
+  }
+
   if (isComprehensiveSalesPerformanceRequest(lower)) {
     return {
       module: 'Deals',
@@ -358,8 +378,10 @@ function planQuestion(question) {
   const ownerName = extractOwnerName(text);
   if (ownerName) filters.push({ field: 'Owner', operator: 'equals', value: ownerName });
 
+  const fieldComparison = extractFieldComparison(lower);
+  if (fieldComparison && !filters.some((filter) => filter.field === fieldComparison.field)) filters.push(fieldComparison);
   const amountThreshold = extractAmountThreshold(lower);
-  if (amountThreshold) filters.push({ field: 'Amount', operator: 'greater_than', value: amountThreshold.value });
+  if (amountThreshold && !fieldComparison) filters.push({ field: 'Amount', operator: 'greater_than', value: amountThreshold.value });
 
   if (/(closed won|closed-won|won deals|won deal)/.test(lower)) {
     filters.push({ field: 'Stage', operator: 'equals', value: 'Closed Won' });
@@ -800,6 +822,17 @@ function extractAmountThreshold(lowerText) {
   return null;
 }
 
+function extractFieldComparison(lowerText) {
+  const field = '(amount|deal\\s+value|value|probability|unit\\s+price|qty_in_stock)';
+  const symbols = lowerText.match(new RegExp(`${field}\\s*(>=|<=|!=|=|>|<)\\s*₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
+  const words = lowerText.match(new RegExp(`\\b${field}\\s+(greater than|more than|at least|less than|at most|equal to|not equal to)\\s*₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
+  const match = symbols || words;
+  if (!match) return null;
+  const operatorMap = { '>': 'greater_than', '>=': 'greater_equal', '<': 'less_than', '<=': 'less_equal', '=': 'equals', '!=': 'not_equals', 'greater than': 'greater_than', 'more than': 'greater_than', 'at least': 'greater_equal', 'less than': 'less_than', 'at most': 'less_equal', 'equal to': 'equals', 'not equal to': 'not_equals' };
+  const rawField = match[1].replace(/\s+/g, '_').toLowerCase();
+  return { field: rawField === 'amount' || rawField === 'deal_value' || rawField === 'value' ? 'Amount' : rawField === 'unit_price' ? 'Unit_Price' : rawField, operator: operatorMap[match[2].toLowerCase()], value: Number(match[3].replace(/,/g, '')) };
+}
+
 function extractFieldLabels(lowerText) {
   const match = lowerText.match(/\bwith\s+(.+?)(?=\s+(?:fields?|where|for|created|sorted|ordered|limit|top)\b|[?.!]|$)/i);
   if (!match) return [];
@@ -828,6 +861,12 @@ function detectDateFilter(lowerText, module) {
     return calendarFilter(dateField, dayRange(yesterday));
   }
 
+  if (/(tomorrow)/.test(lowerText)) {
+    const tomorrow = new Date(currentDate);
+    tomorrow.setDate(currentDate.getDate() + 1);
+    return calendarFilter(dateField, dayRange(tomorrow));
+  }
+
   if (/(this month|current month)/.test(lowerText)) {
     return calendarFilter(dateField, monthRange(currentDate, 0));
   }
@@ -835,6 +874,8 @@ function detectDateFilter(lowerText, module) {
   if (/(last month|previous month)/.test(lowerText)) {
     return calendarFilter(dateField, monthRange(currentDate, -1));
   }
+
+  if (/(next month)/.test(lowerText)) return calendarFilter(dateField, monthRange(currentDate, 1));
 
   if (/(this week|current week)/.test(lowerText)) {
     return calendarFilter(dateField, weekRange(currentDate, 0));
@@ -844,6 +885,8 @@ function detectDateFilter(lowerText, module) {
     return calendarFilter(dateField, weekRange(currentDate, -1));
   }
 
+  if (/(next week)/.test(lowerText)) return calendarFilter(dateField, weekRange(currentDate, 1));
+
   if (/(this quarter|current quarter)/.test(lowerText)) {
     return calendarFilter(dateField, quarterRange(currentDate, 0));
   }
@@ -851,6 +894,8 @@ function detectDateFilter(lowerText, module) {
   if (/(last quarter|previous quarter)/.test(lowerText)) {
     return calendarFilter(dateField, quarterRange(currentDate, -1));
   }
+
+  if (/(next quarter)/.test(lowerText)) return calendarFilter(dateField, quarterRange(currentDate, 1));
 
   if (/(this year|current year)/.test(lowerText)) {
     const start = new Date(currentDate.getFullYear(), 0, 1);
@@ -861,6 +906,12 @@ function detectDateFilter(lowerText, module) {
   if (/(last year|previous year)/.test(lowerText)) {
     const start = new Date(currentDate.getFullYear() - 1, 0, 1);
     const end = new Date(currentDate.getFullYear() - 1, 11, 31);
+    return calendarFilter(dateField, [toIsoDate(start), toIsoDate(end)]);
+  }
+
+  if (/(next year)/.test(lowerText)) {
+    const start = new Date(currentDate.getFullYear() + 1, 0, 1);
+    const end = new Date(currentDate.getFullYear() + 1, 11, 31);
     return calendarFilter(dateField, [toIsoDate(start), toIsoDate(end)]);
   }
 
@@ -890,6 +941,13 @@ function detectDateFilter(lowerText, module) {
     return calendarFilter('Created_Time', monthRange(currentDate, /last month|previous month/.test(lowerText) ? -1 : 0));
   }
 
+  return null;
+}
+
+function detectPeriodComparison(lowerText) {
+  const periods = [...lowerText.matchAll(/\b(today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)\b/g)].map((match) => match[1]);
+  if (periods.length >= 2 && /\b(?:vs|versus|compared? with|than|against)\b/.test(lowerText)) return { current: periods[0], previous: periods[1] };
+  if (/(increase|decrease|more|less|compare)/.test(lowerText) && periods.length >= 2) return { current: periods[0], previous: periods[1] };
   return null;
 }
 

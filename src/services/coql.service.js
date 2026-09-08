@@ -1,5 +1,6 @@
 const { CRM_API_NAMES } = require('../constants/crmModules');
 const { validateModuleFieldScope } = require('../validators/crmQuery.validator');
+const { env } = require('../config/env');
 
 const DATE_FIELDS = new Set(['Closing_Date', 'Due_Date', 'Valid_Till', 'Start_Date', 'End_Date', 'Renewal_Date']);
 const DATETIME_FIELDS = new Set(['Created_Time', 'Modified_Time', 'Converted_Date_Time', 'Lead_Conversion_Time', 'Start_DateTime', 'End_DateTime', 'Call_Start_Time']);
@@ -24,8 +25,16 @@ function buildCriteria(filters) {
 }
 
 function formatSearchDate(field, value, endOfDay = false) {
-  if (DATETIME_FIELDS.has(field) && /^\d{4}-\d{2}-\d{2}$/.test(String(value))) return `${value}T${endOfDay ? '23:59:59' : '00:00:00'}+05:30`;
+  if (DATETIME_FIELDS.has(field) && /^\d{4}-\d{2}-\d{2}$/.test(String(value))) return `${value}T${endOfDay ? '23:59:59' : '00:00:00'}${timeZoneOffset(value)}`;
   return String(value);
+}
+
+function timeZoneOffset(value) {
+  const date = new Date(`${value}T12:00:00Z`);
+  const part = new Intl.DateTimeFormat('en-US', { timeZone: env.crmTimezone, timeZoneName: 'longOffset' }).formatToParts(date).find((item) => item.type === 'timeZoneName')?.value || 'GMT';
+  if (part === 'GMT' || part === 'UTC') return '+00:00';
+  const match = part.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+  return match ? `${match[1]}${match[2].padStart(2, '0')}:${match[3] || '00'}` : '+00:00';
 }
 
 function formatSearchValue(field, value) {

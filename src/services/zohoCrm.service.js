@@ -129,7 +129,7 @@ class ZohoCrmService {
 
   async executeQueryRequest(selectQuery, token, config, request, resolvedModule) {
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
-    log('info', `[COQL query] ${selectQuery}`);
+    log('info', `[COQL query] operation=record_query module=${resolvedModule} field_count=${Array.isArray(request?.fields) ? request.fields.length : 0}`);
     try {
       const response = await this.executeRequest('post', `${apiBaseUrl}/coql`, { data: { select_query: selectQuery }, config: {
         headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
@@ -138,12 +138,12 @@ class ZohoCrmService {
       const records = Array.isArray(response.data?.data) ? response.data.data : [];
       const info = response.data?.info || {};
       const firstRecord = records[0] || {};
-      log('info', `[COQL result] count=${records.length} more_records=${Boolean(info.more_records)} first_stage=${String(firstRecord.Stage ?? '')} first_closing_date=${String(firstRecord.Closing_Date ?? '')}`);
+      log('info', `[COQL result] count=${records.length} more_records=${Boolean(info.more_records)}`);
       return { records, info, module_api_name: resolvedModule || request?.module || null };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
       const upstreamMessage = String(error.response?.data?.message || error.message || '');
-      log('error', `[ZOHO QUERY FAILURE] operation=record_query query=${selectQuery} status=${error.response?.status || 'unknown'} message=${upstreamMessage.replace(/\n/g, ' ')}`);
+      log('error', `[ZOHO QUERY FAILURE] operation=record_query status=${error.response?.status || 'unknown'} message=${upstreamMessage.replace(/\n/g, ' ')}`);
 
       // If Zoho COQL failed due to unsupported column(s), retry using the REST records API as a fallback.
       try {
@@ -189,7 +189,7 @@ class ZohoCrmService {
     }
     const token = await this.authService.getAccessToken();
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
-    log('info', `[COQL aggregate query] ${selectQuery}`);
+    log('info', '[COQL aggregate query] operation=aggregate_query');
     try {
       const response = await this.executeRequest('post', `${apiBaseUrl}/coql`, { data: { select_query: selectQuery }, config: {
         headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
@@ -200,7 +200,7 @@ class ZohoCrmService {
       return { rows };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
-      log('error', `[ZOHO QUERY FAILURE] operation=aggregate_query query=${selectQuery} status=${error.response?.status || 'unknown'}`);
+      log('error', `[ZOHO QUERY FAILURE] operation=aggregate_query status=${error.response?.status || 'unknown'}`);
       throw createAppError(
         'ZOHO_AGGREGATE_ERROR',
         'Unable to execute the CRM aggregate query.',
@@ -218,7 +218,7 @@ class ZohoCrmService {
     const token = await this.authService.getAccessToken();
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
     const criteria = buildModuleCriteria(filters);
-    log('info', `[CRM count API] module=${module} criteria=${criteria || '(none)'}`);
+    log('info', `[CRM count API] module=${module} filter_count=${filters.length}`);
     try {
       const response = await this.executeRequest('get', `${apiBaseUrl}/${moduleName}/actions/count`, { config: {
         params: criteria ? { criteria } : undefined,
@@ -402,7 +402,7 @@ class ZohoCrmService {
     if (matches.length > 1) throw createAppError('OWNER_AMBIGUOUS', `Owner name '${value}' matches multiple Zoho CRM users.`, 400);
     if (matches.length === 0) throw createAppError('OWNER_NOT_FOUND', `No Zoho CRM user matches owner '${value}'.`, 400);
     const id = matches[0].id || matches[0].user_id;
-    log('info', `[OWNER RESOLVED] requested=${value} id=${id}`);
+    log('info', '[OWNER RESOLVED] owner filter resolved');
     return String(id);
   }
 
