@@ -17,6 +17,10 @@ const fakeBooks = {
 test('routes explicit Books modules to the books domain', () => {
   assert.equal(resolveProductDomain('Show me invoices'), 'books');
   assert.equal(resolveProductDomain('Show me customers'), 'books');
+  assert.equal(resolveProductDomain("Today's quotes"), 'books');
+  assert.equal(resolveProductDomain('Show me quotes'), 'books');
+  assert.equal(resolveProductDomain('Show me CRM quotes'), 'crm');
+  assert.equal(resolveProductDomain('Quotes in Zoho CRM'), 'crm');
   assert.equal(resolveProductDomain('Show me Deals'), 'crm');
 });
 
@@ -47,15 +51,10 @@ test('returns normalized Books results', async () => {
   assert.equal(response.returned, 1);
 });
 
-test('rejects CRM Quotes as a Books module with a clear message', () => {
-  assert.throws(
-    () => booksQueryValidator({ module: 'Quotes', request_type: 'records', limit: 10, offset: 0 }),
-    (error) => {
-      assert.equal(error.code, 'BOOKS_MODULE_UNSUPPORTED');
-      assert.match(error.message, /Quotes.*CRM/i);
-      return true;
-    }
-  );
+test('maps Books Quotes to the Estimates resource', () => {
+  const result = booksQueryValidator({ module: 'Quotes', request_type: 'records', limit: 10, offset: 0 });
+  assert.equal(result.module, 'Quotes');
+  assert.equal(result.module_api_name, 'estimates');
 });
 
 test('includes organization_id when querying Zoho Books records', async () => {

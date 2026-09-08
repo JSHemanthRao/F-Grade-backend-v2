@@ -8,6 +8,7 @@ const { env } = require('../config/env');
 const { CircuitBreaker, isTransientFailure } = require('../utils/circuitBreaker');
 const { CRM_API_NAMES } = require('../constants/crmModules');
 const { validateModuleFieldScope } = require('../validators/crmQuery.validator');
+const { getCurrentCrmDiagnostics, recordCrmEvent, updateDiagnostics } = require('../utils/crmDiagnostics');
 
 class ZohoCrmService {
   constructor(httpClient = axios, configLoader = getZohoConfig, authService) {
@@ -43,6 +44,10 @@ class ZohoCrmService {
     let attempt = 0;
     const startedAt = Date.now();
     this.executionStats.calls += 1;
+    const endpoint = safeEndpoint(url);
+    const diagnostics = getCurrentCrmDiagnostics();
+    updateDiagnostics(diagnostics, { zoho_endpoint: endpoint });
+    recordCrmEvent('ZOHO_REQUEST', diagnostics, { method: String(method || '').toUpperCase(), endpoint });
     while (attempt < maxAttempts) {
       await this.acquireSlot();
       try {
@@ -50,12 +55,26 @@ class ZohoCrmService {
           ? this.httpClient.get(url, options?.config)
           : this.httpClient.post(url, options?.data, options?.config));
         this.executionStats.successfulCalls += 1;
+        updateDiagnostics(diagnostics, { zoho_http_status: response.status, zoho_error_code: null, zoho_error_message: null });
+        recordCrmEvent('ZOHO_RESPONSE', diagnostics, { method: String(method || '').toUpperCase(), endpoint, status: response.status });
         log('info', `[ZOHO EXECUTION] method=${method} durationMs=${Date.now() - startedAt} retries=${attempt}`);
         return response;
       } catch (error) {
         attempt += 1;
         if (attempt >= maxAttempts || !isTransientFailure(error)) {
           this.executionStats.failedCalls += 1;
+          error.zohoDiagnostics = {
+            method: String(method || '').toUpperCase(),
+            endpoint: safeEndpoint(url),
+            status: error.response?.status || 'not_reached',
+            code: error.response?.data?.code || 'not_reached',
+            message: error.response?.data?.message || 'not_reached'
+          };
+          updateDiagnostics(diagnostics, {
+            zoho_http_status: error.zohoDiagnostics.status,
+            zoho_error_code: error.zohoDiagnostics.code,
+            zoho_error_message: error.zohoDiagnostics.message
+          });
           throw error;
         }
         this.executionStats.retries += 1;
@@ -99,7 +118,7 @@ class ZohoCrmService {
         const staticFields = require('../constants/crmModules').CRM_MODULES[requestedModule] || [];
         if (staticFields.length > 0) return { fields: staticFields, metadata: [] };
       }
-      throw createAppError('ZOHO_METADATA_ERROR', `Unable to verify Zoho CRM field metadata for '${resolvedModule}'.`, mapZohoStatus(error.response?.status), safeZohoDetails(error, 'ZohoCRM.settings.fields.READ'));
+      throw createAppError(normalizeZohoErrorCode(error, 'ZOHO_METADATA_ERROR'), `Unable to access '${resolvedModule}' field metadata.`, mapZohoStatus(error.response?.status, error.response?.data?.code), safeZohoDetails(error, 'ZohoCRM.settings.fields.READ'));
     }
     const requestedFields = Array.isArray(request.fields) ? request.fields : [];
     const missingFields = requestedFields.filter((field) => !metadata.fields.includes(field));
@@ -173,7 +192,7 @@ class ZohoCrmService {
         // fall through to throw original error below
       }
 
-      throw createAppError('ZOHO_QUERY_ERROR', 'Unable to retrieve CRM data.', mapZohoStatus(error.response?.status), {
+      throw createAppError(normalizeZohoErrorCode(error, 'ZOHO_QUERY_ERROR'), 'Unable to retrieve CRM data.', mapZohoStatus(error.response?.status, error.response?.data?.code), {
         ...safeZohoDetails(error, 'ZohoCRM.coql.READ'),
         operation: 'record_query'
       });
@@ -202,9 +221,9 @@ class ZohoCrmService {
       if (error.response?.status === 401) this.authService.clearToken();
       log('error', `[ZOHO QUERY FAILURE] operation=aggregate_query status=${error.response?.status || 'unknown'}`);
       throw createAppError(
-        'ZOHO_AGGREGATE_ERROR',
+        normalizeZohoErrorCode(error, 'ZOHO_AGGREGATE_ERROR'),
         'Unable to execute the CRM aggregate query.',
-        mapZohoStatus(error.response?.status),
+        mapZohoStatus(error.response?.status, error.response?.data?.code),
         { ...safeZohoDetails(error, 'ZohoCRM.coql.READ'), operation: 'aggregate_query' }
       );
     }
@@ -228,7 +247,7 @@ class ZohoCrmService {
       return { count: Number(response.data?.count || 0), criteria };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
-      throw createAppError('ZOHO_COUNT_ERROR', 'Unable to count CRM records.', mapZohoStatus(error.response?.status), safeZohoDetails(error, 'ZohoCRM.modules.READ'));
+      throw createAppError(normalizeZohoErrorCode(error, 'ZOHO_COUNT_ERROR'), 'Unable to count CRM records.', mapZohoStatus(error.response?.status, error.response?.data?.code), safeZohoDetails(error, 'ZohoCRM.modules.READ'));
     }
   }
 
@@ -447,9 +466,9 @@ class ZohoCrmService {
       if (error.response?.status === 401) this.authService.clearToken();
       if (error.code === 'ZOHO_METADATA_EMPTY') throw error;
       throw createAppError(
-        'ZOHO_METADATA_ERROR',
+        normalizeZohoErrorCode(error, 'ZOHO_METADATA_ERROR'),
         'Unable to verify Zoho CRM field metadata.',
-        mapZohoStatus(error.response?.status),
+        mapZohoStatus(error.response?.status, error.response?.data?.code),
         safeZohoDetails(error, 'ZohoCRM.settings.fields.READ')
       );
     }
@@ -496,7 +515,7 @@ class ZohoCrmService {
       return value;
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
-      throw createAppError('ZOHO_METADATA_ERROR', 'Unable to verify Zoho CRM module metadata.', mapZohoStatus(error.response?.status), safeZohoDetails(error, 'ZohoCRM.settings.modules.READ'));
+      throw createAppError(normalizeZohoErrorCode(error, 'ZOHO_METADATA_ERROR'), 'Unable to verify Zoho CRM module metadata.', mapZohoStatus(error.response?.status, error.response?.data?.code), safeZohoDetails(error, 'ZohoCRM.settings.modules.READ'));
     }
   }
 
@@ -588,14 +607,18 @@ function buildDynamicCoqlQuery({ module, fields, filters, sort }) {
   return query;
 }
 
-function mapZohoStatus(status) {
-  return [401, 403, 404, 429].includes(status) ? status : 502;
+function mapZohoStatus(status, upstreamCode) {
+  if (upstreamCode === 'OAUTH_SCOPE_MISMATCH' || upstreamCode === 'AUTHENTICATION_FAILURE') return 401;
+  if (upstreamCode === 'NO_PERMISSION') return 403;
+  return [400, 401, 403, 404, 429].includes(status) ? status : 502;
 }
 
 function safeZohoDetails(error, requiredScope) {
   const response = error.response;
   const payload = response?.data;
   return {
+    endpoint: error?.zohoDiagnostics?.endpoint,
+    method: error?.zohoDiagnostics?.method,
     upstream_status: response?.status,
     upstream_code: typeof payload?.code === 'string' ? payload.code : undefined,
     upstream_message: typeof payload?.message === 'string' ? payload.message : undefined
@@ -603,10 +626,31 @@ function safeZohoDetails(error, requiredScope) {
   };
 }
 
+function safeEndpoint(url) {
+  try {
+    const parsed = new URL(String(url));
+    return `${parsed.pathname}${parsed.search}`;
+  } catch (_error) {
+    return String(url || 'not_reached').replace(/https?:\/\/[^/]+/i, '');
+  }
+}
+
+function normalizeZohoErrorCode(error, fallback) {
+  const upstreamCode = String(error.response?.data?.code || '').trim();
+  if (upstreamCode) return upstreamCode;
+  const status = error.response?.status;
+  if (status === 401) return 'AUTHENTICATION_FAILURE';
+  if (status === 403) return 'NO_PERMISSION';
+  if (status === 404) return 'INVALID_MODULE';
+  if (status === 429) return 'RATE_LIMIT';
+  if (status >= 500) return 'INTERNAL_ERROR';
+  return fallback;
+}
+
 function createZohoOperationError(error, operation, scope) {
   const upstreamCode = String(error.response?.data?.code || '');
-  const statusCode = mapZohoStatus(error.response?.status);
-  const code = upstreamCode === 'OAUTH_SCOPE_MISMATCH' ? 'ZOHO_SCOPE_MISMATCH' : 'ZOHO_READ_ERROR';
+  const statusCode = mapZohoStatus(error.response?.status, upstreamCode);
+  const code = normalizeZohoErrorCode(error, 'ZOHO_READ_ERROR');
   const message = upstreamCode === 'OAUTH_SCOPE_MISMATCH'
     ? `Zoho denied the read operation '${operation}' because the OAuth client lacks the required read scope.`
     : `Unable to execute the Zoho read operation '${operation}'.`;

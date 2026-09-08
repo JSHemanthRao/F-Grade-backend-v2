@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { BackendClient } = require('../src/services/backendClient');
+const { buildBooksQuotesRequest } = require('../src/services/backendClient');
 
 test('BackendClient forwards the natural-language question to the configured assistant route', async () => {
   const calls = [];
@@ -22,6 +23,27 @@ test('BackendClient forwards the natural-language question to the configured ass
   assert.equal(calls[0][0], 'https://f-grade-backend-v2.onrender.com/api/crm/assistant');
   assert.deepEqual(calls[0][1], { question: 'give me first 10 leads' });
   assert.equal(calls[0][2].headers['Content-Type'], 'application/json');
+});
+
+test('BackendClient routes bare Quotes to Books Estimates without changing explicit CRM Quotes', async () => {
+  let captured = null;
+  const client = new BackendClient({ post: async (url, body) => { captured = { url, body }; return { status: 200, data: { success: true } }; } }, {
+    backendApiUrl: 'http://localhost:3000',
+    backendApiPath: '/api/crm/assistant',
+    booksApiPath: '/api/books/query',
+    backendRequestTimeoutMs: 15000,
+    backendApiKey: ''
+  });
+
+  await client.ask("Today's quotes");
+  assert.equal(captured.url, 'http://localhost:3000/api/books/query');
+  assert.equal(captured.body.module, 'Quotes');
+  assert.equal(captured.body.module_api_name, undefined);
+  assert.deepEqual(buildBooksQuotesRequest("Today's quotes").filters[0].field, 'date');
+
+  await client.ask('Show me CRM quotes');
+  assert.equal(captured.url, 'http://localhost:3000/api/crm/assistant');
+  assert.deepEqual(captured.body, { question: 'Show me CRM quotes' });
 });
 
 test('BackendClient does not duplicate a path already present in the base URL', async () => {

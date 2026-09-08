@@ -2,6 +2,8 @@ const { CrmService } = require('../services/crm.service');
 const { createAppError } = require('../utils/errors');
 const { CRM_API_NAMES, CRM_MODULES } = require('../constants/crmModules');
 const { resolveRelativePeriod, relativePeriodFromText } = require('../utils/relativeDate');
+const { createCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, updateDiagnostics, diagnosticsFromError, publicCrmDiagnostics } = require('../utils/crmDiagnostics');
+const { env } = require('../config/env');
 
 const MAX_QUESTION_LENGTH = 2000;
 
@@ -47,8 +49,14 @@ function createCrmController(crmService = new CrmService()) {
       }
     },
     assistant: async (req, res, next) => {
-      try {
+      const diagnostics = req.crmDiagnostics || createCrmDiagnostics();
+      req.crmDiagnostics = diagnostics;
+      recordCrmEvent('REQUEST_RECEIVED', diagnostics, { method: req.method, path: req.originalUrl });
+      return runWithCrmDiagnostics(diagnostics, async () => {
+       try {
         const question = req.body?.question || req.body?.prompt || req.body?.message;
+        updateDiagnostics(diagnostics, { question: typeof question === 'string' ? question : 'not_reached', stage: 'question_parsed' });
+        recordCrmEvent('QUESTION_PARSED', diagnostics, { question: diagnostics.question });
         if (typeof question !== 'string' || question.trim().length === 0) {
           const error = new Error('One of question, prompt, or message is required.');
           error.code = 'QUESTION_REQUIRED';
@@ -68,8 +76,36 @@ function createCrmController(crmService = new CrmService()) {
         const resolvedQuestion = resolveFollowUpQuestion(question, previous);
         const explicitModule = extractExplicitModule(resolvedQuestion.toLowerCase());
         const plannedRequest = applyPaginationFollowUp(planQuestion(resolvedQuestion), question, previous);
+        updateDiagnostics(diagnostics, {
+          resolved_module: plannedRequest.module || explicitModule || 'not_reached',
+          module_api_name: plannedRequest.module_api_name || 'not_reached',
+          resolved_fields: Array.isArray(plannedRequest.fields) ? plannedRequest.fields : [],
+          resolved_filters: Array.isArray(plannedRequest.filters) ? plannedRequest.filters : [],
+          request_type: plannedRequest.request_type || 'records',
+          stage: 'query_planned'
+        });
+        recordCrmEvent('QUERY_PLANNED', diagnostics, {
+          module: diagnostics.resolved_module,
+          module_api_name: diagnostics.module_api_name,
+          fields: diagnostics.resolved_fields,
+          filters: diagnostics.resolved_filters
+        });
         assertExplicitModuleRouting(explicitModule, plannedRequest.module);
-        const result = await crmService.query({ ...(req.body?.query || {}), ...plannedRequest });
+        const assistantRequest = { ...(req.body?.query || {}), ...plannedRequest };
+        if (!Object.prototype.hasOwnProperty.call(plannedRequest, 'field_labels')) assistantRequest.field_labels = undefined;
+        if (!Object.prototype.hasOwnProperty.call(plannedRequest, 'module_api_name')) assistantRequest.module_api_name = undefined;
+        const result = await crmService.query(assistantRequest, undefined, diagnostics);
+        updateDiagnostics(diagnostics, {
+          resolved_module: result.module || diagnostics.resolved_module,
+          module_api_name: result.module_api_name || diagnostics.module_api_name,
+          resolved_fields: Array.isArray(result.fields) ? result.fields : diagnostics.resolved_fields,
+          resolved_filters: Array.isArray(result.filters) ? result.filters : diagnostics.resolved_filters,
+          request_type: result.request_type || diagnostics.request_type,
+          zoho_error_code: null,
+          zoho_error_message: null,
+          stage: 'response_normalized'
+        });
+        recordCrmEvent('RESPONSE_NORMALIZED', diagnostics, { module: diagnostics.resolved_module, request_type: diagnostics.request_type });
         if (conversationId) {
           conversationContext.set(conversationId, { question: resolvedQuestion, plannedRequest });
           if (conversationContext.size > 1000) conversationContext.delete(conversationContext.keys().next().value);
@@ -78,10 +114,16 @@ function createCrmController(crmService = new CrmService()) {
           ? JSON.stringify(buildDashboardSpecification(resolvedQuestion, result), null, 2)
           : buildAssistantAnswer(resolvedQuestion, result);
         const safe = stringifySummary(Object.assign({}, result));
-        res.status(200).json({ success: true, status: 'ok', question, answer, ...safe });
-      } catch (error) {
-        next(error);
-      }
+        const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
+        res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, question, answer, diagnostics: publicDiagnostics, ...safe });
+        } catch (error) {
+        diagnosticsFromError(error, diagnostics);
+        error.crmDiagnostics = diagnostics;
+        diagnostics.stage = 'request_failed';
+        recordCrmEvent('REQUEST_FAILED', diagnostics, { error_code: error.code || 'INTERNAL_SERVER_ERROR' });
+         next(error);
+       }
+      });
     }
     ,
     fastSummary: async (req, res, next) => {
@@ -265,6 +307,18 @@ function planQuestion(question) {
   }
   if (/\b(?:bulk read|bulk|export|very large|large dataset)\b/.test(lower)) {
     return { module: detectedModule, complexity: 'COMPLEX', request_type: 'bulk_read', fields: defaultFields(detectedModule), fields_source: 'planner_default', filters: [], limit: 200, offset: 0 };
+  }
+  if (!isComprehensiveSalesPerformanceRequest(lower) && /\b(?:sales performance|sales performance report|sales performance reports)\b/.test(lower)) {
+    return {
+      module: 'CRM',
+      complexity: 'MULTI-STEP',
+      request_type: 'analysis',
+      analysis: { type: 'sales_performance' },
+      fields: ['id'],
+      filters: [],
+      limit: 20,
+      offset: 0
+    };
   }
   if (/(?:available|list|show|get)\s+(?:the\s+)?fields?\b|field\s+metadata/.test(lower)
     || /(?:show|list|get)\s+(?:the\s+)?[a-z0-9_, ]+fields?\s+for\b/.test(lower)) {
@@ -452,6 +506,20 @@ function planQuestion(question) {
       request_type: 'analysis',
       analysis: { type: 'owner_performance' },
       ranking: { dimension: 'Owner', metric: 'Amount', operation: 'sum', limit: requestedLimit },
+      filters,
+      limit: requestedLimit,
+      offset: 0
+    };
+  }
+
+  if (module === 'Deals' && /\b(?:pipeline|pipeline analysis)\b/.test(lower)) {
+    return {
+      module,
+      complexity: 'MODERATE',
+      request_type: 'aggregate',
+      aggregate: { operation: 'count', field: 'id' },
+      group_by: '__semantic__',
+      group_by_label: 'stage',
       filters,
       limit: requestedLimit,
       offset: 0

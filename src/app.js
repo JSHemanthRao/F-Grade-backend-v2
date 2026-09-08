@@ -8,12 +8,17 @@ const { errorHandler } = require('./middleware/errorHandler');
 const { requestLogger } = require('./middleware/requestLogger');
 const { apiKeyAuth } = require('./middleware/apiKeyAuth');
 const { env } = require('./config/env');
+const { createCrmDiagnostics } = require('./utils/crmDiagnostics');
 
 function createApp({ crmService } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use(cors({ origin: env.corsOrigin }));
   app.use(requestLogger);
+  app.use((req, _res, next) => {
+    if (req.path === '/api/crm/assistant') req.crmDiagnostics = createCrmDiagnostics();
+    next();
+  });
   app.use(express.json({ limit: env.requestBodyLimit }));
   app.use('/api', apiKeyAuth);
 

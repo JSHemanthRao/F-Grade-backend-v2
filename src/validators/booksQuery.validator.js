@@ -11,6 +11,9 @@ function resolveProductDomain(text = '') {
   const booksModules = Object.keys(BOOKS_API_NAMES);
   const crmModules = ['Leads', 'Deals', 'Contacts', 'Accounts', 'Tasks', 'Calls', 'Meetings', 'Products', 'Reports', 'Users'];
 
+  if (/(?:\bcrm\b|\bzoho\s+crm\b).{0,30}\bquotes?\b|\bquotes?\b.{0,30}(?:\bin\b|\bfrom\b)\s+(?:zoho\s+)?\bcrm\b/i.test(lower)) return 'crm';
+  if (/\bquotes?\b/i.test(lower)) return 'books';
+
   for (const moduleName of [...booksModules].sort((a, b) => b.length - a.length)) {
     const pattern = new RegExp(`\\b${moduleName.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
     if (pattern.test(lower)) return 'books';
@@ -39,14 +42,6 @@ function booksQueryValidator(body) {
   }
   if (!requestTypes.has(request_type)) {
     throw createAppError('INVALID_BOOKS_REQUEST', 'request_type must be one of: records, count, search, aggregate, comparison, analysis.', 400);
-  }
-  if (/^quotes?$/i.test(module.trim())) {
-    throw createAppError(
-      'BOOKS_MODULE_UNSUPPORTED',
-      `Books module '${module}' is not supported by the Books backend. Quotes belongs to Zoho CRM, not Zoho Books. Use the CRM tool for Quotes queries.`,
-      404,
-      { module, supported_modules: Object.keys(BOOKS_MODULES), domain: 'crm' }
-    );
   }
   if (!Object.prototype.hasOwnProperty.call(BOOKS_MODULES, module)) {
     if (typeof body.module_api_name === 'string' && body.module_api_name.trim().length > 0) {

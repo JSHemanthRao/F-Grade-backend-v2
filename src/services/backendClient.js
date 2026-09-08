@@ -1,5 +1,7 @@
 const axios = require('axios');
 const { env } = require('../config/env');
+const { resolveProductDomain } = require('../validators/booksQuery.validator');
+const { relativePeriodFromText, resolveRelativePeriod } = require('../utils/relativeDate');
 
 const MAX_QUESTION_LENGTH = 2000;
 
@@ -9,9 +11,11 @@ class BackendClient {
     this.config = config;
   }
 
-  getEndpoint() {
+  getEndpoint(question) {
     const baseUrl = this.config.backendApiUrl || 'http://localhost:3000';
-    const requestPath = this.config.backendApiPath || '/api/crm/assistant';
+    const requestPath = resolveProductDomain(question) === 'books'
+      ? (this.config.booksApiPath || '/api/books/query')
+      : (this.config.backendApiPath || '/api/crm/assistant');
     const base = new URL(baseUrl);
     const normalizedPath = requestPath.startsWith('/') ? requestPath : `/${requestPath}`;
     const basePath = base.pathname.replace(/\/$/, '');
@@ -52,14 +56,15 @@ class BackendClient {
       throw error;
     }
 
-    const endpoint = this.getEndpoint();
+    const booksRequest = resolveProductDomain(question) === 'books' ? buildBooksQuotesRequest(question) : null;
+    const endpoint = this.getEndpoint(question);
     const startedAt = Date.now();
     this.logDiagnostic('request', { method: 'POST', endpoint });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.backendRequestTimeoutMs || 15000);
 
     try {
-      const response = await this.httpClient.post(endpoint, { question }, {
+      const response = await this.httpClient.post(endpoint, booksRequest || { question }, {
         headers: this.buildHeaders(),
         signal: controller.signal,
         timeout: this.config.backendRequestTimeoutMs || 15000
@@ -109,6 +114,27 @@ class BackendClient {
   }
 }
 
+function buildBooksQuotesRequest(question) {
+  const lower = String(question).toLowerCase();
+  const request = { module: 'Quotes', request_type: /\b(?:count|how many)\b/.test(lower) ? 'count' : 'records', fields: ['id', 'estimate_number', 'customer_name', 'status', 'total', 'date', 'expiry_date'], limit: extractLimit(lower), offset: 0, filters: [] };
+  const period = relativePeriodFromText(lower);
+  if (period) {
+    const range = resolveRelativePeriod(period);
+    request.filters.push({ field: 'date', operator: 'between', value: [range.start, range.end], exclusive_end: true });
+  }
+  const status = lower.match(/\b(?:status\s+is|status|quotes?\s+that\s+are)\s+(approved|accepted|pending|draft|declined|sent)\b/);
+  if (status) request.filters.push({ field: 'status', operator: 'equals', value: status[1] });
+  const amount = lower.match(/\b(?:above|over|greater than)\s+([0-9][0-9,]*(?:\.\d+)?)/);
+  if (amount) request.filters.push({ field: 'total', operator: 'greater_than', value: Number(amount[1].replace(/,/g, '')) });
+  if (/\b(?:latest|newest|recent|sorted by created|sorted by date)\b/.test(lower)) request.sort = { field: 'date', order: 'desc' };
+  return request;
+}
+
+function extractLimit(text) {
+  const match = String(text).match(/\b(?:show|give me|list)\s+(\d+)\b/);
+  return Math.min(Math.max(match ? Number(match[1]) : 20, 1), 200);
+}
+
 function extractBackendErrorMessage(payload) {
   if (!payload) return 'The CRM backend returned an error.';
   if (typeof payload === 'string') return payload;
@@ -121,4 +147,4 @@ function extractBackendErrorMessage(payload) {
   return JSON.stringify(payload);
 }
 
-module.exports = { BackendClient };
+module.exports = { BackendClient, buildBooksQuotesRequest };

@@ -100,6 +100,7 @@
         "properties": {
           "success": { "type": "boolean" },
           "status": { "type": "string" },
+          "request_id": { "type": "string" },
           "module": { "type": "string" },
           "module_api_name": { "type": "string" },
           "fields": { "type": "array", "items": { "type": "string" }, "description": "Resolved live Zoho CRM API field names used by the request." },
@@ -110,6 +111,7 @@
           "count": { "type": "integer" },
           "total": { "type": "integer" },
           "answer": { "type": "string" },
+          "diagnostics": { "$ref": "#/components/schemas/CrmDiagnostics" },
           "metrics": { "type": "object", "additionalProperties": true },
           "summary": { "oneOf": [ { "type": "string" }, { "type": "object", "additionalProperties": true } ] },
           "comparisons": { "type": "array", "items": { "type": "object", "additionalProperties": true }, "description": "Independent comparison values for period or cross-module comparisons." },
@@ -130,6 +132,7 @@
         "properties": {
           "success": { "type": "boolean" },
           "status": { "type": "string" },
+          "request_id": { "type": "string" },
           "error": {
             "type": "object",
             "properties": {
@@ -139,9 +142,29 @@
             },
             "required": ["code", "message"],
             "additionalProperties": true
-          }
+          },
+          "diagnostics": { "$ref": "#/components/schemas/CrmDiagnostics" }
         },
         "additionalProperties": true
+      },
+      "CrmDiagnostics": {
+        "type": "object",
+        "description": "Safe request-pipeline diagnostics. Values are optional and never contain credentials or CRM record contents.",
+        "properties": {
+          "request_id": { "type": "string" },
+          "question": { "type": "string" },
+          "resolved_module": { "type": "string" },
+          "module_api_name": { "type": "string" },
+          "resolved_fields": { "type": "array", "items": { "type": "string" } },
+          "resolved_filters": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "request_type": { "type": "string" },
+          "zoho_endpoint": { "type": "string" },
+          "zoho_http_status": { "oneOf": [{ "type": "integer" }, { "type": "string" }] },
+          "zoho_error_code": { "type": "string" },
+          "zoho_error_message": { "type": "string" },
+          "stage": { "type": "string" }
+        },
+        "additionalProperties": false
       }
     }
   }

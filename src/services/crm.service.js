@@ -8,6 +8,7 @@ const { log } = require('../utils/logger');
 const { randomUUID } = require('node:crypto');
 const { env } = require('../config/env');
 const { resolveRelativePeriod } = require('../utils/relativeDate');
+const { getCurrentCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, updateDiagnostics } = require('../utils/crmDiagnostics');
 
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
@@ -36,26 +37,50 @@ class CrmService {
     }
   }
 
-  async query(input, executionContext = createExecutionContext()) {
+  async query(input, executionContext = createExecutionContext(), diagnostics) {
+    const activeDiagnostics = diagnostics || getCurrentCrmDiagnostics();
+    if (diagnostics && getCurrentCrmDiagnostics() !== diagnostics) {
+      return runWithCrmDiagnostics(diagnostics, () => this.query(input, executionContext));
+    }
+    diagnostics = activeDiagnostics;
     const executionId = randomUUID();
     const startedAt = Date.now();
     const statsAtStart = { ...(this.zohoService.executionStats || {}) };
     log('info', `[CRM EXECUTION START] executionId=${executionId}`);
     log('info', `[CRM request received] ${JSON.stringify({ module: input?.module, request_type: input?.request_type || 'records', query_type: input?.request_type || 'records', field_count: Array.isArray(input?.fields) ? input.fields.length : 0, filter_count: Array.isArray(input?.filters) ? input.filters.length : 0, date_range: input?.date_range || null })}`);
     let normalizedInput = await this.resolveSemanticFields(normalizeSemanticRequest(input));
+    updateDiagnostics(diagnostics, {
+      resolved_module: normalizedInput?.module || diagnostics?.resolved_module,
+      request_type: normalizedInput?.request_type || diagnostics?.request_type,
+      resolved_fields: Array.isArray(normalizedInput?.fields) ? normalizedInput.fields : diagnostics?.resolved_fields,
+      resolved_filters: Array.isArray(normalizedInput?.filters) ? normalizedInput.filters : diagnostics?.resolved_filters,
+      stage: 'module_resolution'
+    });
+    recordCrmEvent('MODULE_RESOLVED', diagnostics, { module: diagnostics?.resolved_module, module_api_name: diagnostics?.module_api_name });
     const executionPlan = classifyExecution(normalizedInput);
     log('info', `[CRM execution plan] classification=${executionPlan.classification} steps=${executionPlan.steps.join(' | ')}`);
-    const hasUnresolvedSemanticFilter = (normalizedInput.filters || []).some((filter) => filter?.field === '__semantic__');
-    if (!hasUnresolvedSemanticFilter && normalizedInput.module !== 'CRM') {
+    const hasUnresolvedSemanticField = (normalizedInput.filters || []).some((filter) => filter?.field === '__semantic__')
+      || normalizedInput.group_by === '__semantic__'
+      || normalizedInput.sort?.field === '__semantic__';
+    if (!hasUnresolvedSemanticField && normalizedInput.module !== 'CRM') {
       validateCrmQuery({ ...normalizedInput, metadata_driven: true });
     }
     if (normalizedInput.module !== 'CRM' && typeof this.zohoService.resolveModuleApiName === 'function') {
+      recordCrmEvent('MODULE_METADATA_REQUEST', diagnostics, { module: normalizedInput.module });
       normalizedInput = {
         ...normalizedInput,
         metadata_driven: true,
         module_api_name: normalizedInput.module_api_name || await this.zohoService.resolveModuleApiName(normalizedInput.module)
       };
+      updateDiagnostics(diagnostics, { module_api_name: normalizedInput.module_api_name, stage: 'module_metadata_response' });
+      recordCrmEvent('MODULE_METADATA_RESPONSE', diagnostics, { module: normalizedInput.module, module_api_name: normalizedInput.module_api_name });
       normalizedInput = await materializeMetadataRequest(this.zohoService, normalizedInput);
+      updateDiagnostics(diagnostics, {
+        resolved_fields: Array.isArray(normalizedInput.fields) ? normalizedInput.fields : diagnostics?.resolved_fields,
+        resolved_filters: Array.isArray(normalizedInput.filters) ? normalizedInput.filters : diagnostics?.resolved_filters,
+        stage: 'fields_resolved'
+      });
+      recordCrmEvent('FIELDS_RESOLVED', diagnostics, { module: normalizedInput.module, module_api_name: normalizedInput.module_api_name, fields: diagnostics?.resolved_fields });
     }
     let request;
     try {
@@ -68,6 +93,15 @@ class CrmService {
       request.module_api_name = await this.zohoService.resolveModuleApiName(request.module);
     }
     await validateMetadataFields(this.zohoService, request);
+    updateDiagnostics(diagnostics, {
+      resolved_module: request.module,
+      module_api_name: request.module_api_name || diagnostics?.module_api_name,
+      resolved_fields: request.fields,
+      resolved_filters: request.filters,
+      request_type: request.request_type,
+      stage: 'filters_resolved'
+    });
+    recordCrmEvent('FILTERS_RESOLVED', diagnostics, { module: request.module, module_api_name: request.module_api_name, filters: request.filters });
     if (typeof this.zohoService.resolveOwnerFilters === 'function') {
       request.filters = await this.zohoService.resolveOwnerFilters(request.filters);
     }

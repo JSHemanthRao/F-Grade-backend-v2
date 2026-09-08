@@ -4,7 +4,7 @@
     "title": "F-Grade Zoho Books Read-Only Assistant API",
     "version": "1.0.0",
     "description": "Read-only Zoho Books assistant for natural-language module reads, metadata-driven field resolution, filters, pagination, and safe module history access. This contract intentionally excludes CRM operations and write actions.",
-    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho Books modules such as Invoices, Bills, Items, Customers, or vendor/payment records. Quotes is a Zoho CRM module and is not supported by this Books backend. The backend resolves the module and field names from the Books metadata and enforces read-only routing. Never invent customs, joins, or write actions."
+    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho Books modules such as Invoices, Bills, Items, Customers, Quotes, or vendor/payment records. User-facing Quotes resolve to the Zoho Books Estimates resource. CRM Quotes require explicit CRM context and remain on the CRM backend. The backend resolves module and field names from Books metadata and enforces read-only routing. Never invent custom modules, joins, or write actions."
   },
   "servers": [
     { "url": "https://f-grade-backend-v2.onrender.com/", "description": "Production server" },
@@ -15,7 +15,7 @@
       "post": {
         "operationId": "booksReadQuery",
         "summary": "Execute a read-only Books query",
-        "description": "Reads Books records using an allowlisted module and metadata-aware field names. Only GET-based read queries and safe metadata/history lookups are allowed. Quotes is a CRM-only module and must not be sent to this Books endpoint.",
+        "description": "Reads Books records using an allowlisted module and metadata-aware field names. User-facing Quotes map to the Zoho Books Estimates resource at /books/v3/estimates. Only GET-based read queries and safe metadata/history lookups are allowed. CRM Quotes require explicit CRM context and must not be sent to this Books endpoint.",
         "requestBody": {
           "required": true,
           "content": {
@@ -63,7 +63,7 @@
         "in": "path",
         "required": true,
         "schema": { "type": "string" },
-        "description": "Books module name such as Invoices, Bills, Items, or an explicit module_api_name for a custom module."
+        "description": "Books module name such as Invoices, Bills, Items, Quotes, or an explicit module_api_name for a custom module. Quotes resolves to Estimates."
       },
       "LimitParam": {
         "name": "limit",
@@ -83,7 +83,7 @@
         "type": "object",
         "required": ["module"],
         "properties": {
-          "module": { "type": "string", "description": "Books module name, for example Invoices or Items." },
+          "module": { "type": "string", "description": "Books module name, for example Invoices, Items, or Quotes. Quotes resolves to the Estimates API resource." },
           "module_api_name": { "type": "string", "description": "Exact Books API module name when a custom module is resolved dynamically." },
           "request_type": { "type": "string", "enum": ["records", "count", "search", "aggregate", "comparison", "analysis"], "description": "Read-only Books query type." },
           "fields": { "type": "array", "items": { "type": "string" }, "description": "Metadata-resolved Books field names. Never invent field names." },
