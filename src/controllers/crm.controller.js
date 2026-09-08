@@ -67,7 +67,7 @@ function createCrmController(crmService = new CrmService()) {
         const previous = conversationId ? conversationContext.get(conversationId) : null;
         const resolvedQuestion = resolveFollowUpQuestion(question, previous);
         const explicitModule = extractExplicitModule(resolvedQuestion.toLowerCase());
-        const plannedRequest = planQuestion(resolvedQuestion);
+        const plannedRequest = applyPaginationFollowUp(planQuestion(resolvedQuestion), question, previous);
         assertExplicitModuleRouting(explicitModule, plannedRequest.module);
         const result = await crmService.query({ ...(req.body?.query || {}), ...plannedRequest });
         if (conversationId) {
@@ -112,13 +112,21 @@ function stringifySummary(obj) {
 
 function resolveFollowUpQuestion(question, previous) {
   const text = String(question || '').trim();
-  if (!previous || hasExplicitModuleIntent(text) || isClarification(text)) return text;
+  if (!previous || hasExplicitModuleIntent(text) || extractExplicitModule(text.toLowerCase()) || isClarification(text)) return text;
   if (!isFollowUpQuestion(text)) return text;
   if (/(this year|current year|last year|previous year|next year|this quarter|last quarter|next quarter|this month|current month|last month|previous month|next month|this week|last week|next week|today|yesterday|tomorrow|\b20\d{2}\b|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(text)) {
     const withoutPreviousPeriod = previous.question.replace(/\b(?:today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)\b/gi, '').replace(/\s+/g, ' ').trim();
     return `${withoutPreviousPeriod} created ${text}`;
   }
   return previous.question;
+}
+
+function applyPaginationFollowUp(plannedRequest, originalQuestion, previous) {
+  const match = String(originalQuestion || '').match(/^\s*next\s+(\d+)\b/i);
+  if (!match || !previous?.plannedRequest) return plannedRequest;
+  const limit = Math.min(Math.max(Number(match[1]), 1), 200);
+  const previousLimit = Number(previous.plannedRequest.limit) || limit;
+  return { ...previous.plannedRequest, limit, offset: (Number(previous.plannedRequest.offset) || 0) + previousLimit };
 }
 
 function hasExplicitModuleIntent(text) {
@@ -239,8 +247,24 @@ function planQuestion(question) {
 
   const lower = text.toLowerCase();
   const detectedModule = extractExplicitModule(lower) || detectModule(lower);
+  const comparedModules = extractComparedModules(lower);
+  if (comparedModules.length > 1 && !isComprehensiveSalesPerformanceRequest(lower) && /\b(?:compare|versus|vs|difference|higher|lower|more|less)\b/.test(lower)) {
+    const period = relativePeriodFromText(lower) || 'this week';
+    return {
+      module: comparedModules[0],
+      complexity: 'MULTI-STEP',
+      request_type: 'comparison',
+      fields: ['id'],
+      filters: [],
+      aggregate: { operation: 'count', field: 'id' },
+      comparison: { multi_module: comparedModules.map((module) => ({ module, date_field_role: dateFieldRoleForQuestion(lower, module) })), operation: 'count', period },
+      date_range: { current: resolveRelativePeriod(period) },
+      limit: extractRecordLimit(lower),
+      offset: 0
+    };
+  }
   if (/\b(?:bulk read|bulk|export|very large|large dataset)\b/.test(lower)) {
-    return { module: detectedModule, complexity: 'COMPLEX', request_type: 'bulk_read', fields: defaultFields(detectedModule), filters: [], limit: 200, offset: 0 };
+    return { module: detectedModule, complexity: 'COMPLEX', request_type: 'bulk_read', fields: defaultFields(detectedModule), fields_source: 'planner_default', filters: [], limit: 200, offset: 0 };
   }
   if (/(?:available|list|show|get)\s+(?:the\s+)?fields?\b|field\s+metadata/.test(lower)
     || /(?:show|list|get)\s+(?:the\s+)?[a-z0-9_, ]+fields?\s+for\b/.test(lower)) {
@@ -282,7 +306,6 @@ function planQuestion(question) {
       complexity: 'MODERATE',
       request_type: 'search',
       fields: ['id'],
-      field_labels: fieldLabels,
       filters: [],
       search: { word: searchTerm },
       limit: requestedLimit,
@@ -291,6 +314,7 @@ function planQuestion(question) {
   }
   const dateFilter = detectDateFilter(lower, module);
   if (dateFilter) filters.push(dateFilter);
+  const dateFieldRole = dateFieldRoleForQuestion(lower, module);
 
   const comparison = detectPeriodComparison(lower);
   if (comparison) {
@@ -304,6 +328,7 @@ function planQuestion(question) {
       filters: filters.filter((filter) => filter.field !== dateFieldForQuestion(lower, module)),
       date_range: { current: resolveRelativePeriod(comparison.current), previous: resolveRelativePeriod(comparison.previous) },
       comparison: { current_period: comparison.current, previous_period: comparison.previous, date_field: dateFieldForQuestion(lower, module), operation: aggregateOperation.operation, field: aggregateOperation.field },
+      date_field_role: dateFieldRole,
       aggregate: aggregateOperation,
       limit: requestedLimit,
       offset: 0
@@ -382,6 +407,8 @@ function planQuestion(question) {
   if (fieldComparison && !filters.some((filter) => filter.field === fieldComparison.field)) filters.push(fieldComparison);
   const amountThreshold = extractAmountThreshold(lower);
   if (amountThreshold && !fieldComparison) filters.push({ field: 'Amount', operator: 'greater_than', value: amountThreshold.value });
+  const semanticFilter = extractSemanticFilter(lower);
+  if (semanticFilter) filters.push(semanticFilter);
 
   if (/(closed won|closed-won|won deals|won deal)/.test(lower)) {
     filters.push({ field: 'Stage', operator: 'equals', value: 'Closed Won' });
@@ -410,6 +437,7 @@ function planQuestion(question) {
       request_type: 'analysis',
       analysis: { type: 'count_and_records' },
       fields: defaultFields('Deals'),
+      fields_source: 'planner_default',
       filters,
       retrieve_all: /\b(?:all|every|complete|entire)\b/.test(lower),
       limit: extractRecordLimit(lower),
@@ -430,7 +458,7 @@ function planQuestion(question) {
     };
   }
 
-  if (module === 'Leads' && /(group|grouped|each|percentage|top 5|highest-volume|lead source)/.test(lower)) {
+  if (module === 'Leads' && (/(percentage|top 5|highest-volume)/.test(lower) || (/lead source/.test(lower) && !/group(?:ed)?\s+by\s+source/.test(lower)))) {
     if (!filters.some((filter) => filter.field === 'Lead_Source' && filter.operator === 'equals')) {
       filters.push({ field: 'Lead_Source', operator: 'is_not_null' });
     }
@@ -472,6 +500,22 @@ function planQuestion(question) {
     };
   }
 
+  const groupBy = extractGroupBy(lower);
+  if (groupBy && !/(dashboard|report)/.test(lower)) {
+    return {
+      module,
+      complexity: 'MODERATE',
+      request_type: 'aggregate',
+      aggregate: { operation: 'count', field: 'id' },
+      group_by: groupBy.field,
+      ...(groupBy.label ? { group_by_label: groupBy.label } : {}),
+      date_field_role: dateFieldRole,
+      filters,
+      limit: requestedLimit,
+      offset: 0
+    };
+  }
+
   const aggregateOperation = module === 'Leads' ? null : detectAggregateOperation(lower);
   if (aggregateOperation) {
     return {
@@ -479,6 +523,7 @@ function planQuestion(question) {
       complexity: 'MODERATE',
       request_type: 'aggregate',
       aggregate: { operation: aggregateOperation.operation, field: aggregateOperation.field },
+      date_field_role: dateFieldRole,
       filters,
       limit: 20,
       offset: 0
@@ -493,12 +538,13 @@ function planQuestion(question) {
       analysis: { type: 'lead_conversion' },
       fields: ['id'],
       filters,
+      date_field_role: dateFieldRole,
       limit: 20,
       offset: 0
     };
   }
 
-  if (/(count|how many|number of|total number|many)/.test(lower) || /(?:lead|deal)s? created/.test(lower)) {
+  if (/\b(?:count|how many|number of|total number|many)\b/.test(lower) || /(?:lead|deal)s? created/.test(lower)) {
     return {
       module,
       complexity: 'SIMPLE',
@@ -515,8 +561,10 @@ function planQuestion(question) {
       module,
       request_type: 'records',
       fields: fieldLabels.length > 0 ? ['id'] : defaultFields(module),
+      ...(fieldLabels.length > 0 ? {} : { fields_source: 'planner_default' }),
       ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
       filters,
+      date_field_role: dateFieldRole,
       sort_field: recordSort.field,
       sort_order: recordSort.order,
       limit: requestedLimit,
@@ -529,8 +577,10 @@ function planQuestion(question) {
     complexity: 'SIMPLE',
     request_type: 'records',
     fields: fieldLabels.length > 0 ? ['id'] : defaultFields(module),
+    ...(fieldLabels.length > 0 ? {} : { fields_source: 'planner_default' }),
     ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
     filters,
+    date_field_role: dateFieldRole,
     sort_field: recordSort.field,
     sort_order: recordSort.order,
     limit: requestedLimit,
@@ -584,9 +634,12 @@ function extractRequestedYear(lowerText) {
 }
 
 function detectRecordSort(lowerText, module) {
-  if (/(oldest|first created|earliest)/.test(lowerText)) return { field: 'Created_Time', order: 'asc' };
-  if (/(highest|largest|maximum|top|latest|recent|newest)/.test(lowerText) && module === 'Deals' && /(amount|value|revenue|deal)/.test(lowerText)) return { field: 'Amount', order: 'desc' };
-  return { field: defaultSortField(module), order: 'desc' };
+  if (/(oldest|first created|earliest)/.test(lowerText)) return { field: 'Created_Time', field_role: 'date', order: 'asc' };
+  if (/(modified|updated)/.test(lowerText)) return { field: 'Modified_Time', field_role: 'modified', order: 'desc' };
+  if (/(highest|largest|maximum|top|most expensive)/.test(lowerText) && /(amount|value|revenue|deal|price|cost)/.test(lowerText)) {
+    return module === 'Deals' ? { field: 'Amount', field_role: 'numeric', order: 'desc' } : { field: '__semantic__', field_label: 'price', field_role: 'numeric', order: 'desc' };
+  }
+  return { field: defaultSortField(module), field_role: 'date', order: 'desc' };
 }
 
 function buildAssistantAnswer(question, result) {
@@ -739,6 +792,26 @@ function detectModule(lowerText) {
   return null;
 }
 
+function extractComparedModules(lowerText) {
+  const candidates = [
+    ['Meetings', /\b(?:meeting|meetings|event|events)\b/],
+    ['Calls', /\b(?:call|calls)\b/],
+    ['Tasks', /\b(?:task|tasks)\b/],
+    ['Products', /\b(?:product|products)\b/],
+    ['Leads', /\b(?:lead|leads)\b/],
+    ['Contacts', /\b(?:contact|contacts)\b/],
+    ['Accounts', /\b(?:account|accounts)\b/],
+    ['Deals', /\b(?:deal|deals)\b/],
+    ['Quotes', /\b(?:quote|quotes)\b/]
+  ];
+  return candidates
+    .map(([module, pattern]) => ({ module, index: lowerText.search(pattern) }))
+    .filter((match) => match.index >= 0)
+    .sort((left, right) => left.index - right.index)
+    .map((match) => match.module)
+    .filter((module, index, modules) => modules.indexOf(module) === index);
+}
+
 function extractExplicitModule(lowerText) {
   const modulePatterns = [
     ['Meetings', /\b(?:meeting|meetings|event|events|appointment|appointments)\b/i],
@@ -763,9 +836,14 @@ function extractExplicitModule(lowerText) {
   if (matches.length > 0) return matches[0].module;
 
   const match = lowerText.match(/\b(?:module|object|records? from)\s+([a-z][a-z0-9 _-]{1,80})/i);
-  if (!match) return null;
+  if (!match) {
+    const naturalModule = lowerText.match(/\b(?:show|list|find|get|search)\s+(?:me\s+)?(?:the\s+)?(?:(?:latest|recent|all|first|top)\s+\d*\s*)?([a-z][a-z0-9 _-]{1,80}?)(?=\s+(?:created|updated|where|with|containing|this|last|next|today|yesterday|tomorrow)\b|[?.!]|$)/i);
+    return naturalModule ? naturalModule[1].trim() : null;
+  }
   const requested = match[1].trim().replace(/\b(?:with|where|today|this|that|records?)\b.*$/i, '').trim();
-  return Object.keys(CRM_MODULES).find((module) => module.toLowerCase() === requested.toLowerCase()) || requested || null;
+  if (requested) return Object.keys(CRM_MODULES).find((module) => module.toLowerCase() === requested.toLowerCase()) || requested;
+  const naturalModule = lowerText.match(/\b(?:show|list|find|get|search)\s+(?:me\s+)?(?:the\s+)?(?:(?:latest|recent|all|first|top)\s+\d*\s*)?([a-z][a-z0-9 _-]{1,80}?)(?=\s+(?:created|updated|where|with|containing|this|last|next|today|yesterday|tomorrow)\b|[?.!]|$)/i);
+  return naturalModule ? naturalModule[1].trim() : null;
 }
 
 function assertExplicitModuleRouting(explicitModule, plannedModule) {
@@ -833,6 +911,15 @@ function extractFieldComparison(lowerText) {
   return { field: rawField === 'amount' || rawField === 'deal_value' || rawField === 'value' ? 'Amount' : rawField === 'unit_price' ? 'Unit_Price' : rawField, operator: operatorMap[match[2].toLowerCase()], value: Number(match[3].replace(/,/g, '')) };
 }
 
+function extractSemanticFilter(lowerText) {
+  const match = lowerText.match(/(?:where|with)\s+([a-z][a-z0-9 _-]*?)\s+(is\s+not\s+equal\s+to|not\s+equal\s+to|is|equals?|contains|starts\s+with|=)\s+([^?.!,]+?)(?=\s+(?:and|created|updated|sorted|ordered|show|list|limit)\b|[?.!,]|$)/i);
+  if (!match) return null;
+  const operatorText = match[2].toLowerCase().replace(/\s+/g, ' ').trim();
+  const operators = { is: 'equals', equal: 'equals', equals: 'equals', '=': 'equals', 'not equal to': 'not_equals', 'is not equal to': 'not_equals', contains: 'contains', 'starts with': 'starts_with' };
+  const value = match[3].trim();
+  return value ? { field: '__semantic__', field_label: match[1].trim(), operator: operators[operatorText] || 'equals', value } : null;
+}
+
 function extractFieldLabels(lowerText) {
   const match = lowerText.match(/\bwith\s+(.+?)(?=\s+(?:fields?|where|for|created|sorted|ordered|limit|top)\b|[?.!]|$)/i);
   if (!match) return [];
@@ -841,7 +928,7 @@ function extractFieldLabels(lowerText) {
 
 function extractSearchTerm(text) {
   const match = text.match(/\b(?:named|called|matching)\s+["']?([^"']+?)["']?(?:\s+in\s+(?:leads?|contacts?|accounts?|deals?))?\s*$/i)
-    || text.match(/\b(?:search(?:\s+for)?|find)\s+(?:a|an|the)?\s*(?:lead|leads|contact|contacts|account|accounts|deal|deals|customer|customers)?\s*(?:named|called|matching)?\s*["']?([^"']+?)["']?\s*$/i);
+    || text.match(/\b(?:search(?:\s+for)?|find)\s+(?:(?:a|an|the)\s+)?(?:(?:lead|contact|account|deal|customer|product|item)s?\s+)?(?:(?:named|called|matching|containing|with|for)\s+)?["']?([^"']+?)["']?\s*$/i);
   if (!match) return null;
   const value = match[1].trim().replace(/[?.!]$/, '');
   return value.length >= 2 ? value : null;
@@ -926,6 +1013,12 @@ function detectDateFilter(lowerText, module) {
     return calendarFilter(dateField, [exactRange[1], exactRange[2]]);
   }
 
+  const openRange = lowerText.match(/\b(before|after|since|until)\s+(\d{4}-\d{2}-\d{2})\b/i);
+  if (openRange) {
+    const operator = { before: 'less_than', until: 'less_equal', after: 'greater_than', since: 'greater_equal' }[openRange[1].toLowerCase()];
+    return { field: dateField, operator, value: openRange[2] };
+  }
+
   const namedRange = lowerText.match(/between\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})\s+and\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})/i);
   if (namedRange) {
     const start = new Date(`${namedRange[1]} ${namedRange[2]}, ${namedRange[3]}`);
@@ -959,6 +1052,15 @@ function dateFieldForQuestion(lowerText, module) {
   if (module !== 'Deals') return 'Created_Time';
   if (/(created|creation|new|added|entered)/.test(lowerText)) return 'Created_Time';
   return 'Closing_Date';
+}
+
+function dateFieldRoleForQuestion(lowerText, module) {
+  if (/(due|deadline)/.test(lowerText)) return 'due';
+  if (/(modified|updated)/.test(lowerText)) return 'modified';
+  if (/(created|creation|new|added|entered)/.test(lowerText)) return 'created';
+  if (module === 'Deals') return 'closing';
+  if (['Calls', 'Meetings'].includes(module)) return 'activity';
+  return 'created';
 }
 
 function calendarFilter(field, value) {
@@ -1007,19 +1109,29 @@ function toIsoDate(date) {
 }
 
 function detectAggregateOperation(lowerText) {
+  const hasMeasure = /(amount|deal\s+value|revenue|unit\s+price|price|cost|quantity|qty)/.test(lowerText);
+  if (!hasMeasure) return null;
+  const field = /(unit\s+price|price)/.test(lowerText) ? 'Unit_Price' : 'Amount';
   if (/(average|avg)/.test(lowerText)) {
-    return { operation: 'avg', field: 'Amount' };
+    return { operation: 'avg', field };
   }
   if (/(total|sum|combined)/.test(lowerText)) {
-    return { operation: 'sum', field: 'Amount' };
+    return { operation: 'sum', field };
   }
   if (/(highest|largest|max)/.test(lowerText)) {
-    return { operation: 'max', field: 'Amount' };
+    return { operation: 'max', field };
   }
   if (/(lowest|smallest|min)/.test(lowerText)) {
-    return { operation: 'min', field: 'Amount' };
+    return { operation: 'min', field };
   }
   return null;
+}
+
+function extractGroupBy(lowerText) {
+  const match = lowerText.match(/\bgroup(?:ed)?\s+by\s+([a-z][a-z0-9 _-]*?)(?=\s+(?:for|where|this|last|next|today|created)\b|[?.!,]|$)/i);
+  if (!match) return null;
+  const label = match[1].trim();
+  return { field: '__semantic__', label };
 }
 
 module.exports = { createCrmController, planQuestion };

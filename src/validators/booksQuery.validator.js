@@ -40,6 +40,14 @@ function booksQueryValidator(body) {
   if (!requestTypes.has(request_type)) {
     throw createAppError('INVALID_BOOKS_REQUEST', 'request_type must be one of: records, count, search, aggregate, comparison, analysis.', 400);
   }
+  if (/^quotes?$/i.test(module.trim())) {
+    throw createAppError(
+      'BOOKS_MODULE_UNSUPPORTED',
+      `Books module '${module}' is not supported by the Books backend. Quotes belongs to Zoho CRM, not Zoho Books. Use the CRM tool for Quotes queries.`,
+      404,
+      { module, supported_modules: Object.keys(BOOKS_MODULES), domain: 'crm' }
+    );
+  }
   if (!Object.prototype.hasOwnProperty.call(BOOKS_MODULES, module)) {
     if (typeof body.module_api_name === 'string' && body.module_api_name.trim().length > 0) {
       // dynamic/ custom modules are allowed when the API name is explicit.

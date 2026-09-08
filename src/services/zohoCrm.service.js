@@ -105,10 +105,10 @@ class ZohoCrmService {
     const missingFields = requestedFields.filter((field) => !metadata.fields.includes(field));
     if (missingFields.length > 0) {
       throw createAppError(
-        'ZOHO_FIELD_UNAVAILABLE',
+        'FIELD_NOT_AVAILABLE',
         `Zoho CRM metadata for '${resolvedModule}' does not expose the requested field(s).`,
-        502,
-        { module: resolvedModule, fields: missingFields }
+        400,
+        { module: requestedModule, module_api_name: resolvedModule, field: missingFields[0], fields: missingFields }
       );
     }
     let safeFields = metadata.fields;
@@ -500,21 +500,37 @@ class ZohoCrmService {
     }
   }
 
-  async resolveModuleApiName(module, { preferStatic = false } = {}) {
+  async resolveModuleApiName(module, { preferStatic = false, forceRefresh = false } = {}) {
     const normalized = String(module || '').trim();
     if (preferStatic && CRM_API_NAMES[module]) return CRM_API_NAMES[module];
     const expectedApiName = CRM_API_NAMES[module];
     const startedAt = Date.now();
     log('info', `[CRM MODULE METADATA] requested_module=${normalized} lookup=start`);
-    const metadata = await this.getModulesMetadata();
-    const match = metadata.modules.find((item) => [item?.api_name, item?.module_name, item?.plural_label, item?.singular_label].filter(Boolean).some((value) => String(value).toLowerCase() === normalized.toLowerCase() || (expectedApiName && String(value).toLowerCase() === expectedApiName.toLowerCase())));
+    let metadata;
+    try {
+      metadata = await this.getModulesMetadata({ forceRefresh });
+    } catch (error) {
+      if (expectedApiName && typeof this.httpClient.get !== 'function') return expectedApiName;
+      if (!expectedApiName) throw error;
+      throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is unavailable for read operations.`, 400, {
+        requested_module: normalized,
+        resolved_api_name: null,
+        reason: 'Live Zoho module metadata could not verify this module.'
+      });
+    }
+    const normalizedRequest = normalizeLabel(normalized);
+    let match = metadata.modules.find((item) => [item?.api_name, item?.module_name, item?.plural_label, item?.singular_label].filter(Boolean).some((value) => normalizeLabel(value) === normalizedRequest || (expectedApiName && normalizeLabel(value) === normalizeLabel(expectedApiName))));
+    if (!match && !forceRefresh) {
+      const refreshed = await this.getModulesMetadata({ forceRefresh: true });
+      match = refreshed.modules.find((item) => [item?.api_name, item?.module_name, item?.plural_label, item?.singular_label].filter(Boolean).some((value) => normalizeLabel(value) === normalizedRequest || (expectedApiName && normalizeLabel(value) === normalizeLabel(expectedApiName))));
+    }
     if (!match || !match.api_name) {
       throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is unavailable for read operations.`, 404, { requested_module: normalized, resolved_api_name: expectedApiName || normalized, reason: 'Module was not present in live Zoho module metadata.' });
     }
     if (match.api_supported === false || match.viewable === false) {
       throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is not available for read operations.`, 400, { requested_module: normalized, resolved_api_name: match.api_name, reason: 'Zoho metadata marks the module as unsupported or not viewable.', api_supported: match.api_supported, viewable: match.viewable });
     }
-    if (expectedApiName && match.api_name !== expectedApiName) {
+    if (module === 'Meetings' && match.api_name !== 'Events') {
       throw createAppError('CRM_MODULE_ROUTING_ERROR', `Zoho module '${normalized}' resolved to '${match.api_name}', expected '${expectedApiName}'.`, 500, { requested_module: normalized, resolved_api_name: match.api_name, expected_api_name: expectedApiName });
     }
     log('info', `[CRM MODULE ROUTING] requested=${normalized} resolved=${match.api_name}`);
@@ -523,9 +539,9 @@ class ZohoCrmService {
   }
 
   async getModuleMetadata(module) {
-    const normalized = String(module || '').trim().toLowerCase();
+    const normalized = normalizeLabel(String(module || '').trim());
     const metadata = await this.getModulesMetadata();
-    const match = metadata.modules.find((item) => [item?.api_name, item?.module_name, item?.plural_label, item?.singular_label].filter(Boolean).some((value) => String(value).toLowerCase() === normalized));
+    const match = metadata.modules.find((item) => [item?.api_name, item?.module_name, item?.plural_label, item?.singular_label].filter(Boolean).some((value) => normalizeLabel(value) === normalized));
     if (!match) throw createAppError('MODULE_NOT_FOUND', `Zoho CRM module '${module}' was not found.`, 404, { module });
     if (match.api_supported === false || match.viewable === false) throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${module}' is not available for read operations.`, 400, { module, module_api_name: match.api_name });
     return match;

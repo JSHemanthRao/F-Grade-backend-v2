@@ -586,8 +586,8 @@ test('rejects invalid module and returns a field-specific error', async () => {
   assert.equal(response.status, 400);
   assert.equal(response.body.success, false);
   assert.equal(response.body.status, 'error');
-  assert.equal(response.body.error.code, 'INVALID_CRM_REQUEST');
-  assert.equal(response.body.error.details.errors[0].path, 'module');
+  assert.equal(response.body.error.code, 'MODULE_UNAVAILABLE');
+  assert.equal(response.body.error.details.requested_module, 'Unknown');
 });
 
 test('rejects invalid filter values, sorting, limit, and offset', async () => {

@@ -3,8 +3,8 @@
   "info": {
     "title": "F-Grade CRM Assistant API",
     "version": "1.0.0",
-    "description": "Read-only natural-language Zoho CRM assistant for Microsoft Copilot Studio. The backend resolves the explicitly requested module to its exact Zoho API module, validates live module and field metadata, selects an approved read API, and returns normalized CRM data. It never substitutes another module; zero records remain zero records and module errors are returned.",
-    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho CRM. The user's explicit module is authoritative: Calls means Calls, Tasks means Tasks, Meetings means Events, Products means Products, and Deals means Deals. Never substitute another module. Never invent fields; resolve fields against the selected module's live metadata. Zero records remain zero records. Return backend module, metadata, or query errors instead of replacing them with another module's data. Never emit a Leads field named Converted; conversion questions must remain natural language."
+    "description": "Read-only natural-language Zoho CRM assistant for Microsoft Copilot Studio. The backend resolves the explicitly requested module from live GET /settings/modules metadata, resolves fields from live GET /settings/fields metadata, validates filters/sorting/grouping/aggregations, selects an approved read API, and returns normalized CRM data. Custom modules and custom fields require no source-code mapping. It never substitutes another module; zero records remain zero records and module or field errors are returned.",
+    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho CRM. The user's explicit module is authoritative: Calls means Calls, Tasks means Tasks, Meetings maps to Events, Products means Products, and Deals means Deals. Never substitute another module. Never invent fields or default to Deals. Resolve module names and custom modules against live CRM module metadata, then resolve field labels/API names against the selected module's live field metadata. Zero records remain zero records. For comparisons across modules, execute independent read queries and return each module name and module_api_name. Return MODULE_UNAVAILABLE or FIELD_NOT_AVAILABLE instead of replacing the request with another module's data. Never emit a Leads field named Converted; conversion questions must remain natural language."
   },
   "servers": [
     {
@@ -17,7 +17,7 @@
       "post": {
         "operationId": "askCrmAssistant",
         "summary": "Answer a natural-language CRM question",
-        "description": "Resolves record, count, aggregate, search, and lead-conversion questions against the exact explicitly requested CRM module. Products never becomes Deals; Meetings maps only to Events. Module availability and query errors are returned without fallback substitution.",
+        "description": "Resolves record, count, aggregate, search, grouping, date, comparison, and metadata-driven questions against the exact explicitly requested CRM module. Products never becomes Deals; Meetings maps only to Events. Module availability and field validation occur before every Zoho read. Module and field errors are returned without fallback substitution.",
         "requestBody": {
           "required": true,
           "content": {
@@ -31,6 +31,10 @@
           "200": {
             "description": "Assistant response",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssistantResponse" } } }
+          },
+          "404": {
+            "description": "Requested CRM module or field is unavailable",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
           },
           "400": {
             "description": "Bad request",
@@ -82,8 +86,8 @@
           "prompt": { "type": "string", "description": "Compatibility alias for question." },
           "message": { "type": "string", "description": "Compatibility alias for question." },
           "conversation_id": { "type": "string" },
-          "module": { "type": "string", "description": "Exact CRM display module to query. The backend preserves this module and never substitutes another; Meetings maps to Events." },
-          "request_type": { "type": "string", "description": "records | count | aggregate | analysis | search | bulk_read" },
+          "module": { "type": "string", "description": "Requested CRM module by live api_name, module_name, singular_label, or plural_label. Custom modules are supported. The backend preserves this module and never substitutes another; Meetings maps to Events." },
+          "request_type": { "type": "string", "description": "records | count | aggregate | analysis | search | bulk_read. Fields, filters, sort, aggregate, and group_by are validated against live metadata before execution." },
           "analysis": { "type": "object", "description": "Optional analysis type and parameters" },
           "query": { "type": "object", "description": "Optional structured query (filters, fields, sort, limit, offset)" },
           "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
@@ -98,6 +102,8 @@
           "status": { "type": "string" },
           "module": { "type": "string" },
           "module_api_name": { "type": "string" },
+          "fields": { "type": "array", "items": { "type": "string" }, "description": "Resolved live Zoho CRM API field names used by the request." },
+          "filters": { "type": "array", "items": { "type": "object", "additionalProperties": true }, "description": "Validated filters applied to the resolved module." },
           "request_type": { "type": "string" },
           "analysis": { "type": "string" },
           "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
@@ -106,6 +112,7 @@
           "answer": { "type": "string" },
           "metrics": { "type": "object", "additionalProperties": true },
           "summary": { "oneOf": [ { "type": "string" }, { "type": "object", "additionalProperties": true } ] },
+          "comparisons": { "type": "array", "items": { "type": "object", "additionalProperties": true }, "description": "Independent comparison values for period or cross-module comparisons." },
           "pagination": { "type": "object", "properties": { "limit": { "type": "integer" }, "offset": { "type": "integer" }, "returned": { "type": "integer" }, "more_records": { "type": "boolean" } }, "additionalProperties": false }
         },
         "additionalProperties": true

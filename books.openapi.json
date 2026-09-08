@@ -4,7 +4,7 @@
     "title": "F-Grade Zoho Books Read-Only Assistant API",
     "version": "1.0.0",
     "description": "Read-only Zoho Books assistant for natural-language module reads, metadata-driven field resolution, filters, pagination, and safe module history access. This contract intentionally excludes CRM operations and write actions.",
-    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho Books modules such as Invoices, Bills, Items, Customers, or vendor/payment records. The backend resolves the module and field names from the Books metadata and enforces read-only routing. Never invent customs, joins, or write actions."
+    "x-copilot-studio-tool-description": "Ask read-only questions about Zoho Books modules such as Invoices, Bills, Items, Customers, or vendor/payment records. Quotes is a Zoho CRM module and is not supported by this Books backend. The backend resolves the module and field names from the Books metadata and enforces read-only routing. Never invent customs, joins, or write actions."
   },
   "servers": [
     { "url": "https://f-grade-backend-v2.onrender.com/", "description": "Production server" },
@@ -15,7 +15,7 @@
       "post": {
         "operationId": "booksReadQuery",
         "summary": "Execute a read-only Books query",
-        "description": "Reads Books records using an allowlisted module and metadata-aware field names. Only GET-based read queries and safe metadata/history lookups are allowed.",
+        "description": "Reads Books records using an allowlisted module and metadata-aware field names. Only GET-based read queries and safe metadata/history lookups are allowed. Quotes is a CRM-only module and must not be sent to this Books endpoint.",
         "requestBody": {
           "required": true,
           "content": {

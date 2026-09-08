@@ -47,6 +47,17 @@ test('returns normalized Books results', async () => {
   assert.equal(response.returned, 1);
 });
 
+test('rejects CRM Quotes as a Books module with a clear message', () => {
+  assert.throws(
+    () => booksQueryValidator({ module: 'Quotes', request_type: 'records', limit: 10, offset: 0 }),
+    (error) => {
+      assert.equal(error.code, 'BOOKS_MODULE_UNSUPPORTED');
+      assert.match(error.message, /Quotes.*CRM/i);
+      return true;
+    }
+  );
+});
+
 test('includes organization_id when querying Zoho Books records', async () => {
   let captured = null;
   const fakeHttpClient = {

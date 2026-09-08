@@ -7,6 +7,7 @@ const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
 const { randomUUID } = require('node:crypto');
 const { env } = require('../config/env');
+const { resolveRelativePeriod } = require('../utils/relativeDate');
 
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
@@ -41,9 +42,21 @@ class CrmService {
     const statsAtStart = { ...(this.zohoService.executionStats || {}) };
     log('info', `[CRM EXECUTION START] executionId=${executionId}`);
     log('info', `[CRM request received] ${JSON.stringify({ module: input?.module, request_type: input?.request_type || 'records', query_type: input?.request_type || 'records', field_count: Array.isArray(input?.fields) ? input.fields.length : 0, filter_count: Array.isArray(input?.filters) ? input.filters.length : 0, date_range: input?.date_range || null })}`);
-    const normalizedInput = await this.resolveSemanticFields(normalizeSemanticRequest(input));
+    let normalizedInput = await this.resolveSemanticFields(normalizeSemanticRequest(input));
     const executionPlan = classifyExecution(normalizedInput);
     log('info', `[CRM execution plan] classification=${executionPlan.classification} steps=${executionPlan.steps.join(' | ')}`);
+    const hasUnresolvedSemanticFilter = (normalizedInput.filters || []).some((filter) => filter?.field === '__semantic__');
+    if (!hasUnresolvedSemanticFilter && normalizedInput.module !== 'CRM') {
+      validateCrmQuery({ ...normalizedInput, metadata_driven: true });
+    }
+    if (normalizedInput.module !== 'CRM' && typeof this.zohoService.resolveModuleApiName === 'function') {
+      normalizedInput = {
+        ...normalizedInput,
+        metadata_driven: true,
+        module_api_name: normalizedInput.module_api_name || await this.zohoService.resolveModuleApiName(normalizedInput.module)
+      };
+      normalizedInput = await materializeMetadataRequest(this.zohoService, normalizedInput);
+    }
     let request;
     try {
       request = validateCrmQuery(normalizedInput);
@@ -51,11 +64,8 @@ class CrmService {
       log('warn', `[CRM validation failure] ${JSON.stringify(error.details || { message: error.message })}`);
       throw error;
     }
-    if (request.module !== 'CRM' && typeof this.zohoService.resolveModuleApiName === 'function') {
-      const hasLiveModuleMetadata = typeof this.zohoService.getModulesMetadata === 'function'
-        && typeof this.zohoService.httpClient?.get === 'function';
-      const resolveOptions = hasLiveModuleMetadata ? undefined : { preferStatic: true };
-      request.module_api_name = await this.zohoService.resolveModuleApiName(request.module, resolveOptions);
+    if (request.module !== 'CRM' && !request.module_api_name && typeof this.zohoService.resolveModuleApiName === 'function') {
+      request.module_api_name = await this.zohoService.resolveModuleApiName(request.module);
     }
     await validateMetadataFields(this.zohoService, request);
     if (typeof this.zohoService.resolveOwnerFilters === 'function') {
@@ -63,6 +73,11 @@ class CrmService {
     }
     log('info', `[CRM normalized request] ${JSON.stringify({ module: request.module, module_api_name: request.module_api_name, request_type: request.request_type, query_type: request.request_type, field_count: request.fields.length, filter_count: request.filters.length, date_range: request.date_range || null })}`);
     if (request.request_type === 'comparison') {
+      if (normalizedInput.comparison?.multi_module) {
+        const result = await this.compareModules(normalizedInput.comparison, normalizedInput.date_range, executionContext);
+        this.logExecution(executionId, startedAt, statsAtStart, 'comparison');
+        return result;
+      }
       const result = await this.compare(request, normalizedInput.comparison || request.comparison, normalizedInput.date_range || request.date_range);
       this.logExecution(executionId, startedAt, statsAtStart, 'comparison');
       return result;
@@ -177,6 +192,8 @@ class CrmService {
       module: request.module,
       module_api_name: result.module_api_name || request.module_api_name || (typeof this.zohoService.resolveModuleApiName === 'function' ? await this.zohoService.resolveModuleApiName(request.module) : request.module),
       request_type: request.request_type,
+      fields: request.fields,
+      filters: request.filters,
       count: Number.isInteger(info.count) ? info.count : data.length,
       returned: data.length,
       more_records: Boolean(info.more_records),
@@ -214,19 +231,62 @@ class CrmService {
     const [currentValue, previousValue] = await Promise.all([readValue(current), readValue(previous)]);
     const difference = currentValue - previousValue;
     const percentageChange = previousValue === 0 ? (currentValue === 0 ? 0 : null) : Number(((difference / previousValue) * 100).toFixed(2));
+    const direction = difference > 0 ? 'increased' : difference < 0 ? 'decreased' : 'unchanged';
+    const comparisonResult = { current_period: current.period, previous_period: previous.period, current_value: currentValue, previous_value: previousValue, difference, percentage_change: percentageChange, direction };
     return {
       request_type: 'comparison',
       module: request.module,
       module_api_name: request.module_api_name || await this.zohoService.resolveModuleApiName(request.module, { preferStatic: true }),
-      comparison: { current_period: current.period, previous_period: previous.period, current_value: currentValue, previous_value: previousValue, difference, percentage_change: percentageChange },
+      fields: request.fields,
+      filters: request.filters,
+      comparison: comparisonResult,
+      comparisons: [comparisonResult],
       date_range: { field: dateField, current, previous }
+    };
+  }
+
+  async compareModules(comparison, dateRange = {}, executionContext = createExecutionContext()) {
+    const period = dateRange.current || resolveComparisonPeriod(comparison.period);
+    if (!period) throw createAppError('INVALID_CRM_COMPARISON', 'Multi-module comparisons require a relative date period.', 400);
+    const entries = await Promise.all(comparison.multi_module.map(async ({ module, date_field_role }) => {
+      const result = await executeCached(executionContext, `multi-module:${module}:${period.start}:${period.end}`, () => this.query({
+        module,
+        request_type: 'count',
+        fields: ['id'],
+        filters: [{ field: 'Created_Time', operator: 'between', value: [period.start, period.end], exclusive_end: true }],
+        date_field_role,
+        limit: 1,
+        offset: 0,
+        metadata_driven: true
+      }, executionContext));
+      return { module, module_api_name: result.module_api_name || module, count: Number(result.count || 0) };
+    }));
+    const comparisonData = Object.fromEntries(entries.map((entry) => [entry.module, entry.count]));
+    const values = entries.map((entry) => entry.count);
+    const difference = (values[0] || 0) - (values[1] || 0);
+    const previous = values[1] || 0;
+    const percentageChange = previous === 0 ? (difference === 0 ? 0 : null) : Number(((difference / previous) * 100).toFixed(2));
+    const direction = difference > 0 ? 'increased' : difference < 0 ? 'decreased' : 'unchanged';
+    const comparisons = entries.map((entry) => ({ module: entry.module, module_api_name: entry.module_api_name, value: entry.count }));
+    return {
+      request_type: 'comparison',
+      module: entries[0]?.module || null,
+      module_api_name: entries[0]?.module_api_name || (entries[0] && typeof this.zohoService.resolveModuleApiName === 'function' ? await this.zohoService.resolveModuleApiName(entries[0].module) : null),
+      fields: ['id'],
+      filters: [],
+      comparison: { ...comparisonData, difference, percentage_change: percentageChange, direction, period: period.period },
+      comparisons,
+      date_range: { current: period },
+      returned: 0,
+      data: [],
+      more_records: false
     };
   }
 
   async count(request) {
     const moduleApiName = request.module_api_name || request.module;
     const result = await this.zohoService.count(moduleApiName, request.filters);
-    return { module: request.module, module_api_name: moduleApiName, request_type: request.request_type, count: result.count, returned: 0, more_records: false, records: [], data: [], summary: { operation: 'count', value: result.count }, pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false } };
+    return { module: request.module, module_api_name: moduleApiName, request_type: request.request_type, fields: request.fields, filters: request.filters, count: result.count, returned: 0, more_records: false, records: [], data: [], summary: { operation: 'count', value: result.count }, pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false } };
   }
 
   async search(request, search = {}) {
@@ -242,7 +302,7 @@ class CrmService {
   }
 
   async aggregate(request, aggregate) {
-    validateAggregateQuery({ module: request.module, fields: request.fields, filters: request.filters, aggregate, groupBy: request.group_by, sort: request.sort });
+    validateAggregateQuery({ module: request.module, fields: request.fields, filters: request.filters, aggregate, groupBy: request.group_by, sort: request.sort, metadataValidated: true });
     const expression = `${aggregate.operation.toUpperCase()}(${aggregate.field})`;
     const moduleApiName = request.module_api_name || CRM_API_NAMES[request.module];
     if (!moduleApiName) throw createAppError('MODULE_UNAVAILABLE', `No Zoho API module mapping exists for '${request.module}'.`, 404, { requested_module: request.module, resolved_api_name: null, reason: 'No exact module mapping is available.' });
@@ -257,6 +317,9 @@ class CrmService {
     log('info', `[CRM aggregate] module=${request.module} operation=${aggregate.operation} field=${aggregate.field} rows=${rows.length}`);
     return {
       module: request.module,
+      module_api_name: request.module_api_name || (typeof this.zohoService.resolveModuleApiName === 'function' ? await this.zohoService.resolveModuleApiName(request.module) : request.module),
+      fields: request.fields,
+      filters: request.filters,
       count: aggregate.operation === 'count' ? Number(rows[0]?.value || 0) : rows.length,
       data: rows,
       summary: { operation: aggregate.operation, field: aggregate.field, rows },
@@ -875,7 +938,15 @@ async function validateMetadataFields(zohoService, request) {
   }
   const requestedFields = Array.isArray(request.fields) ? request.fields : [];
   const missingRequestedFields = requestedFields.filter((field) => conversionFields.has(field) && !metadata.fields.includes(field));
-  if (missingRequestedFields.length > 0) throw createAppError('ZOHO_FIELD_UNAVAILABLE', `Zoho CRM metadata for '${moduleApiName}' does not expose the requested field(s).`, 502, { module: moduleApiName, fields: missingRequestedFields });
+  if (missingRequestedFields.length > 0) {
+    const isConversionField = missingRequestedFields.some((field) => conversionFields.has(field));
+    throw createAppError(
+      isConversionField ? 'ZOHO_FIELD_UNAVAILABLE' : 'FIELD_NOT_AVAILABLE',
+      `Zoho CRM metadata for '${moduleApiName}' does not expose the requested field(s).`,
+      isConversionField ? 502 : 400,
+      { module: request.module, module_api_name: moduleApiName, field: missingRequestedFields[0], fields: missingRequestedFields }
+    );
+  }
   if (!Array.isArray(metadata.metadata) || metadata.metadata.length === 0) return;
   const fields = [
     ...(Array.isArray(request.fields) ? request.fields : []),
@@ -885,7 +956,150 @@ async function validateMetadataFields(zohoService, request) {
     request.sort?.field
   ].filter(Boolean);
   const missing = [...new Set(fields.filter((field) => !metadata.fields.includes(field)))];
-  if (missing.length > 0) throw createAppError('ZOHO_FIELD_UNAVAILABLE', `Zoho CRM metadata for '${moduleApiName}' does not expose the requested field(s).`, 502, { module: moduleApiName, fields: missing });
+  if (missing.length > 0) throw createAppError('FIELD_NOT_AVAILABLE', `Zoho CRM metadata for '${moduleApiName}' does not expose the requested field(s).`, 400, { module: request.module, module_api_name: moduleApiName, field: missing[0], fields: missing });
+}
+
+async function materializeMetadataRequest(zohoService, input) {
+  if (input.module === 'CRM' || typeof zohoService.getFieldMetadata !== 'function') return input;
+  const moduleApiName = input.module_api_name || input.module;
+  const metadata = await zohoService.getFieldMetadata(moduleApiName);
+  const fields = Array.isArray(metadata?.metadata) ? metadata.metadata : [];
+  const apiNames = new Set((metadata?.fields || []).filter(Boolean));
+  if (apiNames.size === 0) throw createAppError('ZOHO_METADATA_EMPTY', `Zoho field metadata for '${moduleApiName}' was unavailable.`, 502, { module_api_name: moduleApiName });
+
+  const aliases = new Map();
+  for (const field of fields) {
+    for (const value of [field.api_name, field.display_label, field.field_label, field.label]) {
+      if (value) aliases.set(normalizeMetadataLabel(value), field.api_name);
+    }
+  }
+  const resolveField = (field, role, label, dateRole) => {
+    if (!field) return field;
+    if (field === '__semantic__') return findMetadataField(fields, aliases, label, role) || field;
+    if (role === 'date' && fields.length > 0) return chooseMetadataDateField(fields, dateRole || input.date_field_role);
+    if (apiNames.has(field)) return field;
+    const alias = aliases.get(normalizeMetadataLabel(field));
+    if (alias) return alias;
+    const semantic = findMetadataField(fields, aliases, label || field, role);
+    if (semantic) return semantic;
+    if (role === 'date') return chooseMetadataDateField(fields, dateRole || input.date_field_role);
+    return field;
+  };
+
+  const plannerDefaults = input.fields_source === 'planner_default' || !Array.isArray(input.fields) || input.fields.length === 0;
+  const resolvedFields = input.request_type === 'search'
+    ? selectMetadataSearchFields(fields, apiNames)
+    : plannerDefaults
+    ? selectMetadataDefaults(fields, apiNames)
+    : input.fields.map((field) => resolveField(field));
+  const resolvedFilters = (input.filters || []).map((filter) => ({
+    ...filter,
+    field: resolveField(filter.field, filter.field === 'Created_Time' || filter.field === '__date__' ? 'date' : filter.field_role || semanticRoleForField(filter.field, filter.field_label), filter.field_label, filter.field_role)
+  }));
+  const resolvedSort = input.sort || (input.sort_field ? { field: input.sort_field, order: input.sort_order } : undefined);
+  if (resolvedSort) resolvedSort.field = resolveField(resolvedSort.field, resolvedSort.field === 'Created_Time' ? 'date' : resolvedSort.field_role || semanticRoleForField(resolvedSort.field, resolvedSort.field_label), resolvedSort.field_label, input.date_field_role);
+  const aggregate = input.aggregate ? { ...input.aggregate, field: resolveField(input.aggregate.field, input.aggregate.operation === 'count' ? undefined : 'numeric') } : input.aggregate;
+  const groupBy = input.group_by ? resolveField(input.group_by, undefined, input.group_by_label) : input.group_by;
+  const usedFields = [
+    ...resolvedFields,
+    ...resolvedFilters.map((filter) => filter.field),
+    resolvedSort?.field,
+    aggregate?.field,
+    groupBy
+  ].filter(Boolean);
+  const missingField = usedFields.find((field) => !apiNames.has(field));
+  if (fields.length > 0 && missingField) {
+    if (!input._metadata_refreshed && typeof zohoService.getFieldMetadata === 'function') {
+      await zohoService.getFieldMetadata(moduleApiName, { forceRefresh: true });
+      return materializeMetadataRequest(zohoService, { ...input, _metadata_refreshed: true });
+    }
+    throw createAppError(
+      'FIELD_NOT_AVAILABLE',
+      `CRM field '${missingField}' is not available on module '${input.module}'.`,
+      400,
+      { module: input.module, module_api_name: moduleApiName, field: missingField }
+    );
+  }
+
+  const resolvedComparison = input.comparison && fields.length > 0 && resolvedFilters.length === 0 && input.date_field_role
+    ? { ...input.comparison, date_field: chooseMetadataDateField(fields, input.date_field_role) }
+    : input.comparison;
+  return { ...input, fields: resolvedFields, filters: resolvedFilters, sort: resolvedSort, aggregate, group_by: groupBy, comparison: resolvedComparison, sort_field: undefined, sort_order: undefined };
+}
+
+function selectMetadataDefaults(metadata, apiNames) {
+  const selectable = metadata
+    .filter((field) => field && field.api_name && field.visible !== false && field.virtual_field !== true)
+    .filter((field) => field.data_type !== 'multi_select_lookup' && field.multi_module_lookup !== true)
+    .map((field) => field.api_name);
+  const fallback = [...apiNames];
+  return [...new Set(['id', ...(selectable.length > 0 ? selectable : fallback)])].slice(0, 20);
+}
+
+function selectMetadataSearchFields(metadata, apiNames) {
+  const searchable = metadata
+    .filter((field) => field && field.api_name && field.visible !== false && field.searchable !== false)
+    .filter((field) => ['text', 'string', 'email', 'phone', 'picklist'].includes(String(field.data_type || '').toLowerCase()))
+    .map((field) => field.api_name);
+  return [...new Set(['id', ...searchable])].slice(0, 50).length > 1
+    ? [...new Set(['id', ...searchable])].slice(0, 50)
+    : [...new Set(['id', ...apiNames])].slice(0, 20);
+}
+
+function findMetadataField(metadata, aliases, requested, role) {
+  const normalized = normalizeMetadataLabel(requested);
+  if (!normalized) return null;
+  const exact = aliases.get(normalized);
+  if (exact) return exact;
+  const candidates = metadata.filter((field) => field?.api_name && field.visible !== false && field.virtual_field !== true);
+  const scored = candidates.map((field) => {
+    const text = normalizeMetadataLabel([field.api_name, field.display_label, field.field_label, field.label].filter(Boolean).join(' '));
+    const type = String(field.data_type || '').toLowerCase();
+    let score = 0;
+    if (text.includes(normalized) || normalized.includes(text)) score += 20;
+    if (role === 'owner' && (text.includes('owner') || field.data_type === 'lookup' && text.includes('user'))) score += 100;
+    if (role === 'numeric' && ['currency', 'double', 'decimal', 'integer', 'long', 'number'].includes(type)) score += 60;
+    if (role === 'stage' && (text.includes('stage') || text.includes('status')) && (type === 'picklist' || type === 'text')) score += 90;
+    if (role === 'source' && text.includes('source')) score += 90;
+    if (role === 'modified' && /(modified|updated)/.test(text) && ['date', 'datetime'].includes(type)) score += 100;
+    return { apiName: field.api_name, score };
+  }).sort((left, right) => right.score - left.score);
+  return scored[0]?.score > 0 ? scored[0].apiName : null;
+}
+
+function chooseMetadataDateField(metadata, role) {
+  const fields = metadata.filter((field) => field && field.api_name && ['date', 'datetime'].includes(String(field.data_type || '').toLowerCase()));
+  const normalizedRole = String(role || 'created').toLowerCase();
+  const ranked = fields.map((field) => {
+    const label = normalizeMetadataLabel([field.api_name, field.display_label, field.field_label, field.label].filter(Boolean).join(' '));
+    let score = 0;
+    if (normalizedRole === 'due' && /(due|deadline)/.test(label)) score += 100;
+    if (normalizedRole === 'activity' && /(start|scheduled|call|meeting|event)/.test(label)) score += 100;
+    if (normalizedRole === 'created' && /(created|creation)/.test(label)) score += 100;
+    if (normalizedRole === 'closing' && /(closing|close|due|valid)/.test(label)) score += 100;
+    if (normalizedRole === 'modified' && /(modified|updated)/.test(label)) score += 100;
+    if (field.api_name === 'Created_Time') score += normalizedRole === 'created' ? 50 : 0;
+    return { apiName: field.api_name, score };
+  }).sort((left, right) => right.score - left.score);
+  return ranked[0]?.apiName || 'Created_Time';
+}
+
+function normalizeMetadataLabel(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function semanticRoleForField(field, label) {
+  const value = normalizeMetadataLabel(label || field);
+  if (/(owner|assignee|assigneduser)/.test(value)) return 'owner';
+  if (/(amount|value|revenue|price|cost|quantity|total)/.test(value)) return 'numeric';
+  if (/(stage|status)/.test(value)) return 'stage';
+  if (/source/.test(value)) return 'source';
+  if (/(modified|updated)/.test(value)) return 'modified';
+  return undefined;
+}
+
+function resolveComparisonPeriod(period) {
+  return resolveRelativePeriod(period || 'this week');
 }
 
 async function discoverActivityModuleSpecs(zohoService) {

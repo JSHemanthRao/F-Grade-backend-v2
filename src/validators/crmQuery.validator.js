@@ -5,7 +5,6 @@ const { createAppError } = require('../utils/errors');
 const OPERATOR_SET = new Set(CRM_OPERATORS);
 const NULL_OPERATORS = new Set(['is_null', 'is_not_null']);
 const VALUE_OPERATORS = new Set(CRM_OPERATORS.filter((operator) => !NULL_OPERATORS.has(operator)));
-const STRICT_MODULES = new Set(Object.keys(CRM_MODULES));
 
 function isValue(value) {
   return value !== null && value !== undefined && ['string', 'number', 'boolean'].includes(typeof value);
@@ -28,6 +27,7 @@ function validateCrmQuery(body) {
   }
 
   const { module, fields, filters = [], sort, sort_field, sort_order, limit = 20, offset = 0, request_type = 'records', aggregate, group_by } = body;
+  const metadataDriven = body.metadata_driven === true;
   // Allow either user-friendly module keys (e.g., 'Meetings') or API names (e.g., 'Events')
   const resolveModuleKey = (mod) => {
     if (!mod) return undefined;
@@ -45,7 +45,7 @@ function validateCrmQuery(body) {
   const requestTypes = new Set(['records', 'count', 'aggregate', 'comparison', 'analysis', 'search', 'bulk_read']);
   const metricRequest = request_type !== 'records';
   if (typeof module !== 'string' || module.trim().length === 0) addError('module', 'module must be a non-empty string.');
-  else if (!STRICT_MODULES.has(module) && request_type === 'records' && module !== 'CRM') addError('module', `module must be one of: ${[...STRICT_MODULES].join(', ')}.`);
+  // Module availability is authoritative only after the live settings/modules lookup.
   if (!requestTypes.has(request_type)) addError('request_type', 'request_type must be one of: records, count, aggregate, analysis, search, bulk_read.');
   if (!Array.isArray(fields) || fields.length === 0) {
     if (!metricRequest) {
@@ -68,7 +68,7 @@ function validateCrmQuery(body) {
 
   const normalizedFields = Array.isArray(fields) && fields.length > 0
     ? fields
-    : (metricRequest ? ['id'] : (supportedFields ? defaultModuleFields : []));
+    : (metricRequest ? ['id'] : (metadataDriven ? [] : (supportedFields ? defaultModuleFields : [])));
   if (request_type === 'aggregate') {
       if (!aggregate || typeof aggregate !== 'object' || Array.isArray(aggregate)) {
         addError('aggregate', 'aggregate is required for aggregate requests and must be an object.');
@@ -163,8 +163,8 @@ function validateModuleFieldScope({ module, fields = [], filters = [], sort, agg
   };
   const resolvedModuleKey = resolveModuleKey(module);
   const supportedFields = resolvedModuleKey ? CRM_MODULES[resolvedModuleKey] : undefined;
-  // If we don't have a static mapping for this module, skip strict field-scope validation
-  // and allow downstream metadata-based checks to handle unsupported fields.
+  // Live metadata is the source of truth. Static scope checks remain for legacy
+  // callers that explicitly invoke this helper without a metadata service.
   if (!resolvedModuleKey || !supportedFields) return;
   const errors = [];
   const addInvalid = (path, field) => errors.push({ path, field });
@@ -189,12 +189,12 @@ function validateModuleFieldScope({ module, fields = [], filters = [], sort, agg
   return true;
 }
 
-function validateAggregateQuery({ module, fields = [], filters = [], aggregate, groupBy, sort } = {}) {
+function validateAggregateQuery({ module, fields = [], filters = [], aggregate, groupBy, sort, metadataValidated = false } = {}) {
   if (!aggregate || typeof aggregate !== 'object') {
     throw createAppError('INVALID_CRM_AGGREGATE', 'An aggregate definition is required.', 400);
   }
   const aggregateFields = [...fields, aggregate.field, groupBy].filter(Boolean);
-  validateModuleFieldScope({ module, fields: aggregateFields, filters });
+  if (!metadataValidated) validateModuleFieldScope({ module, fields: aggregateFields, filters });
   if (sort && /^(SUM|COUNT|AVG|MAX|MIN)\s*\(/i.test(String(sort.field || ''))) {
     throw createAppError(
       'INVALID_CRM_AGGREGATE_ORDER',

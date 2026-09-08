@@ -512,6 +512,11 @@ test('authenticates, calls Zoho COQL, and normalizes the CRM response', async ()
     module: 'Deals',
     module_api_name: 'Deals',
     request_type: 'records',
+    fields: ['Deal_Name', 'Account_Name', 'Amount', 'Stage', 'Closing_Date', 'Owner'],
+    filters: [
+      { field: 'Stage', operator: 'equals', value: 'Closed Won' },
+      { field: 'Amount', operator: 'greater_than', value: 50000 }
+    ],
     count: 1,
     returned: 1,
     more_records: false,
