@@ -47,26 +47,30 @@ class BackendClient {
     let questionText = '';
     const isObject = questionOrRequest && typeof questionOrRequest === 'object' && !Array.isArray(questionOrRequest);
     if (isObject) {
-      questionText = String(questionOrRequest.question || '').trim();
+      // Preserve caller-provided question whitespace when caller passed a structured object
+      questionText = String(questionOrRequest.question || '');
     } else {
-      questionText = String(questionOrRequest || '').trim();
+      // Preserve the raw string but validate using a trimmed version
+      questionText = String(questionOrRequest || '');
     }
 
-    if (questionText.length === 0 && !isObject) {
+    const trimmedQuestion = String(questionText || '').trim();
+
+    if (trimmedQuestion.length === 0 && !isObject) {
       const error = new Error('Question must be a non-empty string.');
       error.code = 'INVALID_QUESTION';
       error.statusCode = 400;
       throw error;
     }
-    if (questionText.length > MAX_QUESTION_LENGTH) {
+    if (trimmedQuestion.length > MAX_QUESTION_LENGTH) {
       const error = new Error(`Question must not exceed ${MAX_QUESTION_LENGTH} characters.`);
       error.code = 'QUESTION_TOO_LONG';
       error.statusCode = 400;
       throw error;
     }
 
-    const booksRequest = resolveProductDomain(questionText) === 'books' ? buildBooksQuotesRequest(questionText) : null;
-    const endpoint = this.getEndpoint(questionText || (isObject ? JSON.stringify(questionOrRequest) : ''));
+    const booksRequest = resolveProductDomain(trimmedQuestion) === 'books' ? buildBooksQuotesRequest(trimmedQuestion) : null;
+    const endpoint = this.getEndpoint(trimmedQuestion || (isObject ? JSON.stringify(questionOrRequest) : ''));
     const startedAt = Date.now();
     this.logDiagnostic('request', { method: 'POST', endpoint });
     const controller = new AbortController();

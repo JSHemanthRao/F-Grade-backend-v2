@@ -59,9 +59,9 @@ class CrmService {
     recordCrmEvent('MODULE_RESOLVED', diagnostics, { module: diagnostics?.resolved_module, module_api_name: diagnostics?.module_api_name });
     const executionPlan = classifyExecution(normalizedInput);
     log('info', `[CRM execution plan] classification=${executionPlan.classification} steps=${executionPlan.steps.join(' | ')}`);
-    const hasUnresolvedSemanticField = (normalizedInput.filters || []).some((filter) => filter?.field === '__semantic__')
-      || normalizedInput.group_by === '__semantic__'
-      || normalizedInput.sort?.field === '__semantic__';
+    const hasUnresolvedSemanticField = (normalizedInput.filters || []).some((filter) => filter?.field === '__semantic__' || filter?.field === 'semantic')
+      || normalizedInput.group_by === '__semantic__' || normalizedInput.group_by === 'semantic'
+      || normalizedInput.sort?.field === '__semantic__' || normalizedInput.sort?.field === 'semantic';
     if (!hasUnresolvedSemanticField && normalizedInput.module !== 'CRM') {
       validateCrmQuery({ ...normalizedInput, metadata_driven: true });
     }
@@ -1009,7 +1009,8 @@ async function materializeMetadataRequest(zohoService, input) {
   }
   const resolveField = (field, role, label, dateRole) => {
     if (!field) return field;
-    if (field === '__semantic__') return findMetadataField(fields, aliases, label, role) || field;
+    // Accept both '__semantic__' and legacy 'semantic' placeholders
+    if (field === '__semantic__' || field === 'semantic') return findMetadataField(fields, aliases, label, role) || field;
     if (role === 'date' && fields.length > 0) return chooseMetadataDateField(fields, dateRole || input.date_field_role);
     if (apiNames.has(field)) return field;
     const alias = aliases.get(normalizeMetadataLabel(field));
