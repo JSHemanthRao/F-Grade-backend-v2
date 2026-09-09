@@ -28,7 +28,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           description: 'The natural-language CRM or Zoho Books read-only question to send to the backend.',
           minLength: 1,
           maxLength: 2000
-        }
+        },
+        conversation_id: { type: 'string' },
+        module: { type: 'string', description: 'Optional explicit CRM module (e.g., Leads, Contacts)' },
+        request_type: { type: 'string', enum: ['records','count','aggregate','search','analysis','bulk_read'], description: 'Optional explicit request type' },
+        limit: { type: 'integer', minimum: 1, maximum: 200 },
+        offset: { type: 'integer', minimum: 0 },
+        query: { type: 'object', description: 'Optional planner query overrides (module, filters, fields, sort, etc.)' }
       },
       required: ['question'],
       additionalProperties: false

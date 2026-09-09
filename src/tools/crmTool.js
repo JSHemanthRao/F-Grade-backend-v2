@@ -7,7 +7,8 @@ class CrmTool {
     this.backendClient = backendClient;
   }
 
-  async execute({ question }) {
+  async execute(args = {}) {
+    const { question } = args;
     if (typeof question !== 'string' || question.trim().length === 0) {
       const error = new Error('Question is required.');
       error.code = 'INVALID_QUESTION';
@@ -21,7 +22,9 @@ class CrmTool {
       throw error;
     }
 
-    const response = await this.backendClient.ask(question);
+    // Forward the full args object to the backend client so callers can supply
+    // planner overrides like `module`, `request_type`, `query`, `limit`, `offset`, etc.
+    const response = await this.backendClient.ask(args);
     const responseText = typeof response === 'string'
       ? response
       : JSON.stringify(response, null, 2);

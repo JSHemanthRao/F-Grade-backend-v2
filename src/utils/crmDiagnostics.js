@@ -28,7 +28,7 @@ function createCrmDiagnostics(requestId = createRequestId()) {
     resolved_filters: [],
     request_type: 'not_reached',
     zoho_endpoint: 'not_reached',
-    zoho_http_status: 'not_reached',
+      zoho_http_status: null,
     zoho_error_code: 'not_reached',
     zoho_error_message: 'not_reached',
     stage: 'request_received'
@@ -50,7 +50,14 @@ function getCurrentCrmDiagnostics() {
 function updateDiagnostics(diagnostics, updates = {}) {
   if (!diagnostics) return diagnostics;
   for (const [key, value] of Object.entries(updates)) {
-    if (value !== undefined) diagnostics[key] = value;
+    if (value === undefined) continue;
+    // Ensure zoho_http_status is numeric or null to avoid type issues downstream
+    if (key === 'zoho_http_status') {
+      const n = Number(value);
+      diagnostics[key] = Number.isFinite(n) ? n : null;
+      continue;
+    }
+    diagnostics[key] = value;
   }
   return diagnostics;
 }

@@ -42,29 +42,40 @@ class BackendClient {
     return headers;
   }
 
-  async ask(question) {
-    if (typeof question !== 'string' || question.trim().length === 0) {
+  async ask(questionOrRequest) {
+    // Accept either a simple question string or a structured request object
+    let questionText = '';
+    const isObject = questionOrRequest && typeof questionOrRequest === 'object' && !Array.isArray(questionOrRequest);
+    if (isObject) {
+      questionText = String(questionOrRequest.question || '').trim();
+    } else {
+      questionText = String(questionOrRequest || '').trim();
+    }
+
+    if (questionText.length === 0 && !isObject) {
       const error = new Error('Question must be a non-empty string.');
       error.code = 'INVALID_QUESTION';
       error.statusCode = 400;
       throw error;
     }
-    if (question.length > MAX_QUESTION_LENGTH) {
+    if (questionText.length > MAX_QUESTION_LENGTH) {
       const error = new Error(`Question must not exceed ${MAX_QUESTION_LENGTH} characters.`);
       error.code = 'QUESTION_TOO_LONG';
       error.statusCode = 400;
       throw error;
     }
 
-    const booksRequest = resolveProductDomain(question) === 'books' ? buildBooksQuotesRequest(question) : null;
-    const endpoint = this.getEndpoint(question);
+    const booksRequest = resolveProductDomain(questionText) === 'books' ? buildBooksQuotesRequest(questionText) : null;
+    const endpoint = this.getEndpoint(questionText || (isObject ? JSON.stringify(questionOrRequest) : ''));
     const startedAt = Date.now();
     this.logDiagnostic('request', { method: 'POST', endpoint });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.backendRequestTimeoutMs || 15000);
 
     try {
-      const response = await this.httpClient.post(endpoint, booksRequest || { question }, {
+      // If the caller provided a structured request, forward it directly to the backend
+      const payload = isObject ? questionOrRequest : { question: questionText };
+      const response = await this.httpClient.post(endpoint, booksRequest || payload, {
         headers: this.buildHeaders(),
         signal: controller.signal,
         timeout: this.config.backendRequestTimeoutMs || 15000
