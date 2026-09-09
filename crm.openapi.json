@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "https://your.backend.example.com",
-      "description": "Replace with your backend URL"
+      "url": "https://f-grade-backend-v2.onrender.com",
+      "description": "Production backend URL (updated to your Render service)"
     }
   ],
   "paths": {

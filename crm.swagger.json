@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "description": "Read-only Zoho CRM assistant. Accepts a natural-language question and returns a normalized CRM response. Use for Leads, Contacts, Accounts, Deals, Products, Calls, Tasks, Meetings (Events), Quotes, and custom modules."
   },
-  "host": "your.backend.example.com",
+  "host": "f-grade-backend-v2.onrender.com",
   "schemes": ["https"],
   "basePath": "/",
   "paths": {
