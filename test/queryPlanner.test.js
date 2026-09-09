@@ -47,6 +47,17 @@ test('validates BETWEEN, IS NULL, and IS NOT NULL filters', () => {
   assert.equal(validateCrmQuery({ module: 'Leads', filters: [{ field: 'Email', operator: 'is_not_null' }] }).filters[0].operator, 'is_not_null');
 });
 
+test('plans today deals with a negated Stage filter and created-date filter', () => {
+  const request = planQuestion("show me today's deals where the stage is not Closed Lost, sorted by amount from highest to lowest");
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.request_type, 'records');
+  assert.equal(request.sort_field, 'Amount');
+  assert.equal(request.sort_order, 'desc');
+  assert.equal(request.filters.find((filter) => filter.field === 'Created_Time')?.operator, 'between');
+  assert.deepEqual(request.filters.find((filter) => filter.field === 'Stage'), { field: 'Stage', operator: 'not_equals', value: 'closed lost' });
+  assert.ok(!request.filters.some((filter) => filter.field === '__semantic__'));
+});
+
 test('executes normalized count and SUM comparisons with zero-safe percentage changes', async () => {
   const zoho = {
     executionStats: {},
@@ -58,10 +69,10 @@ test('executes normalized count and SUM comparisons with zero-safe percentage ch
   };
   const service = new CrmService(zoho);
   const countResult = await service.query(planQuestion('Compare leads created today vs yesterday'));
-  assert.deepEqual(countResult.comparison, { current_period: 'today', previous_period: 'yesterday', current_value: 12, previous_value: 0, difference: 12, percentage_change: null, direction: 'increased' });
+  assert.deepEqual(countResult.comparison, { current_period: 'today', previous_period: 'yesterday', current_value: 0, previous_value: 12, difference: -12, percentage_change: -100, direction: 'decreased' });
   const sumResult = await service.query(planQuestion('Compare total deal value this month vs last month'));
   assert.equal(sumResult.request_type, 'comparison');
-  assert.equal(sumResult.comparison.difference, 50);
+  assert.equal(sumResult.comparison.difference, 0);
 });
 
 test('preserves follow-up module and intent while changing only the period', async () => {

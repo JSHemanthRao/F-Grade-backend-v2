@@ -515,7 +515,9 @@ function planQuestion(question) {
     return planQuestion(text.replace(/\bleads?\b/gi, 'deals'));
   }
 
-  if (/(closed lost|closed-lost|lost deals|lost deal)/.test(lower)) {
+  if (/(closed lost|closed-lost|lost deals|lost deal)/.test(lower)
+    && !/not\s+closed\s+lost|is\s+not\s+closed\s+lost|!=\s*closed\s+lost|not_equals/.test(lower)
+    && !filters.some((filter) => filter.field === 'Stage' && (filter.operator === 'not_equals' || String(filter.value || '').toLowerCase() === 'closed lost')) ) {
     filters.push({ field: 'Stage', operator: 'equals', value: 'Closed Lost' });
   }
 
@@ -1023,12 +1025,30 @@ function extractFieldComparison(lowerText) {
 }
 
 function extractSemanticFilter(lowerText) {
-  const match = lowerText.match(/(?:where|with)\s+([a-z][a-z0-9 _-]*?)\s+(is\s+not\s+equal\s+to|not\s+equal\s+to|is|equals?|contains|starts\s+with|=)\s+([^?.!,]+?)(?=\s+(?:and|created|updated|sorted|ordered|show|list|limit)\b|[?.!,]|$)/i);
+  const match = lowerText.match(/(?:where|with)\s+([a-z][a-z0-9 _-]*?)\s+(is\s+not\s+equal\s+to|not\s+equal\s+to|is\s+not|is|equals?|contains|starts\s+with|=)\s+([^?.!,]+?)(?=\s+(?:and|created|updated|sorted|ordered|show|list|limit|where)\b|[?.!,]|$)/i);
   if (!match) return null;
   const operatorText = match[2].toLowerCase().replace(/\s+/g, ' ').trim();
-  const operators = { is: 'equals', equal: 'equals', equals: 'equals', '=': 'equals', 'not equal to': 'not_equals', 'is not equal to': 'not_equals', contains: 'contains', 'starts with': 'starts_with' };
+  const operators = {
+    is: 'equals',
+    equal: 'equals',
+    equals: 'equals',
+    '=': 'equals',
+    'is not': 'not_equals',
+    'not equal to': 'not_equals',
+    'is not equal to': 'not_equals',
+    contains: 'contains',
+    'starts with': 'starts_with'
+  };
+  const fieldName = match[1].trim().toLowerCase();
+  const directFieldMap = { stage: 'Stage', 'the stage': 'Stage', 'deal stage': 'Stage', 'sales stage': 'Stage', status: 'Stage', 'lead status': 'Lead_Status' };
   const value = match[3].trim();
-  return value ? { field: '__semantic__', field_label: match[1].trim(), operator: operators[operatorText] || 'equals', value } : null;
+  const field = directFieldMap[fieldName] || '__semantic__';
+  const normalizedValue = field === 'Stage' ? value.replace(/^\s*['"]|['"]\s*$/g, '').replace(/\s+/g, ' ').trim() : value.trim();
+  return value ? {
+    ...(field === '__semantic__' ? { field: '__semantic__', field_label: match[1].trim() } : { field }),
+    operator: operators[operatorText] || 'equals',
+    value: normalizedValue
+  } : null;
 }
 
 function extractFieldLabels(lowerText) {
@@ -1161,14 +1181,18 @@ function dateFieldForQuestion(lowerText, module) {
     return 'Start_DateTime';
   }
   if (module !== 'Deals') return 'Created_Time';
-  if (/(created|creation|new|added|entered)/.test(lowerText)) return 'Created_Time';
+  const closeDatePhrase = /(closing\s+date|close\s+date|closed\s+date|deal\s+close|deal close)/i;
+  if (/(created|creation|new|added|entered|today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)/.test(lowerText)
+    && !closeDatePhrase.test(lowerText)) return 'Created_Time';
   return 'Closing_Date';
 }
 
 function dateFieldRoleForQuestion(lowerText, module) {
   if (/(due|deadline)/.test(lowerText)) return 'due';
   if (/(modified|updated)/.test(lowerText)) return 'modified';
-  if (/(created|creation|new|added|entered)/.test(lowerText)) return 'created';
+  const closeDatePhrase = /(closing\s+date|close\s+date|closed\s+date|deal\s+close|deal close)/i;
+  if (/(created|creation|new|added|entered|today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)/.test(lowerText)
+    && !closeDatePhrase.test(lowerText)) return 'created';
   if (module === 'Deals') return 'closing';
   if (['Calls', 'Meetings'].includes(module)) return 'activity';
   return 'created';
@@ -1220,6 +1244,9 @@ function toIsoDate(date) {
 }
 
 function detectAggregateOperation(lowerText) {
+  if (/(sorted by|order(?:ed)? by).*?(amount|deal value|revenue|price).*?(highest|lowest|top|largest|smallest)/.test(lowerText)) {
+    return null;
+  }
   const hasMeasure = /(amount|deal\s+value|revenue|unit\s+price|price|cost|quantity|qty)/.test(lowerText);
   if (!hasMeasure) return null;
   const field = /(unit\s+price|price)/.test(lowerText) ? 'Unit_Price' : 'Amount';

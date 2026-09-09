@@ -1,0 +1,13 @@
+{
+  "question": "Show me today's deals where the stage is not Closed Lost, sorted by amount from highest to lowest",
+  "module": "Deals",
+  "request_type": "records",
+  "fields": ["id", "Amount", "Stage", "Account_Name", "Created_Time"],
+  "filters": [
+    { "field": "Created_Time", "operator": "between", "value": ["2026-09-09", "2026-09-09"], "exclusive_end": true },
+    { "field": "Stage", "operator": "not_equals", "value": "Closed Lost" }
+  ],
+  "sort": { "field": "Amount", "order": "desc" },
+  "limit": 50,
+  "offset": 0
+}
