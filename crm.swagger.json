@@ -1,0 +1,114 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Zoho CRM Assistant (Read-only)",
+    "version": "1.0.0",
+    "description": "Read-only Zoho CRM assistant. Accepts a natural-language question and returns a normalized CRM response. Use for Leads, Contacts, Accounts, Deals, Products, Calls, Tasks, Meetings (Events), Quotes, and custom modules."
+  },
+  "host": "your.backend.example.com",
+  "schemes": ["https"],
+  "basePath": "/",
+  "paths": {
+    "/api/crm/assistant": {
+      "post": {
+        "operationId": "askCrmAssistant",
+        "summary": "Ask the read-only Zoho CRM assistant a natural-language question",
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": { "$ref": "#/definitions/AssistantRequest" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Successful CRM response", "schema": { "$ref": "#/definitions/CrmResponse" } },
+          "400": { "description": "Bad request - validation error" },
+          "401": { "description": "Unauthorized - OAuth authentication required" },
+          "403": { "description": "Forbidden - permission denied" },
+          "429": { "description": "Rate limit" },
+          "500": { "description": "Server error" }
+        },
+        "security": [{ "bearerAuth": [] }]
+      }
+    }
+  },
+  "securityDefinitions": {
+    "bearerAuth": {
+      "type": "apiKey",
+      "name": "Authorization",
+      "in": "header",
+      "description": "Provide a Bearer token in the Authorization header: 'Authorization: Bearer <token>'. Do not embed refresh tokens or secrets in the OpenAPI file."
+    }
+  },
+  "definitions": {
+    "AssistantRequest": {
+      "type": "object",
+      "required": ["question"],
+      "properties": {
+        "question": { "type": "string", "description": "Natural-language read-only Zoho CRM question." },
+        "conversation_id": { "type": "string" },
+        "module": { "type": "string" },
+        "module_api_name": { "type": "string" },
+        "request_type": { "type": "string", "enum": ["records","count","aggregate","search","analysis","bulk_read"] },
+        "query": { "type": "object" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 20 },
+        "offset": { "type": "integer", "minimum": 0, "default": 0 }
+      }
+    },
+    "Pagination": {
+      "type": "object",
+      "properties": {
+        "limit": { "type": "integer" },
+        "offset": { "type": "integer" },
+        "returned": { "type": "integer" },
+        "more_records": { "type": "boolean" }
+      }
+    },
+    "Diagnostics": {
+      "type": "object",
+      "properties": {
+        "request_id": { "type": "string" },
+        "question": { "type": "string" },
+        "resolved_module": { "type": "string" },
+        "module_api_name": { "type": "string" },
+        "resolved_fields": { "type": "array", "items": { "type": "string" } },
+        "resolved_filters": { "type": "array", "items": { "type": "object" } },
+        "request_type": { "type": "string" },
+        "zoho_endpoint": { "type": "string" },
+        "zoho_http_status": { "type": "integer" },
+        "zoho_error_code": { "type": "string" },
+        "zoho_error_message": { "type": "string" }
+      }
+    },
+    "ErrorDetail": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "details": { "type": "object" }
+      }
+    },
+    "CrmResponse": {
+      "type": "object",
+      "properties": {
+        "success": { "type": "boolean" },
+        "status": { "type": "string" },
+        "request_id": { "type": "string" },
+        "module": { "type": "string" },
+        "module_api_name": { "type": "string" },
+        "request_type": { "type": "string" },
+        "data": { "type": "array", "items": { "type": "object" } },
+        "records": { "type": "array", "items": { "type": "object" } },
+        "count": { "type": "integer" },
+        "total": { "type": "integer" },
+        "answer": { "type": "string" },
+        "pagination": { "$ref": "#/definitions/Pagination" },
+        "diagnostics": { "$ref": "#/definitions/Diagnostics" },
+        "error": { "$ref": "#/definitions/ErrorDetail" }
+      }
+    }
+  }
+}
