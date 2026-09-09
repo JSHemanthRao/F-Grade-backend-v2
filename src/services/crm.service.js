@@ -43,12 +43,13 @@ class CrmService {
       return runWithCrmDiagnostics(diagnostics, () => this.query(input, executionContext));
     }
     diagnostics = activeDiagnostics;
+    rejectForbiddenInternalFieldNames(input);
     const executionId = randomUUID();
     const startedAt = Date.now();
     const statsAtStart = { ...(this.zohoService.executionStats || {}) };
     log('info', `[CRM EXECUTION START] executionId=${executionId}`);
     log('info', `[CRM request received] ${JSON.stringify({ module: input?.module, request_type: input?.request_type || 'records', query_type: input?.request_type || 'records', field_count: Array.isArray(input?.fields) ? input.fields.length : 0, filter_count: Array.isArray(input?.filters) ? input.filters.length : 0, date_range: input?.date_range || null })}`);
-    let normalizedInput = await this.resolveSemanticFields(normalizeSemanticRequest(input));
+    let normalizedInput = await this.resolveSemanticFields(input);
     updateDiagnostics(diagnostics, {
       resolved_module: normalizedInput?.module || diagnostics?.resolved_module,
       request_type: normalizedInput?.request_type || diagnostics?.request_type,
@@ -59,10 +60,8 @@ class CrmService {
     recordCrmEvent('MODULE_RESOLVED', diagnostics, { module: diagnostics?.resolved_module, module_api_name: diagnostics?.module_api_name });
     const executionPlan = classifyExecution(normalizedInput);
     log('info', `[CRM execution plan] classification=${executionPlan.classification} steps=${executionPlan.steps.join(' | ')}`);
-    const hasUnresolvedSemanticField = (normalizedInput.filters || []).some((filter) => filter?.field === '__semantic__' || filter?.field === 'semantic')
-      || normalizedInput.group_by === '__semantic__' || normalizedInput.group_by === 'semantic'
-      || normalizedInput.sort?.field === '__semantic__' || normalizedInput.sort?.field === 'semantic';
-    if (!hasUnresolvedSemanticField && normalizedInput.module !== 'CRM') {
+    rejectForbiddenInternalFieldNames(normalizedInput);
+    if (normalizedInput.module !== 'CRM') {
       validateCrmQuery({ ...normalizedInput, metadata_driven: true });
     }
     if (normalizedInput.module !== 'CRM' && typeof this.zohoService.resolveModuleApiName === 'function') {
@@ -84,7 +83,7 @@ class CrmService {
     }
     let request;
     try {
-      request = validateCrmQuery(normalizedInput);
+      request = validateCrmQuery({ ...normalizedInput, metadata_driven: true });
     } catch (error) {
       log('warn', `[CRM validation failure] ${JSON.stringify(error.details || { message: error.message })}`);
       throw error;
@@ -98,6 +97,8 @@ class CrmService {
       module_api_name: request.module_api_name || diagnostics?.module_api_name,
       resolved_fields: request.fields,
       resolved_filters: request.filters,
+      sort_field: request.sort?.field || request.sort_field || null,
+      sort_order: request.sort?.order || request.sort_order || null,
       request_type: request.request_type,
       stage: 'filters_resolved'
     });
@@ -1009,19 +1010,28 @@ async function materializeMetadataRequest(zohoService, input) {
   }
   const resolveField = (field, role, label, dateRole) => {
     if (!field) return field;
-    if (field === '__semantic__' || field === 'semantic') {
-      const fallback = findMetadataField(fields, aliases, label, role);
-      if (fallback) return fallback;
-      return field === 'Stage' ? 'Stage' : field;
+    if (isForbiddenInternalFieldName(field)) {
+      throw createAppError(
+        'FIELD_NOT_AVAILABLE',
+        `CRM field '${field}' is not a valid Zoho API field name for module '${input.module}'.`,
+        400,
+        { module: input.module, module_api_name: moduleApiName, field, reason: 'Internal metadata field name or placeholder was provided.' }
+      );
     }
-    if (role === 'date' && fields.length > 0) return chooseMetadataDateField(fields, dateRole || input.date_field_role);
     if (apiNames.has(field)) return field;
     const alias = aliases.get(normalizeMetadataLabel(field));
     if (alias) return alias;
     const semantic = findMetadataField(fields, aliases, label || field, role);
     if (semantic) return semantic;
-    if (role === 'date') return chooseMetadataDateField(fields, dateRole || input.date_field_role);
-    return field;
+    if (role === 'date' && fields.length > 0 && (field === '__date__' || field === 'date' || dateRole || input.date_field_role)) {
+      return chooseMetadataDateField(fields, dateRole || input.date_field_role);
+    }
+    throw createAppError(
+      'FIELD_NOT_AVAILABLE',
+      `CRM field '${field}' could not be resolved to a live Zoho API field for module '${input.module}'.`,
+      400,
+      { module: input.module, module_api_name: moduleApiName, field, field_label: label || null, reason: 'No match in live Zoho field metadata.' }
+    );
   };
 
   const plannerDefaults = input.fields_source === 'planner_default' || !Array.isArray(input.fields) || input.fields.length === 0;
@@ -1136,6 +1146,36 @@ function semanticRoleForField(field, label) {
   return undefined;
 }
 
+function isForbiddenInternalFieldName(value) {
+  if (value == null) return false;
+  const normalized = String(value).trim();
+  if (!normalized) return false;
+  const forbidden = new Set(['semantic', '__semantic__', 'label', 'display_name', 'display_label', 'field_label', 'description', 'field_description', 'type', 'metadata']);
+  return forbidden.has(normalized.toLowerCase()) || /^semantic$/i.test(normalized) || /^__semantic__$/i.test(normalized);
+}
+
+function rejectForbiddenInternalFieldNames(input) {
+  if (!input || typeof input !== 'object') return;
+  const candidates = [];
+  if (Array.isArray(input.fields)) candidates.push(...input.fields);
+  if (Array.isArray(input.filters)) candidates.push(...input.filters.map((filter) => filter?.field).filter(Boolean));
+  if (input.group_by) candidates.push(input.group_by);
+  if (input.aggregate?.field) candidates.push(input.aggregate.field);
+  if (input.sort?.field) candidates.push(input.sort.field);
+  if (input.sort_field) candidates.push(input.sort_field);
+  if (input.comparison?.field) candidates.push(input.comparison.field);
+  if (input.comparison?.date_field) candidates.push(input.comparison.date_field);
+  const forbidden = [...new Set(candidates.filter((value) => isForbiddenInternalFieldName(value)))];
+  if (forbidden.length > 0) {
+    throw createAppError(
+      'FIELD_NOT_AVAILABLE',
+      `Internal CRM field names are not valid Zoho API fields: ${forbidden.join(', ')}.`,
+      400,
+      { module: input.module, module_api_name: input.module_api_name || null, forbidden_fields: forbidden }
+    );
+  }
+}
+
 function resolveComparisonPeriod(period) {
   return resolveRelativePeriod(period || 'this week');
 }
@@ -1174,25 +1214,6 @@ async function discoverActivityModuleSpecs(zohoService) {
     }
   }
   return discovered;
-}
-
-function normalizeSemanticRequest(input) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
-  const fields = Array.isArray(input.fields) ? input.fields : [];
-  const hasSemanticConversion = input.module === 'Leads'
-    && fields.includes('Converted')
-    && Array.isArray(input.filters)
-    && input.filters.some((filter) => filter?.field === 'Created_Time');
-  if (!hasSemanticConversion) return input;
-
-  const validFields = fields.filter((field) => field !== 'Converted');
-  log('info', '[CRM semantic translation] Converted -> lead conversion analysis using Deals.Lead_Conversion_Time');
-  return {
-    ...input,
-    fields: validFields.length > 0 ? validFields : ['id'],
-    request_type: 'analysis',
-    analysis: { type: 'lead_conversion' }
-  };
 }
 
 function classifyExecution(input = {}) {

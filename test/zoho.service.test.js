@@ -312,36 +312,6 @@ test('calculates full conversion funnel rates with module-valid count queries', 
   assert.ok(calls.some(({ module, filters }) => module === 'Deals' && filters.some((filter) => filter.field === 'Stage' && filter.value === 'Closed Won')));
 });
 
-test('translates the Copilot Converted semantic field into conversion analysis', async () => {
-  const calls = [];
-  const service = new CrmService({
-    getFieldMetadata: async (module) => ({ fields: module === 'Deals' ? ['Lead_Conversion_Time'] : ['Converted__s', 'Converted_Date_Time'], metadata: [] }),
-    count: async (module, filters) => {
-      calls.push({ module, filters });
-      if (filters.some((filter) => filter.field === 'Converted__s')) return { count: 8 };
-      return { count: module === 'Leads' ? 20 : 5 };
-    },
-    query: async () => { throw new Error('semantic conversion must not retrieve records'); }
-  });
-  const result = await service.query({
-    module: 'Leads',
-    fields: ['First_Name', 'Last_Name', 'Created_Time', 'Converted'],
-    filters: [{ field: 'Created_Time', operator: 'between', value: '2026-08-01,2026-08-25' }]
-  });
-  assert.deepEqual(result.metrics, {
-    leads_created: 20,
-    leads_converted: 8,
-    leads_converted_to_deals: null,
-    conversion_rate: null
-  });
-  assert.deepEqual(result.date_range, { start: '2026-08-01', end: '2026-08-25' });
-  assert.equal(result.data_source, 'Zoho CRM');
-  assert.match(result.calculation_basis, /Converted__s=true/);
-  assert.equal(calls.length, 2);
-  assert.ok(calls.every(({ filters }) => filters.every((filter) => filter.field !== 'Converted')));
-  assert.ok(calls.some(({ filters }) => filters.some((filter) => filter.field === 'Converted__s')));
-  assert.ok(calls.some(({ filters }) => filters.some((filter) => filter.field === 'Converted_Date_Time')));
-});
 
 test('fails conversion analysis when Zoho metadata lacks conversion fields', async () => {
   const service = new CrmService({

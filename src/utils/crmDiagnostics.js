@@ -26,9 +26,11 @@ function createCrmDiagnostics(requestId = createRequestId()) {
     module_api_name: 'not_reached',
     resolved_fields: [],
     resolved_filters: [],
+    sort_field: null,
+    sort_order: null,
     request_type: 'not_reached',
     zoho_endpoint: 'not_reached',
-      zoho_http_status: null,
+    zoho_http_status: null,
     zoho_error_code: 'not_reached',
     zoho_error_message: 'not_reached',
     stage: 'request_received'

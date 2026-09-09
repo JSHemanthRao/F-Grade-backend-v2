@@ -1042,13 +1042,14 @@ function extractSemanticFilter(lowerText) {
   const fieldName = match[1].trim().toLowerCase();
   const directFieldMap = { stage: 'Stage', 'the stage': 'Stage', 'deal stage': 'Stage', 'sales stage': 'Stage', status: 'Stage', 'lead status': 'Lead_Status' };
   const value = match[3].trim();
-  const field = directFieldMap[fieldName] || '__semantic__';
+  const field = directFieldMap[fieldName];
+  if (!field) {
+    const customField = match[1].trim();
+    const normalizedValue = /^(?:stage|status)$/i.test(customField) ? value.replace(/^\s*['"]|['"]\s*$/g, '').replace(/\s+/g, ' ').trim() : value.trim();
+    return value ? { field: customField, operator: operators[operatorText] || 'equals', value: normalizedValue } : null;
+  }
   const normalizedValue = field === 'Stage' ? value.replace(/^\s*['"]|['"]\s*$/g, '').replace(/\s+/g, ' ').trim() : value.trim();
-  return value ? {
-    ...(field === '__semantic__' ? { field: '__semantic__', field_label: match[1].trim() } : { field }),
-    operator: operators[operatorText] || 'equals',
-    value: normalizedValue
-  } : null;
+  return value ? { field, operator: operators[operatorText] || 'equals', value: normalizedValue } : null;
 }
 
 function extractFieldLabels(lowerText) {
@@ -1180,6 +1181,10 @@ function dateFieldForQuestion(lowerText, module) {
     if (/(created|creation|new|added|entered)/.test(lowerText)) return 'Created_Time';
     return 'Start_DateTime';
   }
+  if (module === 'Tasks') {
+    if (/(due|deadline)/.test(lowerText)) return 'Due_Date';
+    return 'Created_Time';
+  }
   if (module !== 'Deals') return 'Created_Time';
   const closeDatePhrase = /(closing\s+date|close\s+date|closed\s+date|deal\s+close|deal close)/i;
   if (/(created|creation|new|added|entered|today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)/.test(lowerText)
@@ -1188,6 +1193,7 @@ function dateFieldForQuestion(lowerText, module) {
 }
 
 function dateFieldRoleForQuestion(lowerText, module) {
+  if (module === 'Tasks' && /(due|deadline)/.test(lowerText)) return 'due';
   if (/(due|deadline)/.test(lowerText)) return 'due';
   if (/(modified|updated)/.test(lowerText)) return 'modified';
   const closeDatePhrase = /(closing\s+date|close\s+date|closed\s+date|deal\s+close|deal close)/i;

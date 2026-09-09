@@ -62,7 +62,7 @@ function validateCrmQuery(body) {
     fields.forEach((field, index) => {
       if (typeof field !== 'string' || field.length === 0) addError(`fields[${index}]`, 'Field names must be non-empty strings.');
       else if (field === 'Converted') addError(`fields[${index}]`, invalidFieldMessage(field));
-      else if (supportedFields && !supportedFields.includes(field) && !isApiFieldName(field)) addError(`fields[${index}]`, invalidFieldMessage(field));
+      else if (!metadataDriven && supportedFields && !supportedFields.includes(field) && !isApiFieldName(field)) addError(`fields[${index}]`, invalidFieldMessage(field));
     });
   }
 
@@ -75,14 +75,14 @@ function validateCrmQuery(body) {
       } else {
         if (!['sum', 'avg', 'min', 'max', 'count'].includes(aggregate.operation)) addError('aggregate.operation', 'aggregate.operation must be one of: sum, avg, min, max, count.');
         if (typeof aggregate.field !== 'string' || aggregate.field.length === 0) addError('aggregate.field', 'aggregate.field must be a non-empty string.');
-        else if (supportedFields && !supportedFields.includes(aggregate.field) && !isApiFieldName(aggregate.field)) addError('aggregate.field', invalidFieldMessage(aggregate.field));
+        else if (!metadataDriven && supportedFields && !supportedFields.includes(aggregate.field) && !isApiFieldName(aggregate.field)) addError('aggregate.field', invalidFieldMessage(aggregate.field));
       }
   }
   if (request_type === 'comparison' && (!aggregate || typeof aggregate !== 'object' || !['sum', 'avg', 'min', 'max', 'count'].includes(aggregate.operation) || typeof aggregate.field !== 'string')) {
     addError('aggregate', 'comparison requests require an aggregate with operation count, sum, avg, min, or max and a field.');
   }
   if (group_by !== undefined && (typeof group_by !== 'string' || group_by.length === 0)) addError('group_by', 'group_by must be a non-empty string.');
-  else if (group_by !== undefined && supportedFields && !supportedFields.includes(group_by) && !isApiFieldName(group_by)) addError('group_by', invalidFieldMessage(group_by));
+  else if (group_by !== undefined && !metadataDriven && supportedFields && !supportedFields.includes(group_by) && !isApiFieldName(group_by)) addError('group_by', invalidFieldMessage(group_by));
   if (Array.isArray(fields) && fields.length > 500) addError('fields', 'A COQL query cannot select more than 500 fields.');
   if (Array.isArray(filters) && filters.length > 25) addError('filters', 'A COQL query cannot contain more than 25 criteria.');
 
@@ -96,7 +96,7 @@ function validateCrmQuery(body) {
     }
     if (typeof filter.field !== 'string' || filter.field.length === 0) addError(`${path}.field`, 'Filter field must be a non-empty string.');
     else if (filter.field === 'Converted') addError(`${path}.field`, invalidFieldMessage(filter.field));
-    else if (supportedFields && !supportedFields.includes(filter.field) && !isApiFieldName(filter.field)) addError(`${path}.field`, invalidFieldMessage(filter.field));
+    else if (!metadataDriven && supportedFields && !supportedFields.includes(filter.field) && !isApiFieldName(filter.field)) addError(`${path}.field`, invalidFieldMessage(filter.field));
     if (typeof filter.operator !== 'string' || !OPERATOR_SET.has(filter.operator)) {
       addError(`${path}.operator`, `Operator must be one of: ${CRM_OPERATORS.join(', ')}.`);
       return;
@@ -138,7 +138,7 @@ function validateCrmQuery(body) {
     if (!sort || typeof sort !== 'object' || Array.isArray(sort)) addError('sort', 'sort must be an object.');
     else {
       if (typeof sort.field !== 'string' || sort.field.length === 0) addError('sort.field', 'sort.field must be a non-empty string.');
-      else if (supportedFields && !supportedFields.includes(sort.field) && !isApiFieldName(sort.field)) addError('sort.field', invalidFieldMessage(sort.field));
+      else if (!metadataDriven && supportedFields && !supportedFields.includes(sort.field) && !isApiFieldName(sort.field)) addError('sort.field', invalidFieldMessage(sort.field));
       if (!['asc', 'desc'].includes(sort.order)) addError('sort.order', "sort.order must be either 'asc' or 'desc'.");
     }
   }
