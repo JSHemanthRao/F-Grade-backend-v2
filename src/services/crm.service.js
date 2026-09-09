@@ -1009,8 +1009,11 @@ async function materializeMetadataRequest(zohoService, input) {
   }
   const resolveField = (field, role, label, dateRole) => {
     if (!field) return field;
-    // Accept both '__semantic__' and legacy 'semantic' placeholders
-    if (field === '__semantic__' || field === 'semantic') return findMetadataField(fields, aliases, label, role) || field;
+    if (field === '__semantic__' || field === 'semantic') {
+      const fallback = findMetadataField(fields, aliases, label, role);
+      if (fallback) return fallback;
+      return field === 'Stage' ? 'Stage' : field;
+    }
     if (role === 'date' && fields.length > 0) return chooseMetadataDateField(fields, dateRole || input.date_field_role);
     if (apiNames.has(field)) return field;
     const alias = aliases.get(normalizeMetadataLabel(field));

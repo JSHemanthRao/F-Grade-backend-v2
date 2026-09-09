@@ -55,7 +55,7 @@ test('plans today deals with a negated Stage filter and created-date filter', ()
   assert.equal(request.sort_order, 'desc');
   assert.equal(request.filters.find((filter) => filter.field === 'Created_Time')?.operator, 'between');
   assert.deepEqual(request.filters.find((filter) => filter.field === 'Stage'), { field: 'Stage', operator: 'not_equals', value: 'closed lost' });
-  assert.ok(!request.filters.some((filter) => filter.field === '__semantic__'));
+  assert.ok(!request.filters.some((filter) => ['__semantic__', 'semantic'].includes(filter.field)));
 });
 
 test('executes normalized count and SUM comparisons with zero-safe percentage changes', async () => {
@@ -193,8 +193,9 @@ test('plans deal pipeline analysis as metadata-resolved stage grouping', () => {
   assert.equal(request.module, 'Deals');
   assert.equal(request.request_type, 'aggregate');
   assert.equal(request.aggregate.operation, 'count');
-  assert.equal(request.group_by, '__semantic__');
+  assert.equal(request.group_by, 'Stage');
   assert.equal(request.group_by_label, 'stage');
+  assert.ok(!['__semantic__', 'semantic'].includes(request.group_by));
 });
 
 test('plans sales performance reports as CRM analysis', () => {

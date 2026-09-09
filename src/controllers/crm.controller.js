@@ -563,7 +563,7 @@ function planQuestion(question) {
       complexity: 'MODERATE',
       request_type: 'aggregate',
       aggregate: { operation: 'count', field: 'id' },
-      group_by: '__semantic__',
+      group_by: 'Stage',
       group_by_label: 'stage',
       filters,
       limit: requestedLimit,
@@ -750,7 +750,7 @@ function detectRecordSort(lowerText, module) {
   if (/(oldest|first created|earliest)/.test(lowerText)) return { field: 'Created_Time', field_role: 'date', order: 'asc' };
   if (/(modified|updated)/.test(lowerText)) return { field: 'Modified_Time', field_role: 'modified', order: 'desc' };
   if (/(highest|largest|maximum|top|most expensive)/.test(lowerText) && /(amount|value|revenue|deal|price|cost)/.test(lowerText)) {
-    return module === 'Deals' ? { field: 'Amount', field_role: 'numeric', order: 'desc' } : { field: '__semantic__', field_label: 'price', field_role: 'numeric', order: 'desc' };
+    return module === 'Deals' ? { field: 'Amount', field_role: 'numeric', order: 'desc' } : { field: 'Amount', field_label: 'price', field_role: 'numeric', order: 'desc' };
   }
   return { field: defaultSortField(module), field_role: 'date', order: 'desc' };
 }
@@ -1269,7 +1269,7 @@ function extractGroupBy(lowerText) {
   const match = lowerText.match(/\bgroup(?:ed)?\s+by\s+([a-z][a-z0-9 _-]*?)(?=\s+(?:for|where|this|last|next|today|created)\b|[?.!,]|$)/i);
   if (!match) return null;
   const label = match[1].trim();
-  return { field: '__semantic__', label };
+  return { field: 'Stage', label };
 }
 
 module.exports = { createCrmController, planQuestion };
