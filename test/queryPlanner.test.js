@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { planQuestion, createCrmController } = require('../src/controllers/crm.controller');
 const { CrmService } = require('../src/services/crm.service');
 const { validateCrmQuery } = require('../src/validators/crmQuery.validator');
+const { createCrmDiagnostics } = require('../src/utils/crmDiagnostics');
 
 const periods = ['today', 'yesterday', 'tomorrow', 'this week', 'last week', 'next week', 'this month', 'last month', 'next month', 'this quarter', 'last quarter', 'next quarter', 'this year', 'last year', 'next year'];
 
@@ -56,6 +57,46 @@ test('plans today deals with a negated Stage filter and created-date filter', ()
   assert.equal(request.filters.find((filter) => filter.field === 'Created_Time')?.operator, 'between');
   assert.deepEqual(request.filters.find((filter) => filter.field === 'Stage'), { field: 'Stage', operator: 'not_equals', value: 'closed lost' });
   assert.ok(!request.filters.some((filter) => ['__semantic__', 'semantic'].includes(filter.field)));
+});
+
+test('resolves today deal fields only from live metadata before Zoho execution', async () => {
+  let captured;
+  const diagnostics = createCrmDiagnostics('crm_field_resolution_test');
+  const service = new CrmService({
+    executionStats: {},
+    resolveModuleApiName: async () => 'Deals',
+    getFieldMetadata: async () => ({
+      fields: ['id', 'deal_created_at__c', 'deal_stage__c', 'total_value__c'],
+      metadata: [
+        { api_name: 'id', display_label: 'Record ID', data_type: 'text' },
+        { api_name: 'deal_created_at__c', display_label: 'Created Time', data_type: 'datetime' },
+        { api_name: 'deal_stage__c', display_label: 'Stage', data_type: 'picklist', pick_list_values: [{ display_value: 'Closed Lost', actual_value: 'closed_lost' }] },
+        { api_name: 'total_value__c', display_label: 'Amount', data_type: 'currency' }
+      ]
+    }),
+    resolveOwnerFilters: async (filters) => filters,
+    query: async (request) => {
+      captured = request;
+      return { records: [], info: { more_records: false }, module_api_name: request.module_api_name };
+    }
+  });
+
+  await service.query(planQuestion("Show me today's deals where the stage is not Closed Lost, sorted by amount from highest to lowest"), undefined, diagnostics);
+
+  assert.equal(captured.module_api_name, 'Deals');
+  assert.equal(captured.sort.field, 'total_value__c');
+  assert.equal(captured.sort.order, 'desc');
+  assert.deepEqual(captured.filters, [
+    { field: 'deal_created_at__c', operator: 'between', value: captured.filters[0].value, exclusive_end: true },
+    { field: 'deal_stage__c', operator: 'not_equals', value: 'closed lost' }
+  ]);
+  assert.ok(captured.filters.every((filter) => !['semantic', 'the closing_date', 'closing_date', 'closing date', 'the stage', 'the amount'].includes(filter.field)));
+  assert.deepEqual(diagnostics.resolved_fields, [
+    { user_term: 'id', field_label: 'Record ID', api_name: 'id', data_type: 'text' },
+    { user_term: 'deal_created_at__c', field_label: 'Created Time', api_name: 'deal_created_at__c', data_type: 'datetime' },
+    { user_term: 'deal_stage__c', field_label: 'Stage', api_name: 'deal_stage__c', data_type: 'picklist' },
+    { user_term: 'total_value__c', field_label: 'Amount', api_name: 'total_value__c', data_type: 'currency' }
+  ]);
 });
 
 test('executes normalized count and SUM comparisons with zero-safe percentage changes', async () => {

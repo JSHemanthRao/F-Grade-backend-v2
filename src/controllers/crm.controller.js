@@ -1020,8 +1020,16 @@ function extractFieldComparison(lowerText) {
   const match = symbols || words;
   if (!match) return null;
   const operatorMap = { '>': 'greater_than', '>=': 'greater_equal', '<': 'less_than', '<=': 'less_equal', '=': 'equals', '!=': 'not_equals', 'greater than': 'greater_than', 'more than': 'greater_than', 'at least': 'greater_equal', 'less than': 'less_than', 'at most': 'less_equal', 'equal to': 'equals', 'not equal to': 'not_equals' };
-  const rawField = match[1].replace(/\s+/g, '_').toLowerCase();
-  return { field: rawField === 'amount' || rawField === 'deal_value' || rawField === 'value' ? 'Amount' : rawField === 'unit_price' ? 'Unit_Price' : rawField, operator: operatorMap[match[2].toLowerCase()], value: Number(match[3].replace(/,/g, '')) };
+  const fieldAliases = {
+    amount: 'Amount',
+    'deal value': 'Amount',
+    value: 'Amount',
+    probability: 'Probability',
+    'unit price': 'Unit_Price',
+    qty_in_stock: 'Qty_in_Stock'
+  };
+  const field = fieldAliases[match[1].replace(/\s+/g, ' ').toLowerCase()];
+  return field ? { field, operator: operatorMap[match[2].toLowerCase()], value: Number(match[3].replace(/,/g, '')) } : null;
 }
 
 function extractSemanticFilter(lowerText) {
@@ -1044,9 +1052,9 @@ function extractSemanticFilter(lowerText) {
   const value = match[3].trim();
   const field = directFieldMap[fieldName];
   if (!field) {
-    const customField = match[1].trim();
-    const normalizedValue = /^(?:stage|status)$/i.test(customField) ? value.replace(/^\s*['"]|['"]\s*$/g, '').replace(/\s+/g, ' ').trim() : value.trim();
-    return value ? { field: customField, operator: operators[operatorText] || 'equals', value: normalizedValue } : null;
+    const fieldLabel = match[1].trim();
+    const normalizedValue = /^(?:stage|status)$/i.test(fieldLabel) ? value.replace(/^\s*['"]|['"]\s*$/g, '').replace(/\s+/g, ' ').trim() : value.trim();
+    return value ? { field: '__field__', field_label: fieldLabel, operator: operators[operatorText] || 'equals', value: normalizedValue } : null;
   }
   const normalizedValue = field === 'Stage' ? value.replace(/^\s*['"]|['"]\s*$/g, '').replace(/\s+/g, ' ').trim() : value.trim();
   return value ? { field, operator: operators[operatorText] || 'equals', value: normalizedValue } : null;

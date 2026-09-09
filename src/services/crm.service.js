@@ -75,7 +75,7 @@ class CrmService {
       recordCrmEvent('MODULE_METADATA_RESPONSE', diagnostics, { module: normalizedInput.module, module_api_name: normalizedInput.module_api_name });
       normalizedInput = await materializeMetadataRequest(this.zohoService, normalizedInput);
       updateDiagnostics(diagnostics, {
-        resolved_fields: Array.isArray(normalizedInput.fields) ? normalizedInput.fields : diagnostics?.resolved_fields,
+        resolved_fields: normalizedInput._resolved_field_diagnostics || diagnostics?.resolved_fields,
         resolved_filters: Array.isArray(normalizedInput.filters) ? normalizedInput.filters : diagnostics?.resolved_filters,
         stage: 'fields_resolved'
       });
@@ -95,7 +95,7 @@ class CrmService {
     updateDiagnostics(diagnostics, {
       resolved_module: request.module,
       module_api_name: request.module_api_name || diagnostics?.module_api_name,
-      resolved_fields: request.fields,
+      resolved_fields: normalizedInput._resolved_field_diagnostics || request.fields,
       resolved_filters: request.filters,
       sort_field: request.sort?.field || request.sort_field || null,
       sort_order: request.sort?.order || request.sort_order || null,
@@ -1003,7 +1003,10 @@ async function materializeMetadataRequest(zohoService, input) {
   if (apiNames.size === 0) throw createAppError('ZOHO_METADATA_EMPTY', `Zoho field metadata for '${moduleApiName}' was unavailable.`, 502, { module_api_name: moduleApiName });
 
   const aliases = new Map();
+  const metadataByApiName = new Map();
+  const resolvedFieldDiagnostics = [];
   for (const field of fields) {
+    if (field.api_name) metadataByApiName.set(field.api_name, field);
     for (const value of [field.api_name, field.display_label, field.field_label, field.label]) {
       if (value) aliases.set(normalizeMetadataLabel(value), field.api_name);
     }
@@ -1018,13 +1021,23 @@ async function materializeMetadataRequest(zohoService, input) {
         { module: input.module, module_api_name: moduleApiName, field, reason: 'Internal metadata field name or placeholder was provided.' }
       );
     }
-    if (apiNames.has(field)) return field;
+    let apiName = apiNames.has(field) ? field : null;
     const alias = aliases.get(normalizeMetadataLabel(field));
-    if (alias) return alias;
-    const semantic = findMetadataField(fields, aliases, label || field, role);
-    if (semantic) return semantic;
+    if (!apiName && alias) apiName = alias;
+    const semantic = !apiName ? findMetadataField(fields, aliases, label, role) : null;
+    if (!apiName && semantic) apiName = semantic;
     if (role === 'date' && fields.length > 0 && (field === '__date__' || field === 'date' || dateRole || input.date_field_role)) {
-      return chooseMetadataDateField(fields, dateRole || input.date_field_role);
+      apiName = apiName || chooseMetadataDateField(fields, dateRole || input.date_field_role);
+    }
+    if (apiName) {
+      const metadataField = metadataByApiName.get(apiName) || { api_name: apiName, data_type: null };
+      if (!metadataField) {
+        throw createAppError('FIELD_NOT_AVAILABLE', `CRM field '${field}' could not be resolved to a live Zoho API field for module '${input.module}'.`, 400, { module: input.module, module_api_name: moduleApiName, field, field_label: label || null, reason: 'Resolved name was not present in live field metadata.' });
+      }
+      if (!resolvedFieldDiagnostics.some((entry) => entry.api_name === metadataField.api_name)) {
+        resolvedFieldDiagnostics.push({ user_term: label || field, field_label: metadataField.display_label || metadataField.field_label || metadataField.label || label || field, api_name: metadataField.api_name, data_type: metadataField.data_type || null });
+      }
+      return metadataField.api_name;
     }
     throw createAppError(
       'FIELD_NOT_AVAILABLE',
@@ -1040,6 +1053,16 @@ async function materializeMetadataRequest(zohoService, input) {
     : plannerDefaults
     ? selectMetadataDefaults(fields, apiNames)
     : input.fields.map((field) => resolveField(field));
+  for (const apiName of resolvedFields) {
+    if (resolvedFieldDiagnostics.some((entry) => entry.api_name === apiName)) continue;
+    const metadataField = metadataByApiName.get(apiName) || { api_name: apiName, data_type: null };
+    resolvedFieldDiagnostics.push({
+      user_term: apiName,
+      field_label: metadataField.display_label || metadataField.field_label || metadataField.label || apiName,
+      api_name: metadataField.api_name,
+      data_type: metadataField.data_type || null
+    });
+  }
   const resolvedFilters = (input.filters || []).map((filter) => ({
     ...filter,
     field: resolveField(filter.field, filter.field === 'Created_Time' || filter.field === '__date__' ? 'date' : filter.field_role || semanticRoleForField(filter.field, filter.field_label), filter.field_label, filter.field_role)
@@ -1072,7 +1095,7 @@ async function materializeMetadataRequest(zohoService, input) {
   const resolvedComparison = input.comparison && fields.length > 0 && resolvedFilters.length === 0 && input.date_field_role
     ? { ...input.comparison, date_field: chooseMetadataDateField(fields, input.date_field_role) }
     : input.comparison;
-  return { ...input, fields: resolvedFields, filters: resolvedFilters, sort: resolvedSort, aggregate, group_by: groupBy, comparison: resolvedComparison, sort_field: undefined, sort_order: undefined };
+  return { ...input, fields: resolvedFields, filters: resolvedFilters, sort: resolvedSort, aggregate, group_by: groupBy, comparison: resolvedComparison, sort_field: undefined, sort_order: undefined, _resolved_field_diagnostics: resolvedFieldDiagnostics };
 }
 
 function selectMetadataDefaults(metadata, apiNames) {
@@ -1129,7 +1152,7 @@ function chooseMetadataDateField(metadata, role) {
     if (field.api_name === 'Created_Time') score += normalizedRole === 'created' ? 50 : 0;
     return { apiName: field.api_name, score };
   }).sort((left, right) => right.score - left.score);
-  return ranked[0]?.apiName || 'Created_Time';
+  return ranked[0]?.apiName || null;
 }
 
 function normalizeMetadataLabel(value) {
