@@ -62,6 +62,22 @@ test('POST /api/crm/assistant accepts question, prompt, and message', async () =
   assert.equal(calls[0].module, 'Deals');
 });
 
+test('assistant planning clears stale connector field metadata', async () => {
+  let captured;
+  const app = createApp({ crmService: { query: async (input) => {
+    captured = input;
+    return { module: input.module, request_type: input.request_type, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } };
+  } } });
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', {
+    question: 'Deal pipeline analysis',
+    query: { field_labels: ['Old_Field_From_Connector'], module_api_name: 'Deals' }
+  });
+  assert.equal(response.status, 200);
+  assert.equal(captured.module, 'Deals');
+  assert.equal(captured.field_labels, undefined);
+  assert.equal(captured.module_api_name, undefined);
+});
+
 test('resolves date-only follow-ups using the previous CRM question', async () => {
   const calls = [];
   const app = createApp({ crmService: { query: async (input) => {

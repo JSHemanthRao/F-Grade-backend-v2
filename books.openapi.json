@@ -16,6 +16,7 @@
         "operationId": "booksReadQuery",
         "summary": "Execute a read-only Books query",
         "description": "Reads Books records using an allowlisted module and metadata-aware field names. User-facing Quotes map to the Zoho Books Estimates resource at /books/v3/estimates. Only GET-based read queries and safe metadata/history lookups are allowed. CRM Quotes require explicit CRM context and must not be sent to this Books endpoint.",
+        "security": [{ "apiKeyAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -29,21 +30,6 @@
           "400": { "description": "Invalid Books request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "404": { "description": "Books module or route not available", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "502": { "description": "Zoho Books upstream error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
-        }
-      }
-    },
-    "/api/books/history/{module}": {
-      "get": {
-        "operationId": "booksModuleHistory",
-        "summary": "Read Books module history or comments where supported",
-        "description": "Reads module-specific history/comments when the official Zoho Books API exposes them. This is not a global audit log endpoint.",
-        "parameters": [
-          { "$ref": "#/components/parameters/BooksModulePath" },
-          { "$ref": "#/components/parameters/LimitParam" },
-          { "$ref": "#/components/parameters/OffsetParam" }
-        ],
-        "responses": {
-          "200": { "description": "History result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BooksHistoryResponse" } } } }
         }
       }
     }

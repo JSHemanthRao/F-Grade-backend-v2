@@ -91,7 +91,20 @@ function createCrmController(crmService = new CrmService()) {
           filters: diagnostics.resolved_filters
         });
         assertExplicitModuleRouting(explicitModule, plannedRequest.module);
-        const assistantRequest = { ...(req.body?.query || {}), ...plannedRequest };
+        // Build a safe assistantRequest by starting from the planner result
+        let assistantRequest = { ...plannedRequest };
+        // Allow only a small set of client-provided overrides to keep the contract stable
+        const client = req.body || {};
+        if (typeof client.module === 'string' && client.module.trim()) assistantRequest.module = client.module.trim();
+        if (typeof client.request_type === 'string' && client.request_type.trim()) assistantRequest.request_type = client.request_type.trim();
+        if (client.limit != null) assistantRequest.limit = Number(client.limit) || assistantRequest.limit;
+        if (client.offset != null) assistantRequest.offset = Number(client.offset) || assistantRequest.offset;
+        if (typeof client.conversation_id === 'string' && client.conversation_id.trim()) assistantRequest.conversation_id = client.conversation_id.trim();
+        // Merge an optional `query` object from the client, but shallow-merge only
+        if (client.query && typeof client.query === 'object') {
+          assistantRequest = Object.assign({}, assistantRequest, client.query);
+        }
+        // Keep planner-controlled properties absent if planner did not set them
         if (!Object.prototype.hasOwnProperty.call(plannedRequest, 'field_labels')) assistantRequest.field_labels = undefined;
         if (!Object.prototype.hasOwnProperty.call(plannedRequest, 'module_api_name')) assistantRequest.module_api_name = undefined;
         const result = await crmService.query(assistantRequest, undefined, diagnostics);
@@ -131,6 +144,36 @@ function createCrmController(crmService = new CrmService()) {
         const result = await crmService.fastSummary(req.body);
         const safe = stringifySummary(Object.assign({}, result));
         res.status(200).json({ success: true, status: 'ok', ...safe });
+      } catch (error) {
+        next(error);
+      }
+    }
+    ,
+    metadata: async (req, res, next) => {
+      try {
+        // Return a compact view of live modules and optionally fields for a module
+        const module = req.query?.module;
+        if (module) {
+          const apiName = await crmService.zohoService.resolveModuleApiName(module);
+          const fields = await crmService.zohoService.getFieldMetadata(apiName);
+          return res.status(200).json({ success: true, status: 'ok', module: module, module_api_name: apiName, fields: fields.fields.slice(0, 200), metadata_sample: fields.metadata.slice(0, 10) });
+        }
+        const modules = await crmService.zohoService.getModulesMetadata();
+        const list = (modules.modules || []).map((m) => ({ api_name: m.api_name, module_name: m.module_name, plural_label: m.plural_label, viewable: m.viewable, api_supported: m.api_supported }));
+        res.status(200).json({ success: true, status: 'ok', modules: list });
+      } catch (error) {
+        next(error);
+      }
+    },
+    refreshMetadata: async (req, res, next) => {
+      try {
+        const module = req.body?.module;
+        if (module) {
+          await crmService.zohoService.refreshMetadata(module);
+          return res.status(200).json({ success: true, status: 'ok', module, refreshed: true });
+        }
+        await crmService.zohoService.refreshMetadata();
+        res.status(200).json({ success: true, status: 'ok', refreshed: true });
       } catch (error) {
         next(error);
       }

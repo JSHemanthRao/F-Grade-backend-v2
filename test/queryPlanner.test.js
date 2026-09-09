@@ -176,3 +176,18 @@ test('rejects an invalid field before invoking the Zoho query', async () => {
   await assert.rejects(() => service.query({ module: 'Leads', fields: ['Not_A_Lead_Field'], filters: [], limit: 1, offset: 0 }), (error) => error.code === 'FIELD_NOT_AVAILABLE' && error.details.field === 'Not_A_Lead_Field');
   assert.equal(queryCalls, 0);
 });
+
+test('plans deal pipeline analysis as metadata-resolved stage grouping', () => {
+  const request = planQuestion('Deal pipeline analysis');
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.request_type, 'aggregate');
+  assert.equal(request.aggregate.operation, 'count');
+  assert.equal(request.group_by, '__semantic__');
+  assert.equal(request.group_by_label, 'stage');
+});
+
+test('plans sales performance reports as CRM analysis', () => {
+  const request = planQuestion('Sales performance reports');
+  assert.equal(request.module, 'CRM');
+  assert.deepEqual(request.analysis, { type: 'sales_performance' });
+});
