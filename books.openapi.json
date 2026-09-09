@@ -7,9 +7,7 @@
     "x-copilot-studio-tool-description": "Ask read-only questions about Zoho Books modules such as Invoices, Bills, Items, Customers, Quotes, or vendor/payment records. User-facing Quotes resolve to the Zoho Books Estimates resource. CRM Quotes require explicit CRM context and remain on the CRM backend. The backend resolves module and field names from Books metadata and enforces read-only routing. Never invent custom modules, joins, or write actions."
   },
   "servers": [
-    { "url": "https://f-grade-backend-v2.onrender.com/", "description": "Production server" },
-    { "url": "http://localhost:3000/", "description": "Local development server" }
-  ],
+    { "url": "https://f-grade-backend-v2.onrender.com/", "description": "Production server" }  ],
   "paths": {
     "/api/books/query": {
       "post": {

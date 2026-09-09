@@ -44,10 +44,12 @@ function formatSearchValue(field, value) {
 
 function normalizeDateValue(field, value) {
   if (!DATE_FIELDS.has(field) && !DATETIME_FIELDS.has(field)) return value;
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw new Error(`Date value for ${field} must use YYYY-MM-DD.`);
+  // Accept plain YYYY-MM-DD or ISO datetimes and normalize to YYYY-MM-DD
+  if (typeof value === 'string') {
+    const m = value.match(/^(\d{4}-\d{2}-\d{2})(?:[T ].*)?$/);
+    if (m) return m[1];
   }
-  return value;
+  throw new Error(`Date value for ${field} must use YYYY-MM-DD.`);
 }
 
 function formatValue(field, value) {
