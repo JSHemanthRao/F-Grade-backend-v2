@@ -68,7 +68,7 @@
         "properties": {
           "question": {
             "type": "string",
-            "description": "Natural-language read-only Zoho CRM question. Preserve the user's explicitly requested CRM module and date range. Examples: 'give me today's leads', 'show meetings this week', 'compare calls and meetings this month'."
+            "description": "Pass the user's complete natural-language CRM request exactly as written. Do not rewrite, summarize, interpret, translate, or construct structured query parameters. Preserve the user's explicitly requested CRM module and date range. Examples: 'give me today's leads', 'show meetings this week', 'compare calls and meetings this month'."
           }
         },
         "additionalProperties": false

@@ -9,6 +9,7 @@ const { randomUUID } = require('node:crypto');
 const { env } = require('../config/env');
 const { resolveRelativePeriod } = require('../utils/relativeDate');
 const { getCurrentCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, updateDiagnostics } = require('../utils/crmDiagnostics');
+const { createCanonicalPlan } = require('../query/canonicalPlan');
 
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
@@ -38,6 +39,15 @@ class CrmService {
   }
 
   async query(input, executionContext = createExecutionContext(), diagnostics) {
+    const canonicalPlan = createCanonicalPlan(input);
+    input = {
+      ...input,
+      ...canonicalPlan,
+      sort: canonicalPlan.sort || undefined,
+      sort_field: undefined,
+      sort_order: undefined,
+      group_by: canonicalPlan.group_by.length === 1 ? canonicalPlan.group_by[0] : (canonicalPlan.group_by.length > 1 ? canonicalPlan.group_by : undefined)
+    };
     const activeDiagnostics = diagnostics || getCurrentCrmDiagnostics();
     if (diagnostics && getCurrentCrmDiagnostics() !== diagnostics) {
       return runWithCrmDiagnostics(diagnostics, () => this.query(input, executionContext));
@@ -1091,6 +1101,7 @@ async function materializeMetadataRequest(zohoService, input) {
   const metadataByResolvedName = new Map(fields.filter((field) => field?.api_name).map((field) => [field.api_name, field]));
   for (const filter of resolvedFilters) {
     const metadataField = metadataByResolvedName.get(filter.field);
+    filter.value = normalizeTypedFilterValue(input, filter, metadataField);
     validateFilterTypeCompatibility(input, filter, metadataField);
     if (metadataField?.filterable === false || metadataField?.searchable === false && ['contains', 'starts_with'].includes(filter.operator)) {
       throw createAppError('INVALID_QUERY', `CRM field '${filter.field}' cannot be used for this filter.`, 400, { module: input.module, module_api_name: moduleApiName, field: filter.field, operator: filter.operator, reason: 'Field metadata does not permit this filter.' });
@@ -1139,10 +1150,33 @@ function selectMetadataDefaults(metadata, apiNames) {
 
 function metadataCapabilityDetails(field) {
   const details = {};
-  for (const capability of ['filterable', 'sortable', 'groupable']) {
+  for (const capability of ['filterable', 'sortable', 'groupable', 'aggregatable']) {
     if (Object.prototype.hasOwnProperty.call(field || {}, capability)) details[capability] = field[capability] === true;
   }
   return details;
+}
+
+function normalizeTypedFilterValue(input, filter, metadataField) {
+  if (!metadataField || !Object.prototype.hasOwnProperty.call(filter, 'value')) return filter.value;
+  const type = String(metadataField.data_type || '').toLowerCase();
+  const numeric = ['currency', 'double', 'decimal', 'integer', 'long', 'number', 'bigint'].includes(type);
+  const boolean = ['boolean', 'checkbox'].includes(type);
+  const normalizeNumber = (value) => {
+    if (typeof value === 'number') return value;
+    const text = String(value).trim().replace(/[,$₹\s]/g, '').toLowerCase();
+    const match = text.match(/^(-?\d+(?:\.\d+)?)([km])?$/);
+    if (!match) throw createAppError('INVALID_FILTER_VALUE', `Value '${value}' is not valid for numeric field '${filter.field}'.`, 400, { module: input.module, field: filter.field, data_type: metadataField.data_type, value });
+    const multiplier = match[2] === 'k' ? 1000 : match[2] === 'm' ? 1000000 : 1;
+    return Number(match[1]) * multiplier;
+  };
+  const normalizeBoolean = (value) => {
+    if (typeof value === 'boolean') return value;
+    if (/^(true|yes)$/i.test(String(value).trim())) return true;
+    if (/^(false|no)$/i.test(String(value).trim())) return false;
+    throw createAppError('INVALID_FILTER_VALUE', `Value '${value}' is not valid for boolean field '${filter.field}'.`, 400, { module: input.module, field: filter.field, data_type: metadataField.data_type, value });
+  };
+  const normalize = (value) => numeric ? normalizeNumber(value) : boolean ? normalizeBoolean(value) : value;
+  return Array.isArray(filter.value) ? filter.value.map(normalize) : normalize(filter.value);
 }
 
 function validateFilterTypeCompatibility(input, filter, metadataField) {

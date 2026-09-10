@@ -4,8 +4,11 @@ const { CRM_API_NAMES, CRM_MODULES } = require('../constants/crmModules');
 const { resolveRelativePeriod, relativePeriodFromText } = require('../utils/relativeDate');
 const { createCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, updateDiagnostics, diagnosticsFromError, publicCrmDiagnostics } = require('../utils/crmDiagnostics');
 const { env } = require('../config/env');
+const { createCrmQueryPlanner } = require('../planners/crmQueryPlanner');
 
 const MAX_QUESTION_LENGTH = 2000;
+
+const planCrmQuestion = createCrmQueryPlanner(planQuestion);
 
 function createCrmController(crmService = new CrmService()) {
   const conversationContext = new Map();
@@ -75,12 +78,14 @@ function createCrmController(crmService = new CrmService()) {
         const previous = conversationId ? conversationContext.get(conversationId) : null;
         const resolvedQuestion = resolveFollowUpQuestion(question, previous);
         const explicitModule = extractExplicitModule(resolvedQuestion.toLowerCase());
-        const plannedRequest = applyPaginationFollowUp(planQuestion(resolvedQuestion), question, previous);
+        const plannedRequest = applyPaginationFollowUp(planCrmQuestion(resolvedQuestion), question, previous);
         updateDiagnostics(diagnostics, {
           resolved_module: plannedRequest.module || explicitModule || 'not_reached',
           module_api_name: plannedRequest.module_api_name || 'not_reached',
           resolved_fields: Array.isArray(plannedRequest.fields) ? plannedRequest.fields : [],
           resolved_filters: Array.isArray(plannedRequest.filters) ? plannedRequest.filters : [],
+          intent: plannedRequest.intent || plannedRequest.request_type || 'records',
+          pagination: plannedRequest.pagination || { limit: plannedRequest.limit, offset: plannedRequest.offset },
           request_type: plannedRequest.request_type || 'records',
           stage: 'query_planned'
         });
