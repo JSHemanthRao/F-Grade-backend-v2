@@ -9,6 +9,7 @@ const { CircuitBreaker, isTransientFailure } = require('../utils/circuitBreaker'
 const { CRM_API_NAMES } = require('../constants/crmModules');
 const { validateModuleFieldScope } = require('../validators/crmQuery.validator');
 const { getCurrentCrmDiagnostics, recordCrmEvent, updateDiagnostics } = require('../utils/crmDiagnostics');
+const { resolveModuleReference, assertResolvedModule, buildModuleRegistry, normalizeModuleReference } = require('../resolvers/moduleResolver');
 
 class ZohoCrmService {
   constructor(httpClient = axios, configLoader = getZohoConfig, authService) {
@@ -493,7 +494,8 @@ class ZohoCrmService {
       const modules = Array.isArray(response.data?.modules) ? response.data.modules : [];
       const value = {
         modules,
-        byApiName: new Map(modules.filter((module) => module?.api_name).map((module) => [module.api_name, module]))
+        byApiName: new Map(modules.filter((module) => module?.api_name).map((module) => [module.api_name, module])),
+        registry: buildModuleRegistry(modules, CRM_API_NAMES)
       };
       this.metadataCache.set('__modules__', { value, expiresAt: Date.now() + env.zohoMetadataTtlMs });
       return value;
@@ -505,8 +507,9 @@ class ZohoCrmService {
 
   async resolveModuleApiName(module, { preferStatic = false, forceRefresh = false } = {}) {
     const normalized = String(module || '').trim();
-    if (preferStatic && CRM_API_NAMES[module]) return CRM_API_NAMES[module];
-    const expectedApiName = CRM_API_NAMES[module];
+    const staticEntry = Object.entries(CRM_API_NAMES).find(([label, apiName]) => normalizeModuleReference(label) === normalizeModuleReference(normalized) || normalizeModuleReference(apiName) === normalizeModuleReference(normalized));
+    const expectedApiName = staticEntry?.[1];
+    if (preferStatic && expectedApiName) return expectedApiName;
     const startedAt = Date.now();
     log('info', `[CRM MODULE METADATA] requested_module=${normalized} lookup=start`);
     let metadata;
@@ -514,31 +517,38 @@ class ZohoCrmService {
       metadata = await this.getModulesMetadata({ forceRefresh });
     } catch (error) {
       if (expectedApiName && typeof this.httpClient.get !== 'function') return expectedApiName;
-      if (!expectedApiName) throw error;
+      if (!expectedApiName) {
+        throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is unavailable for read operations.`, 400, {
+          requested_module: normalized,
+          resolved_api_name: null,
+          reason: 'The requested module is not a recognized semantic module and could not be verified in live metadata.'
+        });
+      }
       throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is unavailable for read operations.`, 400, {
         requested_module: normalized,
         resolved_api_name: null,
         reason: 'Live Zoho module metadata could not verify this module.'
       });
     }
-    const normalizedRequest = normalizeLabel(normalized);
-    let match = metadata.modules.find((item) => [item?.api_name, item?.module_name, item?.plural_label, item?.singular_label].filter(Boolean).some((value) => normalizeLabel(value) === normalizedRequest || (expectedApiName && normalizeLabel(value) === normalizeLabel(expectedApiName))));
-    if (!match && !forceRefresh) {
+    let resolution = resolveModuleReference(normalized, metadata.registry || metadata.modules, { staticAliases: CRM_API_NAMES });
+    if (!resolution.matched && !resolution.ambiguous && !forceRefresh) {
       const refreshed = await this.getModulesMetadata({ forceRefresh: true });
-      match = refreshed.modules.find((item) => [item?.api_name, item?.module_name, item?.plural_label, item?.singular_label].filter(Boolean).some((value) => normalizeLabel(value) === normalizedRequest || (expectedApiName && normalizeLabel(value) === normalizeLabel(expectedApiName))));
+      resolution = resolveModuleReference(normalized, refreshed.registry || refreshed.modules, { staticAliases: CRM_API_NAMES });
     }
-    if (!match || !match.api_name) {
-      throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is unavailable for read operations.`, 404, { requested_module: normalized, resolved_api_name: expectedApiName || normalized, reason: 'Module was not present in live Zoho module metadata.' });
+    const resolved = assertResolvedModule(resolution, normalized);
+    if (resolved.metadata.api_supported === false || resolved.metadata.viewable === false) {
+      throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is not available for read operations.`, 400, { requested_module: normalized, resolved_api_name: resolved.api_name, reason: 'Zoho metadata marks the module as unsupported or not viewable.', api_supported: resolved.metadata.api_supported, viewable: resolved.metadata.viewable });
     }
-    if (match.api_supported === false || match.viewable === false) {
-      throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is not available for read operations.`, 400, { requested_module: normalized, resolved_api_name: match.api_name, reason: 'Zoho metadata marks the module as unsupported or not viewable.', api_supported: match.api_supported, viewable: match.viewable });
-    }
-    if (module === 'Meetings' && match.api_name !== 'Events') {
-      throw createAppError('CRM_MODULE_ROUTING_ERROR', `Zoho module '${normalized}' resolved to '${match.api_name}', expected '${expectedApiName}'.`, 500, { requested_module: normalized, resolved_api_name: match.api_name, expected_api_name: expectedApiName });
-    }
-    log('info', `[CRM MODULE ROUTING] requested=${normalized} resolved=${match.api_name}`);
-    log('info', `[CRM MODULE METADATA] requested_module=${normalized} lookup=complete module_api_name=${match.api_name} elapsed_ms=${Date.now() - startedAt}`);
-    return match.api_name;
+    log('info', `[CRM MODULE ROUTING] requested=${normalized} semantic=${resolved.semantic_name} resolved=${resolved.api_name} match_type=${resolved.match_type}`);
+    log('info', `[CRM MODULE METADATA] requested_module=${normalized} lookup=complete module_api_name=${resolved.api_name} elapsed_ms=${Date.now() - startedAt}`);
+    return resolved.api_name;
+  }
+
+  async resolveModuleReference(moduleReference, { forceRefresh = false } = {}) {
+    const metadata = await this.getModulesMetadata({ forceRefresh });
+    let result = resolveModuleReference(moduleReference, metadata.registry || metadata.modules, { staticAliases: CRM_API_NAMES });
+    if (!result.matched && !result.ambiguous && !forceRefresh) return this.resolveModuleReference(moduleReference, { forceRefresh: true });
+    return assertResolvedModule(result, moduleReference);
   }
 
   async getModuleMetadata(module) {

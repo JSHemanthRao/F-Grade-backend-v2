@@ -48,6 +48,22 @@ class CrmService {
       sort_order: undefined,
       group_by: canonicalPlan.group_by.length === 1 ? canonicalPlan.group_by[0] : (canonicalPlan.group_by.length > 1 ? canonicalPlan.group_by : undefined)
     };
+    if (input.original_question && input.module && input.module !== 'CRM' && typeof this.zohoService.resolveModuleReference === 'function') {
+      const moduleReference = input.original_question;
+      const resolvedModule = await this.zohoService.resolveModuleReference(moduleReference);
+      input = {
+        ...input,
+        module: resolvedModule.semantic_name,
+        module_api_name: resolvedModule.api_name,
+        module_resolution: {
+          reference: moduleReference,
+          semantic_name: resolvedModule.semantic_name,
+          api_name: resolvedModule.api_name,
+          confidence: resolvedModule.confidence,
+          match_type: resolvedModule.match_type
+        }
+      };
+    }
     const activeDiagnostics = diagnostics || getCurrentCrmDiagnostics();
     if (diagnostics && getCurrentCrmDiagnostics() !== diagnostics) {
       return runWithCrmDiagnostics(diagnostics, () => this.query(input, executionContext));
