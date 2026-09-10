@@ -496,7 +496,7 @@ function planQuestion(question) {
   const excludedPicklist = extractExcludedPicklistFilter(lower);
   if (excludedPicklist) filters.push(excludedPicklist);
   const semanticFilter = extractSemanticFilter(lower);
-  if (semanticFilter && !excludedPicklist) filters.push(semanticFilter);
+  if (semanticFilter && !excludedPicklist && !fieldComparison && !amountThreshold) filters.push(semanticFilter);
 
   if (/(closed won|closed-won|won deals|won deal)/.test(lower)) {
     filters.push({ field: 'Stage', operator: 'equals', value: 'Closed Won' });

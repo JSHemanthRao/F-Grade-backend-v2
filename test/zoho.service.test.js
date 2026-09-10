@@ -830,6 +830,55 @@ test('resolves display field labels from live metadata', async () => {
   assert.deepEqual(await zoho.resolveFieldApiNames('Leads', ['Email Address', 'Customer Segment']), ['Email', 'Custom_Field__s']);
 });
 
+test('normalizes live field metadata API-name variants and isolates module caches', async () => {
+  const requests = [];
+  const zoho = new ZohoCrmService({
+    get: async (url, options) => {
+      if (url.endsWith('/settings/modules')) {
+        return { data: { modules: [
+          { api_name: 'Contacts', module_name: 'Contacts', plural_label: 'Contacts', viewable: true, api_supported: true },
+          { api_name: 'Accounts', module_name: 'Accounts', plural_label: 'Accounts', viewable: true, api_supported: true }
+        ] } };
+      }
+      requests.push({ url, module: options?.params?.module });
+      const fields = options?.params?.module === 'Contacts'
+        ? [{ apiName: 'Contact_Name', label: 'Contact Name' }]
+        : [{ name: 'Account_Name', label: 'Account Name' }];
+      return { data: { fields } };
+    }
+  }, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
+    getAccessToken: async () => 'redacted-test-token',
+    getApiDomain: () => null,
+    clearToken: () => {}
+  });
+
+  const contacts = await zoho.getFieldMetadata('Contacts');
+  const accounts = await zoho.getFieldMetadata('Accounts');
+  assert.deepEqual(contacts.fields, ['Contact_Name']);
+  assert.deepEqual(accounts.fields, ['Account_Name']);
+  assert.notEqual(contacts.fields[0], accounts.fields[0]);
+  assert.deepEqual(requests.map((request) => request.module), ['Contacts', 'Accounts']);
+});
+
+test('returns precise FIELD_NOT_RESOLVED diagnostics for unknown semantic labels', async () => {
+  const zoho = new ZohoCrmService({
+    get: async (url) => url.endsWith('/settings/modules')
+      ? { data: { modules: [{ api_name: 'Contacts', module_name: 'Contacts', plural_label: 'Contacts', viewable: true, api_supported: true }] } }
+      : { data: { fields: [{ api_name: 'Contact_Name', display_label: 'Contact Name', data_type: 'text' }] } }
+  }, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
+    getAccessToken: async () => 'redacted-test-token',
+    getApiDomain: () => null,
+    clearToken: () => {}
+  });
+  await assert.rejects(() => zoho.resolveFieldApiNames('Contacts', ['phone number']), (error) => {
+    assert.equal(error.code, 'FIELD_NOT_RESOLVED');
+    assert.equal(error.details.module_api_name, 'Contacts');
+    assert.equal(error.details.user_term, 'phone number');
+    assert.equal(error.details.candidate_fields[0].api_name, 'Contact_Name');
+    return true;
+  });
+});
+
 test('uses the Zoho Search word parameter for text search requests', async () => {
   let request;
   const zoho = new ZohoCrmService({

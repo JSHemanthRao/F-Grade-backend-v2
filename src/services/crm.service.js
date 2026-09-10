@@ -77,7 +77,10 @@ class CrmService {
       normalizedInput = await materializeMetadataRequest(this.zohoService, normalizedInput);
       updateDiagnostics(diagnostics, {
         resolved_fields: normalizedInput._resolved_field_diagnostics || diagnostics?.resolved_fields,
+        available_metadata_fields: normalizedInput._available_metadata_fields || diagnostics?.available_metadata_fields,
         resolved_filters: Array.isArray(normalizedInput.filters) ? normalizedInput.filters : diagnostics?.resolved_filters,
+        resolved_sort: normalizedInput.sort || (normalizedInput.sort_field ? { field: normalizedInput.sort_field, order: normalizedInput.sort_order } : null),
+        date_field: normalizedInput.date_field || normalizedInput.filters?.find((filter) => filter.field_role === 'date')?.field || null,
         stage: 'fields_resolved'
       });
       recordCrmEvent('FIELDS_RESOLVED', diagnostics, { module: normalizedInput.module, module_api_name: normalizedInput.module_api_name, fields: diagnostics?.resolved_fields });
@@ -1124,7 +1127,7 @@ async function materializeMetadataRequest(zohoService, input) {
   const resolvedComparison = input.comparison && fields.length > 0 && resolvedFilters.length === 0 && input.date_field_role
     ? { ...input.comparison, date_field: chooseMetadataDateField(fields, input.date_field_role) }
     : input.comparison;
-  return { ...input, fields: resolvedFields, filters: resolvedFilters, filter_expression: resolvedFilterExpression, sort: resolvedSort, aggregate, group_by: groupBy, having_filter: havingFilter, comparison: resolvedComparison, sort_field: undefined, sort_order: undefined, _resolved_field_diagnostics: resolvedFieldDiagnostics };
+  return { ...input, fields: resolvedFields, filters: resolvedFilters, filter_expression: resolvedFilterExpression, sort: resolvedSort, aggregate, group_by: groupBy, having_filter: havingFilter, comparison: resolvedComparison, sort_field: undefined, sort_order: undefined, _resolved_field_diagnostics: resolvedFieldDiagnostics, _available_metadata_fields: [...apiNames] };
 }
 
 function selectMetadataDefaults(metadata, apiNames) {

@@ -148,6 +148,7 @@ class ZohoCrmService {
 
   async executeQueryRequest(selectQuery, token, config, request, resolvedModule) {
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
+    updateDiagnostics(getCurrentCrmDiagnostics(), { final_query: selectQuery });
     log('info', `[COQL query] operation=record_query module=${resolvedModule} field_count=${Array.isArray(request?.fields) ? request.fields.length : 0}`);
     try {
       const response = await this.executeRequest('post', `${apiBaseUrl}/coql`, { data: { select_query: selectQuery }, config: {
@@ -360,17 +361,26 @@ class ZohoCrmService {
   }
 
   async resolveFieldApiNames(module, labels) {
-    const metadata = await this.getFieldMetadata(await this.resolveModuleApiName(module));
+    const moduleApiName = await this.resolveModuleApiName(module);
+    const metadata = await this.getFieldMetadata(moduleApiName);
     const normalized = new Map();
     for (const field of metadata.metadata || []) {
-      for (const value of [field.api_name, field.display_label, field.field_label, field.label]) {
+      for (const value of [field.api_name, field.display_label, field.field_label, field.label, field.name]) {
         if (value) normalized.set(normalizeLabel(value), field.api_name);
       }
     }
-    const apiNames = labels.map((label) => normalized.get(normalizeLabel(label))).filter(Boolean);
-    const missing = labels.filter((label) => !normalized.has(normalizeLabel(label)));
+    const requestedLabels = Array.isArray(labels) ? labels : [];
+    const apiNames = requestedLabels.map((label) => normalized.get(normalizeLabel(label))).filter(Boolean);
+    const missing = requestedLabels.filter((label) => !normalized.has(normalizeLabel(label)));
     if (missing.length > 0) {
-      throw createAppError('ZOHO_FIELD_UNAVAILABLE', 'One or more requested fields are not available in Zoho CRM metadata.', 400, { module, fields: missing });
+      throw createAppError('FIELD_NOT_RESOLVED', `CRM field '${missing[0]}' could not be resolved for module '${module}'.`, 400, {
+        module,
+        module_api_name: moduleApiName,
+        user_term: missing[0],
+        fields: missing,
+        candidate_fields: (metadata.metadata || []).map((field) => ({ api_name: field.api_name, field_label: field.display_label || field.field_label || field.label || field.name || field.api_name })).slice(0, 50),
+        reason: 'No exact API name or live metadata label matched the requested field.'
+      });
     }
     return apiNames;
   }
@@ -421,7 +431,7 @@ class ZohoCrmService {
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
         timeout: config.timeoutMs
       }});
-      let fields = Array.isArray(response.data?.fields) ? response.data.fields : [];
+      const fields = normalizeFieldMetadata(response.data?.fields);
       const value = {
         fields: fields.map((field) => field.api_name).filter(Boolean),
         metadata: fields
@@ -649,6 +659,18 @@ function assertReadOnlyRequest(method, url) {
 function normalizeCrmBaseUrl(value) {
   const url = value.replace(/\/$/, '');
   return /\/crm\/v\d+$/i.test(url) ? url : `${url}/crm/v8`;
+}
+
+function normalizeFieldMetadata(rawFields) {
+  if (!Array.isArray(rawFields)) return [];
+  return rawFields
+    .map((field) => {
+      if (typeof field === 'string') return { api_name: field };
+      if (!field || typeof field !== 'object') return null;
+      const apiName = field.api_name || field.apiName || field.name;
+      return apiName ? { ...field, api_name: apiName } : null;
+    })
+    .filter(Boolean);
 }
 
 function normalizeLabel(value) {

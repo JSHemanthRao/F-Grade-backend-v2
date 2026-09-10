@@ -49,6 +49,11 @@ test('plans numeric between filters without inventing a field name', () => {
   assert.ok(!request.filters.some((filter) => /^(semantic|the amount)$/.test(filter.field)));
 });
 
+test('does not add a generic semantic filter to numeric comparisons', () => {
+  const request = planQuestion('Show me deals where the amount is greater than 50000');
+  assert.deepEqual(request.filters, [{ field: 'Amount', operator: 'greater_than', value: 50000 }]);
+});
+
 test('preserves an explicit Leads module for Closed Won questions', () => {
   const request = planQuestion('Show me leads that are Closed Won');
   assert.equal(request.module, 'Leads');
