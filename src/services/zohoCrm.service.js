@@ -121,7 +121,9 @@ class ZohoCrmService {
       }
       throw createAppError(normalizeZohoErrorCode(error, 'ZOHO_METADATA_ERROR'), `Unable to access '${resolvedModule}' field metadata.`, mapZohoStatus(error.response?.status, error.response?.data?.code), safeZohoDetails(error, 'ZohoCRM.settings.fields.READ'));
     }
-    const requestedFields = Array.isArray(request.fields) ? request.fields : [];
+    const requestedFields = Array.isArray(request.execution_fields) && request.execution_fields.length > 0
+      ? request.execution_fields
+      : (Array.isArray(request.fields) ? request.fields : []);
     const missingFields = requestedFields.filter((field) => !metadata.fields.includes(field));
     if (missingFields.length > 0) {
       throw createAppError(
@@ -139,7 +141,7 @@ class ZohoCrmService {
     }
     const finalFields = requestedFields.length > 0
       ? requestedFields
-      : safeFields.slice(0, 6);
+      : safeFields.slice(0, 50);
     if (finalFields.length === 0) {
       throw createAppError('ZOHO_FIELD_UNAVAILABLE', `Zoho CRM metadata for '${resolvedModule}' does not expose any of the requested fields.`, 502);
     }

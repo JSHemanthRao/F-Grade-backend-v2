@@ -10,6 +10,7 @@ const { env } = require('../config/env');
 const { resolveRelativePeriod } = require('../utils/relativeDate');
 const { getCurrentCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, updateDiagnostics } = require('../utils/crmDiagnostics');
 const { createCanonicalPlan } = require('../query/canonicalPlan');
+const { buildExecutionFields, capExecutionFields } = require('../query/fieldSelection');
 
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
@@ -221,14 +222,14 @@ class CrmService {
     if (result.module_api_name && request.module_api_name && !acceptedResponseModules.has(result.module_api_name)) {
       throw createAppError('MODULE_RESPONSE_MISMATCH', `Zoho returned module '${result.module_api_name}' for requested module '${request.module_api_name}'.`, 502, { requested_module: request.module, requested_module_api_name: request.module_api_name, response_module_api_name: result.module_api_name, stage: 'result_validation' });
     }
-    const data = result.records.map(sanitizeZohoRecord);
+    const data = result.records.map(sanitizeZohoRecord).map((record) => projectResponseRecord(record, request.response_fields));
     const info = result.info || {};
 
     const response = {
       module: request.module,
       module_api_name: result.module_api_name || request.module_api_name || (typeof this.zohoService.resolveModuleApiName === 'function' ? await this.zohoService.resolveModuleApiName(request.module) : request.module),
       request_type: request.request_type,
-      fields: request.fields,
+      fields: request.response_fields || request.fields,
       filters: request.filters,
       count: Number.isInteger(info.count) ? info.count : data.length,
       returned: data.length,
@@ -1070,17 +1071,6 @@ async function materializeMetadataRequest(zohoService, input) {
     : plannerDefaults
     ? selectMetadataDefaults(fields, apiNames)
     : input.fields.map((field) => resolveField(field));
-  for (const apiName of resolvedFields) {
-    if (resolvedFieldDiagnostics.some((entry) => entry.api_name === apiName)) continue;
-    const metadataField = metadataByApiName.get(apiName) || { api_name: apiName, data_type: null };
-    resolvedFieldDiagnostics.push({
-      user_term: apiName,
-      field_label: metadataField.display_label || metadataField.field_label || metadataField.label || apiName,
-      api_name: metadataField.api_name,
-      data_type: metadataField.data_type || null,
-      ...metadataCapabilityDetails(metadataField)
-    });
-  }
   const resolvedFilters = (input.filters || []).map((filter) => ({
     ...filter,
     field: resolveField(filter.field, filter.field === 'Created_Time' || filter.field === '__date__' ? 'date' : filter.field_role || semanticRoleForField(filter.field, filter.field_label), filter.field_label, filter.field_role)
@@ -1105,6 +1095,24 @@ async function materializeMetadataRequest(zohoService, input) {
     ...input.having_filter,
     field: resolveField(input.having_filter.field, input.having_filter.field_role || semanticRoleForField(input.having_filter.field, input.having_filter.field_label), input.having_filter.field_label)
   } : input.having_filter;
+  const responseFields = resolvedFields.length > 0 ? resolvedFields : selectMetadataDefaults(fields, apiNames);
+  const diagnosticFields = [...(responseFields.includes('id') ? ['id'] : []), ...responseFields.filter((field) => field !== 'id'), ...resolvedFilters.map((filter) => filter.field), ...(Array.isArray(resolvedSort) ? resolvedSort.map((sort) => sort.field) : [resolvedSort?.field]), aggregate?.field, groupBy, havingFilter?.field].filter(Boolean);
+  const existingDiagnostics = new Map(resolvedFieldDiagnostics.map((entry) => [entry.api_name, entry]));
+  resolvedFieldDiagnostics.length = 0;
+  for (const apiName of [...new Set(diagnosticFields)]) {
+    if (existingDiagnostics.has(apiName)) {
+      resolvedFieldDiagnostics.push(existingDiagnostics.get(apiName));
+      continue;
+    }
+    const metadataField = metadataByApiName.get(apiName) || { api_name: apiName, data_type: null };
+    resolvedFieldDiagnostics.push({
+      user_term: input.field_labels?.[resolvedFieldDiagnostics.length] || apiName,
+      field_label: metadataField.display_label || metadataField.field_label || metadataField.label || apiName,
+      api_name: metadataField.api_name,
+      data_type: metadataField.data_type || null,
+      ...metadataCapabilityDetails(metadataField)
+    });
+  }
   const usedFields = [
     ...resolvedFields,
     ...resolvedFilters.map((filter) => filter.field),
@@ -1114,6 +1122,7 @@ async function materializeMetadataRequest(zohoService, input) {
     groupBy,
     havingFilter?.field
   ].filter(Boolean);
+  const executionFields = capExecutionFields(buildExecutionFields(responseFields, resolvedFilters, resolvedSort, groupBy, aggregate, havingFilter));
   const metadataByResolvedName = new Map(fields.filter((field) => field?.api_name).map((field) => [field.api_name, field]));
   for (const filter of resolvedFilters) {
     const metadataField = metadataByResolvedName.get(filter.field);
@@ -1155,13 +1164,18 @@ async function materializeMetadataRequest(zohoService, input) {
   const resolvedComparison = input.comparison && fields.length > 0 && resolvedFilters.length === 0 && input.date_field_role
     ? { ...input.comparison, date_field: chooseMetadataDateField(fields, input.date_field_role) }
     : input.comparison;
-  return { ...input, fields: resolvedFields, filters: resolvedFilters, filter_expression: resolvedFilterExpression, sort: resolvedSort, aggregate, group_by: groupBy, having_filter: havingFilter, comparison: resolvedComparison, sort_field: undefined, sort_order: undefined, _resolved_field_diagnostics: resolvedFieldDiagnostics, _available_metadata_fields: [...apiNames] };
+  return { ...input, fields: executionFields, requested_fields: input.field_labels || input.fields || [], execution_fields: executionFields, response_fields: responseFields, filters: resolvedFilters, filter_expression: resolvedFilterExpression, sort: resolvedSort, aggregate, group_by: groupBy, having_filter: havingFilter, comparison: resolvedComparison, sort_field: undefined, sort_order: undefined, _resolved_field_diagnostics: resolvedFieldDiagnostics, _available_metadata_fields: [...apiNames] };
 }
 
 function selectMetadataDefaults(metadata, apiNames) {
-  // Planner defaults must never guess a broad projection. Explicit field
-  // requests are resolved separately; implicit record requests use id only.
-  return apiNames.has('id') ? ['id'] : [...apiNames].slice(0, 1);
+  const { selectMetadataDefaultFields } = require('../query/fieldSelection');
+  return selectMetadataDefaultFields(metadata, apiNames);
+}
+
+function projectResponseRecord(record, responseFields) {
+  if (!Array.isArray(responseFields) || responseFields.length === 0) return record;
+  const fields = responseFields.includes('id') || !Object.prototype.hasOwnProperty.call(record, 'id') ? responseFields : ['id', ...responseFields];
+  return Object.fromEntries(fields.filter((field) => Object.prototype.hasOwnProperty.call(record, field)).map((field) => [field, record[field]]));
 }
 
 function metadataCapabilityDetails(field) {

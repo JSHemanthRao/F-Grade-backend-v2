@@ -175,7 +175,7 @@ function validateCrmQuery(body) {
     400,
     { errors }
   );
-  return { domain: body.domain || 'CRM', module, fields: normalizedFields, filters: normalizedFilters, filter_expression: filterExpression, sort: normalizedSort, limit, offset, request_type, aggregate, group_by, having_filter: havingFilter, relationships: body.relationships || [], aggregations: body.aggregations || [], comparison: body.comparison, date_range: body.date_range, analysis: body.analysis };
+  return { domain: body.domain || 'CRM', module, fields: normalizedFields, requested_fields: body.requested_fields || [], execution_fields: body.execution_fields, response_fields: body.response_fields, filters: normalizedFilters, filter_expression: filterExpression, sort: normalizedSort, limit, offset, request_type, aggregate, group_by, having_filter: havingFilter, relationships: body.relationships || [], aggregations: body.aggregations || [], comparison: body.comparison, date_range: body.date_range, analysis: body.analysis };
 }
 
 function validateModuleFieldScope({ module, fields = [], filters = [], sort, aggregate, group_by } = {}) {
