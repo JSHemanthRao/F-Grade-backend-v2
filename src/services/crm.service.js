@@ -999,7 +999,7 @@ async function materializeMetadataRequest(zohoService, input) {
     let apiName = apiNames.has(field) ? field : null;
     const alias = aliases.get(normalizeMetadataLabel(field));
     if (!apiName && alias) apiName = alias;
-    const semantic = !apiName ? findMetadataField(fields, aliases, label, role) : null;
+    const semantic = !apiName ? findMetadataField(fields, aliases, label || field, role) : null;
     if (!apiName && semantic) apiName = semantic;
     if (role === 'date' && fields.length > 0 && (field === '__date__' || field === 'date' || dateRole || input.date_field_role)) {
       apiName = apiName || chooseMetadataDateField(fields, dateRole || input.date_field_role);
@@ -1128,12 +1128,9 @@ async function materializeMetadataRequest(zohoService, input) {
 }
 
 function selectMetadataDefaults(metadata, apiNames) {
-  const selectable = metadata
-    .filter((field) => field && field.api_name && field.visible !== false && field.virtual_field !== true)
-    .filter((field) => field.data_type !== 'multi_select_lookup' && field.multi_module_lookup !== true)
-    .map((field) => field.api_name);
-  const fallback = [...apiNames];
-  return [...new Set(['id', ...(selectable.length > 0 ? selectable : fallback)])].slice(0, 20);
+  // Planner defaults must never guess a broad projection. Explicit field
+  // requests are resolved separately; implicit record requests use id only.
+  return apiNames.has('id') ? ['id'] : [...apiNames].slice(0, 1);
 }
 
 function metadataCapabilityDetails(field) {

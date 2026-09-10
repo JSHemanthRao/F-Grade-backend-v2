@@ -1,4 +1,5 @@
 const { BackendClient } = require('../services/backendClient');
+const { resolveProductDomain } = require('../validators/booksQuery.validator');
 
 const MAX_QUESTION_LENGTH = 2000;
 
@@ -21,10 +22,14 @@ class CrmTool {
       error.statusCode = 400;
       throw error;
     }
+    if (resolveProductDomain(question) === 'books') {
+      const error = new Error('This CRM tool accepts CRM questions only. Use the Zoho Books tool for Books resources.');
+      error.code = 'DOMAIN_AMBIGUOUS';
+      error.statusCode = 400;
+      throw error;
+    }
 
-    // Forward the full args object to the backend client so callers can supply
-    // planner overrides like `module`, `request_type`, `query`, `limit`, `offset`, etc.
-    const response = await this.backendClient.ask(args);
+    const response = await this.backendClient.ask(question);
     const responseText = typeof response === 'string'
       ? response
       : JSON.stringify(response, null, 2);

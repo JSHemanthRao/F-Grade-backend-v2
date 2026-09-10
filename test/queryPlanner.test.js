@@ -31,22 +31,22 @@ test('plans standard period comparisons without changing the module', () => {
 
 test('plans COUNT, SUM, and AVG comparisons', () => {
   assert.equal(planQuestion('Compare leads this month vs last month').aggregate.operation, 'count');
-  assert.deepEqual(planQuestion("Compare total deal value this month vs last month").aggregate, { operation: 'sum', field: 'Amount' });
-  assert.deepEqual(planQuestion('Compare average deal amount this quarter vs last quarter').aggregate, { operation: 'avg', field: 'Amount' });
+  assert.deepEqual(planQuestion("Compare total deal value this month vs last month").aggregate, { operation: 'sum', field: 'amount' });
+  assert.deepEqual(planQuestion('Compare average deal amount this quarter vs last quarter').aggregate, { operation: 'avg', field: 'amount' });
 });
 
 test('plans all requested numeric comparison operators', () => {
   const cases = [['>', 'greater_than'], ['>=', 'greater_equal'], ['<', 'less_than'], ['<=', 'less_equal'], ['=', 'equals'], ['!=', 'not_equals']];
   for (const [symbol, operator] of cases) {
     const request = planQuestion(`Show deals with Amount ${symbol} 1000`);
-    assert.equal(request.filters.find((filter) => filter.field === 'Amount').operator, operator);
+    assert.equal(request.filters.find((filter) => filter.field === 'amount').operator, operator);
   }
 });
 
 test('plans numeric between filters without inventing a field name', () => {
   const request = planQuestion('Show me deals where the amount is between 50000 and 100000');
-  assert.deepEqual(request.filters.find((filter) => filter.operator === 'between'), { field: 'Amount', operator: 'between', value: [50000, 100000] });
-  assert.ok(!request.filters.some((filter) => /^(semantic|the amount|amount)$/.test(filter.field)));
+  assert.deepEqual(request.filters.find((filter) => filter.operator === 'between'), { field: 'amount', operator: 'between', value: [50000, 100000] });
+  assert.ok(!request.filters.some((filter) => /^(semantic|the amount)$/.test(filter.field)));
 });
 
 test('preserves an explicit Leads module for Closed Won questions', () => {
@@ -57,7 +57,7 @@ test('preserves an explicit Leads module for Closed Won questions', () => {
 test('plans exclusions as NOT IN and supports multi-field sorting', () => {
   const request = planQuestion('Show deals excluding stage Closed Lost or Prospect, sort by amount descending then created newest');
   assert.deepEqual(request.filters.find((filter) => filter.operator === 'not_in'), { field: 'Stage', operator: 'not_in', value: ['closed lost', 'prospect'] });
-  assert.deepEqual(request.sort, [{ field: 'Amount', order: 'desc' }, { field: 'Created_Time', order: 'desc' }]);
+  assert.deepEqual(request.sort, [{ field: 'amount', order: 'desc' }, { field: 'created', order: 'desc' }]);
 });
 
 test('builds advanced COQL with NOT IN, multi-sort, and HAVING', () => {
@@ -100,7 +100,7 @@ test('plans today deals with a negated Stage filter and created-date filter', ()
   const request = planQuestion("show me today's deals where the stage is not Closed Lost, sorted by amount from highest to lowest");
   assert.equal(request.module, 'Deals');
   assert.equal(request.request_type, 'records');
-  assert.equal(request.sort_field, 'Amount');
+  assert.equal(request.sort_field, 'amount');
   assert.equal(request.sort_order, 'desc');
   assert.equal(request.filters.find((filter) => filter.field === 'Created_Time')?.operator, 'between');
   assert.deepEqual(request.filters.find((filter) => filter.field === 'Stage'), { field: 'Stage', operator: 'not_equals', value: 'closed lost' });
@@ -141,19 +141,24 @@ test('resolves today deal fields only from live metadata before Zoho execution',
   assert.ok(captured.filters.every((filter) => !['semantic', 'the closing_date', 'closing_date', 'closing date', 'the stage', 'the amount'].includes(filter.field)));
   assert.deepEqual(diagnostics.resolved_fields, [
     { user_term: 'id', field_label: 'Record ID', api_name: 'id', data_type: 'text' },
-    { user_term: 'deal_created_at__c', field_label: 'Created Time', api_name: 'deal_created_at__c', data_type: 'datetime' },
-    { user_term: 'deal_stage__c', field_label: 'Stage', api_name: 'deal_stage__c', data_type: 'picklist' },
-    { user_term: 'total_value__c', field_label: 'Amount', api_name: 'total_value__c', data_type: 'currency' }
+    { user_term: 'Created_Time', field_label: 'Created Time', api_name: 'deal_created_at__c', data_type: 'datetime' },
+    { user_term: 'Stage', field_label: 'Stage', api_name: 'deal_stage__c', data_type: 'picklist' },
+    { user_term: 'amount', field_label: 'Amount', api_name: 'total_value__c', data_type: 'currency' }
   ]);
 });
 
 test('executes normalized count and SUM comparisons with zero-safe percentage changes', async () => {
+  let countCalls = 0;
   const zoho = {
     executionStats: {},
     resolveModuleApiName: async (module) => ({ Leads: 'Leads', Deals: 'Deals' })[module] || module,
-    getFieldMetadata: async () => ({ fields: ['id', 'Created_Time', 'Amount'], metadata: [] }),
+    getFieldMetadata: async () => ({ fields: ['id', 'Created_Time', 'Amount'], metadata: [
+      { api_name: 'id', display_label: 'Record ID', data_type: 'text' },
+      { api_name: 'Created_Time', display_label: 'Created Time', data_type: 'datetime' },
+      { api_name: 'Amount', display_label: 'Amount', data_type: 'currency' }
+    ] }),
     resolveOwnerFilters: async (filters) => filters,
-    count: async (_module, filters) => ({ count: filters[0].value[0].endsWith('-08') ? 12 : 0 }),
+    count: async () => ({ count: ++countCalls === 2 ? 12 : 0 }),
     aggregate: async (query) => ({ rows: [{ value: query.includes("'2026-10-01'") ? 100 : 50 }] })
   };
   const service = new CrmService(zoho);
@@ -194,6 +199,15 @@ test('preserves exact activity and lookup routing', () => {
   const request = planQuestion('Show me Deals with Account Name and Account Owner');
   assert.equal(request.module, 'Deals');
   assert.deepEqual(request.fields, ['id']);
+});
+
+test('uses the Calls activity timestamp and Products price semantic term', () => {
+  const calls = planQuestion("Show me today's calls");
+  const products = planQuestion('Show me products created this month, sorted by price from highest to lowest');
+  assert.equal(calls.filters[0].field, 'Call_Start_Time');
+  assert.equal(products.module, 'Products');
+  assert.equal(products.sort_field, 'price');
+  assert.notEqual(products.sort_field, 'Amount');
 });
 
 test('resolves a custom field label against the selected module metadata', async () => {

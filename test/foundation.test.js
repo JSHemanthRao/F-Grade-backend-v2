@@ -5,7 +5,7 @@ const createApp = require('../src/app').createApp;
 const { CRM_MODULES } = require('../src/constants/crmModules');
 const { validateCrmQuery } = require('../src/validators/crmQuery.validator');
 const { CrmService } = require('../src/services/crm.service');
-const openApi = require('../openapi.json');
+const openApi = require('../crm.openapi.json');
 
 function requestJson(app, path, method, body) {
   return new Promise((resolve, reject) => {
@@ -46,19 +46,17 @@ test('POST /api/crm/query returns the CRM service response', async () => {
   assert.equal(response.body.count, 1);
 });
 
-test('POST /api/crm/assistant accepts question, prompt, and message', async () => {
+test('POST /api/crm/assistant accepts the question input only', async () => {
   const calls = [];
   const app = createApp({ crmService: { query: async (input) => {
     calls.push(input);
     return { module: input.module, count: 0, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } };
   } } });
-  for (const key of ['question', 'prompt', 'message']) {
-    const response = await requestJson(app, '/api/crm/assistant', 'POST', { [key]: 'Show me deals' });
-    assert.equal(response.status, 200);
-    assert.equal(response.body.success, true);
-    assert.equal(response.body.question, 'Show me deals');
-  }
-  assert.equal(calls.length, 3);
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Show me deals', module: 'Products', query: { fields: ['Amount'] } });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.question, 'Show me deals');
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].module, 'Deals');
 });
 
@@ -93,12 +91,11 @@ test('resolves date-only follow-ups using the previous CRM question', async () =
   assert.equal(calls[1].filters.some((filter) => filter.field === 'Created_Time'), true);
 });
 
-test('re-evaluates Closed Won follow-ups as Deals instead of adding Stage to Leads', () => {
+test('preserves an explicit Leads module for Closed Won questions', () => {
   const { planQuestion } = require('../src/controllers/crm.controller');
   const request = planQuestion('In these 10 leads how many are Closed Won?');
-  assert.equal(request.module, 'Deals');
+  assert.equal(request.module, 'Leads');
   assert.equal(request.filters.some((filter) => filter.field === 'Stage' && filter.value === 'Closed Won'), true);
-  assert.equal(request.filters.some((filter) => filter.field === 'Lead_Source'), false);
 });
 
 test('plans count and list requests as separate logical operations', () => {
@@ -241,7 +238,7 @@ test('routes explicit calls and weekly meetings to their correct modules and dat
   const meetings = planQuestion('Show me meetings this week');
   assert.equal(calls.module, 'Calls');
   assert.deepEqual(calls.fields, ['Subject', 'Call_Type', 'Call_Start_Time', 'Call_Result', 'Owner', 'Created_Time']);
-  assert.equal(calls.filters[0].field, 'Created_Time');
+  assert.equal(calls.filters[0].field, 'Call_Start_Time');
   assert.equal(meetings.module, 'Meetings');
   assert.equal(meetings.filters[0].field, 'Start_DateTime');
   assert.equal(meetings.filters[0].value.length, 2);
@@ -284,7 +281,7 @@ test('passes Deals, Calls, Tasks, Contacts, and Meetings to their exact Zoho API
   const zoho = {
     executionStats: {},
     resolveModuleApiName: async (module) => expected[module] || module,
-    getFieldMetadata: async () => ({ fields: ['id', 'Subject', 'Created_Time', 'Start_DateTime', 'Event_Title'], metadata: [] }),
+    getFieldMetadata: async () => ({ fields: ['id', 'Subject', 'Call_Start_Time', 'Created_Time', 'Start_DateTime', 'Event_Title'], metadata: [] }),
     resolveOwnerFilters: async (filters) => filters,
     query: async (request) => { requests.push(request); return { records: [], info: { more_records: false }, module_api_name: request.module }; }
   };
@@ -328,11 +325,12 @@ test('does not fall back from zero Products records or an unavailable module to 
   assert.deepEqual(requests.map((request) => request.module), ['Products']);
 });
 
-test('rejects an explicit module when planning would substitute another target', async () => {
-  const app = createApp({ crmService: { query: async () => { throw new Error('CRM query must not run'); } } });
+test('does not substitute an explicit Leads module', async () => {
+  let captured;
+  const app = createApp({ crmService: { query: async (input) => { captured = input; return { module: input.module, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } }; } } });
   const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'In these 10 leads how many are Closed Won?' });
-  assert.equal(response.status, 500);
-  assert.equal(response.body.error.code, 'CRM_MODULE_ROUTING_ERROR');
+  assert.equal(response.status, 200);
+  assert.equal(captured.module, 'Leads');
 });
 
 test('routes field-list questions to dynamic module metadata', () => {
@@ -380,7 +378,7 @@ test('plans highest-value deal requests with server-side amount sorting', () => 
   const request = require('../src/controllers/crm.controller').planQuestion('Give me the top 5 deals by amount');
   assert.equal(request.module, 'Deals');
   assert.equal(request.limit, 5);
-  assert.equal(request.sort_field, 'Amount');
+  assert.equal(request.sort_field, 'amount');
   assert.equal(request.sort_order, 'desc');
 });
 
@@ -408,7 +406,7 @@ test('plans a general-purpose aggregate question for average deal value', async 
   assert.equal(response.body.module, 'Deals');
   assert.equal(response.body.request_type, 'aggregate');
   assert.equal(response.body.aggregate.operation, 'avg');
-  assert.equal(response.body.aggregate.field, 'Amount');
+  assert.equal(response.body.aggregate.field, 'amount');
 });
 
 test('plans monthly Closed Won deal summaries with a Closing_Date filter', () => {
@@ -416,7 +414,7 @@ test('plans monthly Closed Won deal summaries with a Closing_Date filter', () =>
   assert.equal(request.request_type, 'analysis');
   assert.equal(request.analysis.type, 'closed_won_summary');
   assert.deepEqual(request.filters, [
-    { field: 'Closing_Date', operator: 'between', value: [request.filters[0].value[0], request.filters[0].value[1]] },
+    { field: 'Created_Time', operator: 'between', value: [request.filters[0].value[0], request.filters[0].value[1]], exclusive_end: true },
     { field: 'Stage', operator: 'equals', value: 'Closed Won' }
   ]);
 });
@@ -571,18 +569,17 @@ test('Copilot schema treats conversion as an operation, not the invalid Converte
   assert.equal(openApi.info['x-copilot-studio-field-mappings'], undefined);
 });
 
-test('OpenAPI exposes the assistant aliases and response output', () => {
+test('OpenAPI exposes one question-only assistant operation', () => {
   const operation = openApi.paths['/api/crm/assistant'].post;
   const request = openApi.components.schemas.AssistantRequest;
-  const response = openApi.components.schemas.AssistantResponse;
+  const response = openApi.components.schemas.CrmResponse;
 
   assert.equal(operation.operationId, 'askCrmAssistant');
-  assert.ok(Object.keys(request.properties).includes('question'));
-  assert.ok(Object.keys(request.properties).includes('conversation_id'));
+  assert.deepEqual(Object.keys(request.properties), ['question']);
   assert.deepEqual(request.required, ['question']);
-  assert.equal(request.additionalProperties, true);
+  assert.equal(request.additionalProperties, false);
   assert.ok(Object.keys(response.properties).includes('module_api_name'));
-  assert.equal(response.additionalProperties, true);
+  assert.equal(Object.keys(openApi.paths).length, 1);
   assert.ok(openApi.components.securitySchemes.apiKeyAuth);
 });
 

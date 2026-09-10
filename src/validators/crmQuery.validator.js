@@ -159,9 +159,10 @@ function validateCrmQuery(body) {
     else {
       const sorts = Array.isArray(sort) ? sort : [sort];
       sorts.forEach((sortItem, index) => {
-        if (!sortItem || typeof sortItem !== 'object' || typeof sortItem.field !== 'string' || sortItem.field.length === 0) addError(`sort[${index}].field`, 'sort.field must be a non-empty string.');
-        else if (!metadataDriven && supportedFields && !supportedFields.includes(sortItem.field) && !isApiFieldName(sortItem.field)) addError(`sort[${index}].field`, invalidFieldMessage(sortItem.field));
-        if (!['asc', 'desc'].includes(sortItem?.order)) addError(`sort[${index}].order`, "sort.order must be either 'asc' or 'desc'.");
+        const path = Array.isArray(sort) ? `sort[${index}]` : 'sort';
+        if (!sortItem || typeof sortItem !== 'object' || typeof sortItem.field !== 'string' || sortItem.field.length === 0) addError(`${path}.field`, 'sort.field must be a non-empty string.');
+        else if (!metadataDriven && supportedFields && !supportedFields.includes(sortItem.field) && !isApiFieldName(sortItem.field)) addError(`${path}.field`, invalidFieldMessage(sortItem.field));
+        if (!['asc', 'desc'].includes(sortItem?.order)) addError(`${path}.order`, "sort.order must be either 'asc' or 'desc'.");
       });
     }
   }

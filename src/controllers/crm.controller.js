@@ -54,7 +54,7 @@ function createCrmController(crmService = new CrmService()) {
       recordCrmEvent('REQUEST_RECEIVED', diagnostics, { method: req.method, path: req.originalUrl });
       return runWithCrmDiagnostics(diagnostics, async () => {
        try {
-        const question = req.body?.question || req.body?.prompt || req.body?.message;
+        const question = req.body?.question;
         updateDiagnostics(diagnostics, { question: typeof question === 'string' ? question : 'not_reached', stage: 'question_parsed' });
         recordCrmEvent('QUESTION_PARSED', diagnostics, { question: diagnostics.question });
         if (typeof question !== 'string' || question.trim().length === 0) {
@@ -91,23 +91,7 @@ function createCrmController(crmService = new CrmService()) {
           filters: diagnostics.resolved_filters
         });
         assertExplicitModuleRouting(explicitModule, plannedRequest.module);
-        // Build a safe assistantRequest by starting from the planner result
-        let assistantRequest = { ...plannedRequest };
-        // Allow only a small set of client-provided overrides to keep the contract stable
-        const client = req.body || {};
-        if (typeof client.module === 'string' && client.module.trim()) assistantRequest.module = client.module.trim();
-        if (typeof client.request_type === 'string' && client.request_type.trim()) assistantRequest.request_type = client.request_type.trim();
-        if (client.limit != null) assistantRequest.limit = Number(client.limit) || assistantRequest.limit;
-        if (client.offset != null) assistantRequest.offset = Number(client.offset) || assistantRequest.offset;
-        if (typeof client.conversation_id === 'string' && client.conversation_id.trim()) assistantRequest.conversation_id = client.conversation_id.trim();
-        // Merge an optional `query` object from the client, but shallow-merge only
-        if (client.query && typeof client.query === 'object') {
-          assistantRequest = Object.assign({}, assistantRequest, client.query);
-        }
-        // Keep planner-controlled properties absent if planner did not set them
-        if (!Object.prototype.hasOwnProperty.call(plannedRequest, 'field_labels')) assistantRequest.field_labels = undefined;
-        if (!Object.prototype.hasOwnProperty.call(plannedRequest, 'module_api_name')) assistantRequest.module_api_name = undefined;
-        const result = await crmService.query(assistantRequest, undefined, diagnostics);
+        const result = await crmService.query(plannedRequest, undefined, diagnostics);
         updateDiagnostics(diagnostics, {
           resolved_module: result.module || diagnostics.resolved_module,
           module_api_name: result.module_api_name || diagnostics.module_api_name,
@@ -751,7 +735,8 @@ function detectRecordSort(lowerText, module) {
   if (/(oldest|first created|earliest)/.test(lowerText)) return { field: 'Created_Time', field_role: 'date', order: 'asc' };
   if (/(modified|updated)/.test(lowerText)) return { field: 'Modified_Time', field_role: 'modified', order: 'desc' };
   if (/(highest|largest|maximum|top|most expensive)/.test(lowerText) && /(amount|value|revenue|deal|price|cost)/.test(lowerText)) {
-    return module === 'Deals' ? { field: 'Amount', field_role: 'numeric', order: 'desc' } : { field: 'Amount', field_label: 'price', field_role: 'numeric', order: 'desc' };
+    const label = /price|cost/.test(lowerText) ? 'price' : 'amount';
+    return { field: label, field_label: label, field_role: 'numeric', order: 'desc' };
   }
   return { field: defaultSortField(module), field_role: 'date', order: 'desc' };
 }
@@ -759,7 +744,7 @@ function detectRecordSort(lowerText, module) {
 function detectMultiSort(lowerText, module) {
   const match = lowerText.match(/sort(?:ed)?\s+by\s+(.+?)(?=\s+(?:limit|top|offset)\b|[?.!]|$)/i);
   if (!match || !/\b(?:then|and)\b/.test(match[1])) return null;
-  const aliases = { amount: 'Amount', value: 'Amount', 'deal value': 'Amount', stage: 'Stage', 'closing date': 'Closing_Date', 'created time': 'Created_Time', created: 'Created_Time', modified: 'Modified_Time', updated: 'Modified_Time' };
+  const aliases = { amount: 'amount', value: 'amount', 'deal value': 'amount', price: 'price', cost: 'cost', stage: 'stage', 'closing date': 'closing date', 'created time': 'created time', created: 'created', modified: 'modified', updated: 'updated' };
   const fields = match[1].split(/\s+(?:then|and)\s+/i).map((part) => part.trim()).map((part) => {
     const direction = /\b(?:asc|ascending|lowest|oldest|first)\b/i.test(part) ? 'asc' : 'desc';
     const label = part.replace(/\b(?:asc|ascending|desc|descending|highest|lowest|oldest|newest|first|last)\b/gi, '').trim();
@@ -1000,6 +985,7 @@ function defaultSortField(module) {
   if (module === 'Accounts') return 'Created_Time';
   if (module === 'Contacts') return 'Created_Time';
   if (module === 'Meetings') return 'Start_DateTime';
+  if (module === 'Calls') return 'Call_Start_Time';
   return 'Created_Time';
 }
 
@@ -1028,10 +1014,10 @@ function extractAmountThreshold(lowerText) {
 }
 
 function extractFieldComparison(lowerText) {
-  const fieldPattern = '(amount|deal\\s+value|value|probability|unit\\s+price|qty_in_stock)';
+  const fieldPattern = '(amount|deal\\s+value|value|probability|price|unit\\s+price|cost|qty_in_stock)';
   const between = lowerText.match(new RegExp(`\\b${fieldPattern}\\s+(?:is\\s+)?between\\s+₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)\\s+and\\s+₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
   if (between) {
-    const fieldAliases = { amount: 'Amount', 'deal value': 'Amount', value: 'Amount', probability: 'Probability', 'unit price': 'Unit_Price', qty_in_stock: 'Qty_in_Stock' };
+    const fieldAliases = { amount: 'amount', 'deal value': 'amount', value: 'amount', probability: 'probability', price: 'price', 'unit price': 'price', cost: 'cost', qty_in_stock: 'qty_in_stock' };
     const semanticField = fieldAliases[between[1].replace(/\\s+/g, ' ').toLowerCase()];
     return semanticField ? { field: semanticField, operator: 'between', value: [Number(between[2].replace(/,/g, '')), Number(between[3].replace(/,/g, ''))] } : null;
   }
@@ -1041,12 +1027,14 @@ function extractFieldComparison(lowerText) {
   if (!match) return null;
   const operatorMap = { '>': 'greater_than', '>=': 'greater_equal', '<': 'less_than', '<=': 'less_equal', '=': 'equals', '!=': 'not_equals', 'greater than': 'greater_than', 'more than': 'greater_than', 'at least': 'greater_equal', 'less than': 'less_than', 'at most': 'less_equal', 'equal to': 'equals', 'not equal to': 'not_equals' };
   const fieldAliases = {
-    amount: 'Amount',
-    'deal value': 'Amount',
-    value: 'Amount',
-    probability: 'Probability',
-    'unit price': 'Unit_Price',
-    qty_in_stock: 'Qty_in_Stock'
+    amount: 'amount',
+    'deal value': 'amount',
+    value: 'amount',
+    probability: 'probability',
+    price: 'price',
+    'unit price': 'price',
+    cost: 'cost',
+    qty_in_stock: 'qty_in_stock'
   };
   const field = fieldAliases[match[1].replace(/\s+/g, ' ').toLowerCase()];
   return field ? { field, operator: operatorMap[match[2].toLowerCase()], value: Number(match[3].replace(/,/g, '')) } : null;
@@ -1220,11 +1208,14 @@ function dateFieldForQuestion(lowerText, module) {
     if (/(due|deadline)/.test(lowerText)) return 'Due_Date';
     return 'Created_Time';
   }
+  if (module === 'Calls') {
+    if (/(created|creation|new|added|entered)/.test(lowerText)) return 'Created_Time';
+    return 'Call_Start_Time';
+  }
   if (module !== 'Deals') return 'Created_Time';
   const closeDatePhrase = /(closing\s+date|close\s+date|closed\s+date|deal\s+close|deal close)/i;
   if (/(created|creation|new|added|entered|today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)/.test(lowerText)
-    && !closeDatePhrase.test(lowerText)
-    && !/(closed\s+won|closed-won)/.test(lowerText)) return 'Created_Time';
+    && !closeDatePhrase.test(lowerText)) return 'Created_Time';
   return 'Closing_Date';
 }
 
@@ -1232,17 +1223,18 @@ function dateFieldRoleForQuestion(lowerText, module) {
   if (module === 'Tasks' && /(due|deadline)/.test(lowerText)) return 'due';
   if (/(due|deadline)/.test(lowerText)) return 'due';
   if (/(modified|updated)/.test(lowerText)) return 'modified';
+  if (['Calls', 'Meetings'].includes(module) && !/(created|creation|new|added|entered)/.test(lowerText)) return 'activity';
   const closeDatePhrase = /(closing\s+date|close\s+date|closed\s+date|deal\s+close|deal close)/i;
   if (/(created|creation|new|added|entered|today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)/.test(lowerText)
-    && !closeDatePhrase.test(lowerText)
-    && !/(closed\s+won|closed-won)/.test(lowerText)) return 'created';
+    && !closeDatePhrase.test(lowerText)) return 'created';
   if (module === 'Deals') return 'closing';
   if (['Calls', 'Meetings'].includes(module)) return 'activity';
   return 'created';
 }
 
 function calendarFilter(field, value) {
-  if (field !== 'Created_Time') return { field, operator: 'between', value };
+  const datetimeFields = new Set(['Created_Time', 'Modified_Time', 'Call_Start_Time', 'Start_DateTime', 'End_DateTime']);
+  if (!datetimeFields.has(field)) return { field, operator: 'between', value };
   const exclusiveEnd = new Date(`${value[1]}T00:00:00Z`);
   exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
   return { field, operator: 'between', value: [value[0], exclusiveEnd.toISOString().slice(0, 10)], exclusive_end: true };
@@ -1287,12 +1279,12 @@ function toIsoDate(date) {
 }
 
 function detectAggregateOperation(lowerText) {
-  if (/(sorted by|order(?:ed)? by).*?(amount|deal value|revenue|price).*?(highest|lowest|top|largest|smallest)/.test(lowerText)) {
+  if (/(sort(?:ed)? by|order(?:ed)? by).*?(amount|deal value|revenue|price).*?(highest|lowest|top|largest|smallest)/.test(lowerText)) {
     return null;
   }
   const hasMeasure = /(amount|deal\s+value|revenue|unit\s+price|price|cost|quantity|qty)/.test(lowerText);
   if (!hasMeasure) return null;
-  const field = /(unit\s+price|price)/.test(lowerText) ? 'Unit_Price' : 'Amount';
+  const field = /(unit\s+price|price|cost)/.test(lowerText) ? 'price' : 'amount';
   if (/(average|avg)/.test(lowerText)) {
     return { operation: 'avg', field };
   }

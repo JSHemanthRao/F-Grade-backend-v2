@@ -19,7 +19,7 @@ const crmTool = new CrmTool();
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [{
     name: 'query_crm',
-    description: 'Send a natural-language CRM or Zoho Books read-only question to the backend API. Bare Quotes route to Zoho Books Estimates; explicit CRM Quotes remain in CRM.',
+    description: 'Send one natural-language, read-only Zoho CRM question to the CRM backend. The backend resolves the module, fields, dates, filters, sorting, and query API from live CRM metadata. Never use this tool for Zoho Books.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -28,13 +28,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           description: 'The natural-language CRM or Zoho Books read-only question to send to the backend.',
           minLength: 1,
           maxLength: 2000
-        },
-        conversation_id: { type: 'string' },
-        module: { type: 'string', description: 'Optional explicit CRM module (e.g., Leads, Contacts)' },
-        request_type: { type: 'string', enum: ['records','count','aggregate','search','analysis','bulk_read'], description: 'Optional explicit request type' },
-        limit: { type: 'integer', minimum: 1, maximum: 200 },
-        offset: { type: 'integer', minimum: 0 },
-        query: { type: 'object', description: 'Optional planner query overrides (module, filters, fields, sort, etc.)' }
+        }
+
       },
       required: ['question'],
       additionalProperties: false

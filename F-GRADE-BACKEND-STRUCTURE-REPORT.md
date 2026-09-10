@@ -8,7 +8,7 @@ Inspection was read-only. No backend source, configuration, OAuth, token, or tes
 F-Grade Backend/
 ├── package.json
 ├── package-lock.json
-├── openapi.json
+├── crm.openapi.json
 ├── README.md
 ├── SPEC_IMPLEMENTATION.md
 ├── .env.example
@@ -83,7 +83,7 @@ The tutorial repository is not the Node backend, but its skills directory is the
 
 - `package.json`: Node metadata, npm scripts, dependencies, Node `>=20` requirement.
 - `package-lock.json`: Locked npm dependency tree.
-- `openapi.json`: OpenAPI 3.0.3 description for the two assistant endpoints.
+- `crm.openapi.json`: The single authoritative OpenAPI 3.0.3 CRM assistant contract.
 - `.env.example`: Environment-variable names and example configuration.
 - `.gitignore`: Ignores `.env`, `node_modules`, logs, temporary files, and Python artifacts.
 - `README.md`: Mostly repeated repository title text; no useful architecture documentation.
@@ -430,18 +430,16 @@ The planner is implemented by `planQuestion` in `src/controllers/crm.controller.
 
 ## 10. Copilot Studio/OpenAPI
 
-`openapi.json` documents:
+`crm.openapi.json` documents the single Copilot operation:
 
 ```text
 POST /api/crm/assistant
-POST /api/crm/assistant/fast-summary
 ```
 
 Operation IDs:
 
 ```text
 askCrmAssistant
-askCrmAssistantFastSummary
 ```
 
 `AssistantRequest` properties:
@@ -557,7 +555,7 @@ Current test result:
 
 The failures are in `test/foundation.test.js`:
 
-1. Missing `x-copilot-studio-tool-description` in `openapi.json`.
+1. The CRM contract is maintained in `crm.openapi.json`.
 2. Expected legacy `definitions.AssistantRequest` and `definitions.AssistantResponse` are absent.
 
 ## 13. Configuration
@@ -775,7 +773,7 @@ src/validators/crmQuery.validator.js
 
 ### G. OpenAPI entry point
 
-`openapi.json`
+`crm.openapi.json`
 
 ### H. Test entry point
 
@@ -792,7 +790,7 @@ src/services/zohoCrm.service.js
 src/services/coql.service.js
 src/validators/crmQuery.validator.js
 src/constants/crmModules.js
-openapi.json
+crm.openapi.json
 test/foundation.test.js
 test/zoho.service.test.js
 ```

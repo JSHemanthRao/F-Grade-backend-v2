@@ -239,6 +239,7 @@ test('uses the Zoho Module Record Count API with datetime criteria', async () =>
   const zoho = new ZohoCrmService({
     get: async (url, options) => {
       requests.push({ url, options });
+      if (url.endsWith('/settings/modules')) return { status: 200, data: { modules: [{ api_name: 'Leads', module_name: 'Leads', plural_label: 'Leads', viewable: true, api_supported: true }] } };
       return { status: 200, data: { count: 188 } };
     }
   }, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
@@ -248,8 +249,9 @@ test('uses the Zoho Module Record Count API with datetime criteria', async () =>
   });
   const result = await zoho.count('Leads', [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-08-25'] }]);
   assert.equal(result.count, 188);
-  assert.equal(requests[0].url, 'https://www.zohoapis.com/crm/v8/Leads/actions/count');
-  assert.match(requests[0].options.params.criteria, /Created_Time:between:2026-08-01T00:00:00\+05:30,2026-08-25T23:59:59\+05:30/);
+  const countRequest = requests.find((request) => request.url.endsWith('/Leads/actions/count'));
+  assert.ok(countRequest);
+  assert.match(countRequest.options.params.criteria, /Created_Time:between:2026-08-01T00:00:00\+05:30,2026-08-25T23:59:59\+05:30/);
 });
 
 test('resolves owner names before CRM criteria generation', async () => {
@@ -814,7 +816,9 @@ test('concurrent requests share one OAuth refresh request', async () => {
 
 test('resolves display field labels from live metadata', async () => {
   const zoho = new ZohoCrmService({
-    get: async (url) => ({ data: { fields: [
+    get: async (url) => url.endsWith('/settings/modules')
+      ? { data: { modules: [{ api_name: 'Leads', module_name: 'Leads', plural_label: 'Leads', viewable: true, api_supported: true }] } }
+      : ({ data: { fields: [
       { api_name: 'Email', display_label: 'Email Address', data_type: 'email' },
       { api_name: 'Custom_Field__s', display_label: 'Customer Segment', data_type: 'picklist' }
     ] } })
@@ -831,6 +835,7 @@ test('uses the Zoho Search word parameter for text search requests', async () =>
   const zoho = new ZohoCrmService({
     get: async (url, options) => {
       request = { url, options };
+      if (url.endsWith('/settings/modules')) return { data: { modules: [{ api_name: 'Contacts', module_name: 'Contacts', plural_label: 'Contacts', viewable: true, api_supported: true }] } };
       return { data: { data: [{ id: '1' }], info: { more_records: false } } };
     }
   }, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
@@ -849,6 +854,7 @@ test('supports organization, audit, files, and bounded bulk read operations', as
   const zoho = new ZohoCrmService({
     get: async (url) => {
       requests.push({ method: 'get', url });
+      if (url.endsWith('/settings/modules')) return { data: { modules: [{ api_name: 'Leads', module_name: 'Leads', plural_label: 'Leads', viewable: true, api_supported: true }] } };
       if (url.endsWith('/org')) return { data: { org: { id: 'org-1' } } };
       if (url.endsWith('/settings/audit_log_export')) return { data: { audit_log_export: [{ id: 'audit-1' }] } };
       if (url.endsWith('/files')) return { data: { id: 'file-1' } };

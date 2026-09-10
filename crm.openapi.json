@@ -3,7 +3,8 @@
   "info": {
     "title": "Zoho CRM Assistant (Read-only)",
     "version": "1.0.0",
-    "description": "This is a read-only Zoho CRM assistant. Use this tool for CRM modules including Leads, Contacts, Accounts, Deals, Products, Calls, Tasks, Meetings (maps to Events), Events, Quotes, and custom CRM modules. The user's explicitly requested CRM module is authoritative. Never substitute another CRM module and never route CRM requests to Zoho Books. The endpoint accepts a natural-language question and returns a normalized CRM response."
+    "description": "This is a read-only Zoho CRM assistant. The only Copilot-controlled input is the user's complete natural-language question. The backend resolves domain, module, fields, dates, filters, sorting, grouping, aggregation, pagination, relationships, and the Zoho read API from live CRM metadata. Meetings map to Events. Never route CRM requests to Zoho Books, invent API names, or substitute another module.",
+    "x-copilot-studio-tool-description": "Send exactly one input: question. Do not send module, module_api_name, request_type, query, field, fields, filters, operator, value, limit, offset, sort, group_by, aggregation, or COQL. The backend is authoritative and performs live module and field metadata resolution. Products price must resolve against Products metadata; Calls use Calls metadata; Meetings map only to Events metadata. Never emit a Leads field named Converted; conversion questions must remain natural language."
   },
   "servers": [
     {
@@ -26,10 +27,7 @@
               },
               "examples": {
                 "simple": {
-                  "value": { "question": "give me today's leads" }
-                },
-                "explicitModule": {
-                  "value": { "question": "show meetings this week", "module": "Meetings" }
+                  "value": { "question": "Show me meetings this week." }
                 }
               }
             }
@@ -50,17 +48,17 @@
           "429": { "description": "Rate limit" },
           "500": { "description": "Server error" }
         },
-        "security": [ { "bearerAuth": [] } ]
+        "security": [ { "apiKeyAuth": [] } ]
       }
     }
   },
   "components": {
     "securitySchemes": {
-      "bearerAuth": {
-        "type": "http",
-        "scheme": "bearer",
-        "bearerFormat": "OAuth2",
-        "description": "OAuth2 access token is required by the backend. Do not include refresh tokens, client secrets, or other credentials in the OpenAPI file."
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Optional when BACKEND_API_KEY is not configured; required when it is configured. Zoho OAuth credentials remain server-side."
       }
     },
     "schemas": {
@@ -71,42 +69,9 @@
           "question": {
             "type": "string",
             "description": "Natural-language read-only Zoho CRM question. Preserve the user's explicitly requested CRM module and date range. Examples: 'give me today's leads', 'show meetings this week', 'compare calls and meetings this month'."
-          },
-          "conversation_id": {
-            "type": "string",
-            "description": "Optional conversation identifier to enable conversational pagination and follow-ups."
-          },
-          "module": {
-            "type": "string",
-            "description": "Optional CRM display module explicitly identified by the user. Do not substitute another module. Meetings maps to Events. Examples: Leads, Contacts, Deals, Products, Calls, Tasks, Meetings, Quotes."
-          },
-          "module_api_name": {
-            "type": "string",
-            "description": "Optional exact Zoho CRM API module name resolved from live CRM metadata. Do not invent this value."
-          },
-          "request_type": {
-            "type": "string",
-            "description": "Optional read-only operation: records, count, aggregate, search, analysis, or bulk_read.",
-            "enum": ["records","count","aggregate","search","analysis","bulk_read"]
-          },
-          "query": {
-            "type": "object",
-            "description": "Optional planner query object. The backend resolves module, fields, filters, sort, grouping, and date range from the natural-language question; use this only to override or supply explicit planner details. Keep simple primitives."
-          },
-          "limit": {
-            "type": "integer",
-            "description": "Maximum number of CRM records to return. Default 20. Maximum 200.",
-            "minimum": 1,
-            "maximum": 200,
-            "default": 20
-          },
-          "offset": {
-            "type": "integer",
-            "description": "Number of records to skip for pagination.",
-            "minimum": 0,
-            "default": 0
           }
-        }
+        },
+        "additionalProperties": false
       },
       "Pagination": {
         "type": "object",
