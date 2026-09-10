@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { getZohoConfig } = require('../config/zoho.config');
 const { ZohoAuthService } = require('./zohoAuth.service');
-const { buildFilterClauses, buildWhereClause, buildModuleCriteria } = require('./coql.service');
+const { buildFilterClauses, buildWhereClause, buildLogicalFilterClause, buildModuleCriteria } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
 const { env } = require('../config/env');
@@ -99,7 +99,7 @@ class ZohoCrmService {
 
     const token = await this.authService.getAccessToken();
     const requestedModule = request.module;
-    const resolvedModule = request.module_api_name || await this.resolveModuleApiName(requestedModule, { preferStatic: true });
+    const resolvedModule = request.module_api_name || await this.resolveModuleApiName(requestedModule);
     const expectedModuleApiName = CRM_API_NAMES[requestedModule];
     if (expectedModuleApiName && resolvedModule !== expectedModuleApiName) {
       throw createAppError(
@@ -164,37 +164,11 @@ class ZohoCrmService {
       const upstreamMessage = String(error.response?.data?.message || error.message || '');
       log('error', `[ZOHO QUERY FAILURE] operation=record_query status=${error.response?.status || 'unknown'} message=${upstreamMessage.replace(/\n/g, ' ')}`);
 
-      // If Zoho COQL failed due to unsupported column(s), retry using the REST records API as a fallback.
-      try {
-        const isUnsupported = /unsupported column/i.test(upstreamMessage)
-          || /unsupported columns/i.test(upstreamMessage)
-          || /unsupported field/i.test(upstreamMessage)
-          || /column given seems to be invalid/i.test(upstreamMessage)
-          || /column given is invalid/i.test(upstreamMessage)
-          || /column .* invalid/i.test(upstreamMessage);
-        if (isUnsupported && request) {
-          const moduleMatch = String(selectQuery).match(/from\s+([\w_\.]+)/i);
-          const moduleName = moduleMatch ? moduleMatch[1] : request.module;
-          const fields = Array.isArray(request.fields) && request.fields.length > 0 ? request.fields.join(',') : undefined;
-          log('warn', `[ZOHO QUERY FALLBACK] COQL unsupported column detected; falling back to REST GET for module=${moduleName}`);
-          const params = {};
-          if (fields) params.fields = fields;
-          params.per_page = request.limit || 200;
-          // Use GET /{module} to retrieve records (REST endpoint handles complex fields better)
-          const restResponse = await this.executeRequest('get', `${apiBaseUrl}/${moduleName}`, { config: { params, headers: { Authorization: `Zoho-oauthtoken ${token}` }, timeout: config.timeoutMs }, retrySameRequest: false });
-          const records = Array.isArray(restResponse.data?.data) ? restResponse.data.data : [];
-          const info = restResponse.data?.info || {};
-          log('info', `[ZOHO QUERY FALLBACK] REST returned ${records.length} records for module=${moduleName}`);
-          return { records, info, module_api_name: moduleName };
-        }
-      } catch (fallbackErr) {
-        log('error', `[ZOHO QUERY FALLBACK FAILURE] ${String(fallbackErr?.message || fallbackErr)}`);
-        // fall through to throw original error below
-      }
-
-      throw createAppError(normalizeZohoErrorCode(error, 'ZOHO_QUERY_ERROR'), 'Unable to retrieve CRM data.', mapZohoStatus(error.response?.status, error.response?.data?.code), {
+      throw createAppError(normalizeZohoErrorCode(error, 'ZOHO_READ_ERROR'), upstreamMessage || 'Unable to retrieve CRM data.', mapZohoStatus(error.response?.status, error.response?.data?.code), {
         ...safeZohoDetails(error, 'ZohoCRM.coql.READ'),
-        operation: 'record_query'
+        operation: 'record_query',
+        query_stage: 'zoho_execution',
+        query: selectQuery
       });
     }
   }
@@ -230,7 +204,7 @@ class ZohoCrmService {
   }
 
   async count(module, filters = []) {
-    const moduleName = await this.resolveModuleApiName(module, { preferStatic: true });
+    const moduleName = await this.resolveModuleApiName(module);
     validateModuleFieldScope({ module: moduleName, filters });
     let config;
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
@@ -278,7 +252,7 @@ class ZohoCrmService {
     if (!module || !Array.isArray(fields) || fields.length === 0) {
       throw createAppError('INVALID_BULK_READ_REQUEST', 'Bulk read requires a module and at least one field.', 400);
     }
-    const moduleName = module_api_name || await this.resolveModuleApiName(module, { preferStatic: true });
+    const moduleName = module_api_name || await this.resolveModuleApiName(module);
     validateModuleFieldScope({ module: moduleName, fields });
     const response = await this.readPost('/read', {
       query: { module: { api_name: moduleName }, fields, ...(criteria ? { criteria } : {}) }
@@ -348,7 +322,7 @@ class ZohoCrmService {
   }
 
   async getRecordsByIds(module, ids, fields) {
-    const moduleName = await this.resolveModuleApiName(module, { preferStatic: true });
+    const moduleName = await this.resolveModuleApiName(module);
     validateModuleFieldScope({ module: moduleName, fields });
     let config;
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
@@ -363,7 +337,7 @@ class ZohoCrmService {
   }
 
   async searchRecords(module, fields, filters, page = 1, perPage = 200, search = {}) {
-    const moduleName = await this.resolveModuleApiName(module, { preferStatic: true });
+    const moduleName = await this.resolveModuleApiName(module);
     validateModuleFieldScope({ module: moduleName, fields, filters });
     let config;
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
@@ -386,7 +360,7 @@ class ZohoCrmService {
   }
 
   async resolveFieldApiNames(module, labels) {
-    const metadata = await this.getFieldMetadata(await this.resolveModuleApiName(module, { preferStatic: true }));
+    const metadata = await this.getFieldMetadata(await this.resolveModuleApiName(module));
     const normalized = new Map();
     for (const field of metadata.metadata || []) {
       for (const value of [field.api_name, field.display_label, field.field_label, field.label]) {
@@ -431,10 +405,6 @@ class ZohoCrmService {
       log('info', `[CRM FIELD METADATA] module_api_name=${module} cache=hit field_count=${cached.value.fields.length}`);
       return cached.value;
     }
-    if (typeof this.httpClient.get !== 'function' && CRM_API_NAMES[module]) {
-      const staticFields = require('../constants/crmModules').CRM_MODULES[module] || [];
-      if (staticFields.length > 0) return { fields: staticFields, metadata: [] };
-    }
     const startedAt = Date.now();
     log('info', `[CRM FIELD METADATA] module_api_name=${module} lookup=start`);
     let config;
@@ -465,6 +435,10 @@ class ZohoCrmService {
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
       if (error.code === 'ZOHO_METADATA_EMPTY') throw error;
+      if (typeof this.httpClient.get !== 'function' && CRM_API_NAMES[module]) {
+        const staticFields = require('../constants/crmModules').CRM_MODULES[module] || [];
+        if (staticFields.length > 0) return { fields: staticFields, metadata: [] };
+      }
       throw createAppError(
         normalizeZohoErrorCode(error, 'ZOHO_METADATA_ERROR'),
         'Unable to verify Zoho CRM field metadata.',
@@ -599,11 +573,15 @@ class ZohoCrmService {
   }
 }
 
-function buildDynamicCoqlQuery({ module, fields, filters, sort }) {
+function buildDynamicCoqlQuery({ module, fields, filters, filter_expression: filterExpression, sort, having_filter: havingFilter }) {
   const clauses = buildFilterClauses(filters || []);
   let query = `select ${fields.join(', ')} from ${module}`;
-  query += ` where ${clauses.length > 0 ? buildWhereClause(clauses) : '(id is not null)'}`;
-  if (sort) query += ` order by ${sort.field} ${sort.order}`;
+  query += ` where ${filterExpression ? buildLogicalFilterClause(filterExpression) : (clauses.length > 0 ? buildWhereClause(clauses) : '(id is not null)')}`;
+  if (sort) {
+    const sorts = Array.isArray(sort) ? sort : [sort];
+    query += ` order by ${sorts.map(({ field, order }) => `${field} ${order}`).join(', ')}`;
+  }
+  if (havingFilter) query += ` having ${buildWhereClause(buildFilterClauses([havingFilter]))}`;
   return query;
 }
 

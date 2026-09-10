@@ -331,6 +331,9 @@ function planQuestion(question) {
   }
 
   const lower = text.toLowerCase();
+  if (!/\bprice\s+books?\b/.test(lower) && /\b(?:zoho\s+books?|books?|bills?|expenses?|payments?|banking|books?\s+invoices?|books?\s+items?)\b/.test(lower)) {
+    throw createAppError('DOMAIN_AMBIGUOUS', 'This backend handles Zoho CRM only. Books resources must use the Books integration.', 400, { requested_domain: 'Books', supported_domain: 'CRM' });
+  }
   const detectedModule = extractExplicitModule(lower) || detectModule(lower);
   const comparedModules = extractComparedModules(lower);
   if (comparedModules.length > 1 && !isComprehensiveSalesPerformanceRequest(lower) && /\b(?:compare|versus|vs|difference|higher|lower|more|less)\b/.test(lower)) {
@@ -394,12 +397,14 @@ function planQuestion(question) {
   const module = detectedModule;
   const requestedLimit = extractRecordLimit(lower);
   const recordSort = detectRecordSort(lower, module);
+  const sortPlan = detectMultiSort(lower, module) || recordSort;
   const filters = [];
   const fieldLabels = extractFieldLabels(lower);
   const searchTerm = extractSearchTerm(text);
   if (searchTerm) {
     return {
       module,
+      module_api_name: CRM_API_NAMES[module],
       complexity: 'MODERATE',
       request_type: 'search',
       fields: ['id'],
@@ -504,20 +509,18 @@ function planQuestion(question) {
   if (fieldComparison && !filters.some((filter) => filter.field === fieldComparison.field)) filters.push(fieldComparison);
   const amountThreshold = extractAmountThreshold(lower);
   if (amountThreshold && !fieldComparison) filters.push({ field: 'Amount', operator: 'greater_than', value: amountThreshold.value });
+  const excludedPicklist = extractExcludedPicklistFilter(lower);
+  if (excludedPicklist) filters.push(excludedPicklist);
   const semanticFilter = extractSemanticFilter(lower);
-  if (semanticFilter) filters.push(semanticFilter);
+  if (semanticFilter && !excludedPicklist) filters.push(semanticFilter);
 
   if (/(closed won|closed-won|won deals|won deal)/.test(lower)) {
     filters.push({ field: 'Stage', operator: 'equals', value: 'Closed Won' });
   }
 
-  if (module === 'Leads' && /(closed won|closed-won)/.test(lower) && !/(lead status|lead_status)/.test(lower)) {
-    return planQuestion(text.replace(/\bleads?\b/gi, 'deals'));
-  }
-
   if (/(closed lost|closed-lost|lost deals|lost deal)/.test(lower)
     && !/not\s+closed\s+lost|is\s+not\s+closed\s+lost|!=\s*closed\s+lost|not_equals/.test(lower)
-    && !filters.some((filter) => filter.field === 'Stage' && (filter.operator === 'not_equals' || String(filter.value || '').toLowerCase() === 'closed lost')) ) {
+    && !filters.some((filter) => filter.field === 'Stage' && (filter.operator === 'not_equals' || filter.operator === 'not_in' || String(filter.value || '').toLowerCase() === 'closed lost')) ) {
     filters.push({ field: 'Stage', operator: 'equals', value: 'Closed Lost' });
   }
 
@@ -678,8 +681,7 @@ function planQuestion(question) {
       ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
       filters,
       date_field_role: dateFieldRole,
-      sort_field: recordSort.field,
-      sort_order: recordSort.order,
+      ...(Array.isArray(sortPlan) ? { sort: sortPlan } : { sort_field: sortPlan.field, sort_order: sortPlan.order }),
       limit: requestedLimit,
       offset: 0
     };
@@ -694,8 +696,7 @@ function planQuestion(question) {
     ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
     filters,
     date_field_role: dateFieldRole,
-    sort_field: recordSort.field,
-    sort_order: recordSort.order,
+    ...(Array.isArray(sortPlan) ? { sort: sortPlan } : { sort_field: sortPlan.field, sort_order: sortPlan.order }),
     limit: requestedLimit,
     offset: 0
   };
@@ -753,6 +754,19 @@ function detectRecordSort(lowerText, module) {
     return module === 'Deals' ? { field: 'Amount', field_role: 'numeric', order: 'desc' } : { field: 'Amount', field_label: 'price', field_role: 'numeric', order: 'desc' };
   }
   return { field: defaultSortField(module), field_role: 'date', order: 'desc' };
+}
+
+function detectMultiSort(lowerText, module) {
+  const match = lowerText.match(/sort(?:ed)?\s+by\s+(.+?)(?=\s+(?:limit|top|offset)\b|[?.!]|$)/i);
+  if (!match || !/\b(?:then|and)\b/.test(match[1])) return null;
+  const aliases = { amount: 'Amount', value: 'Amount', 'deal value': 'Amount', stage: 'Stage', 'closing date': 'Closing_Date', 'created time': 'Created_Time', created: 'Created_Time', modified: 'Modified_Time', updated: 'Modified_Time' };
+  const fields = match[1].split(/\s+(?:then|and)\s+/i).map((part) => part.trim()).map((part) => {
+    const direction = /\b(?:asc|ascending|lowest|oldest|first)\b/i.test(part) ? 'asc' : 'desc';
+    const label = part.replace(/\b(?:asc|ascending|desc|descending|highest|lowest|oldest|newest|first|last)\b/gi, '').trim();
+    const field = aliases[label] || aliases[label.replace(/\s+/g, ' ')];
+    return field ? { field, order: direction } : null;
+  }).filter(Boolean);
+  return fields.length > 1 ? fields : null;
 }
 
 function buildAssistantAnswer(question, result) {
@@ -1014,9 +1028,15 @@ function extractAmountThreshold(lowerText) {
 }
 
 function extractFieldComparison(lowerText) {
-  const field = '(amount|deal\\s+value|value|probability|unit\\s+price|qty_in_stock)';
-  const symbols = lowerText.match(new RegExp(`${field}\\s*(>=|<=|!=|=|>|<)\\s*₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
-  const words = lowerText.match(new RegExp(`\\b${field}\\s+(greater than|more than|at least|less than|at most|equal to|not equal to)\\s*₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
+  const fieldPattern = '(amount|deal\\s+value|value|probability|unit\\s+price|qty_in_stock)';
+  const between = lowerText.match(new RegExp(`\\b${fieldPattern}\\s+(?:is\\s+)?between\\s+₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)\\s+and\\s+₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
+  if (between) {
+    const fieldAliases = { amount: 'Amount', 'deal value': 'Amount', value: 'Amount', probability: 'Probability', 'unit price': 'Unit_Price', qty_in_stock: 'Qty_in_Stock' };
+    const field = fieldAliases[between[1].replace(/\\s+/g, ' ').toLowerCase()];
+    return field ? { field, operator: 'between', value: [Number(between[2].replace(/,/g, '')), Number(between[3].replace(/,/g, ''))] } : null;
+  }
+  const symbols = lowerText.match(new RegExp(`${fieldPattern}\\s*(>=|<=|!=|=|>|<)\\s*₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
+  const words = lowerText.match(new RegExp(`\\b${fieldPattern}\\s+(greater than|more than|at least|less than|at most|equal to|not equal to)\\s*₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
   const match = symbols || words;
   if (!match) return null;
   const operatorMap = { '>': 'greater_than', '>=': 'greater_equal', '<': 'less_than', '<=': 'less_equal', '=': 'equals', '!=': 'not_equals', 'greater than': 'greater_than', 'more than': 'greater_than', 'at least': 'greater_equal', 'less than': 'less_than', 'at most': 'less_equal', 'equal to': 'equals', 'not equal to': 'not_equals' };
@@ -1058,6 +1078,13 @@ function extractSemanticFilter(lowerText) {
   }
   const normalizedValue = field === 'Stage' ? value.replace(/^\s*['"]|['"]\s*$/g, '').replace(/\s+/g, ' ').trim() : value.trim();
   return value ? { field, operator: operators[operatorText] || 'equals', value: normalizedValue } : null;
+}
+
+function extractExcludedPicklistFilter(lowerText) {
+  const match = lowerText.match(/(?:exclude|excluding|not\s+in)\s+(?:the\s+)?(stage|status)\s+(?:values?\s+)?(.+?)(?=\s+(?:sort|created|updated|limit)\b|[?.!]|$)/i);
+  if (!match) return null;
+  const values = match[2].split(/\s*(?:,|\bor\b)\s*/i).map((value) => value.replace(/^and\s+/i, '').trim()).filter(Boolean);
+  return values.length > 0 ? { field: match[1].toLowerCase() === 'stage' ? 'Stage' : 'Status', operator: 'not_in', value: values } : null;
 }
 
 function extractFieldLabels(lowerText) {
@@ -1196,7 +1223,8 @@ function dateFieldForQuestion(lowerText, module) {
   if (module !== 'Deals') return 'Created_Time';
   const closeDatePhrase = /(closing\s+date|close\s+date|closed\s+date|deal\s+close|deal close)/i;
   if (/(created|creation|new|added|entered|today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)/.test(lowerText)
-    && !closeDatePhrase.test(lowerText)) return 'Created_Time';
+    && !closeDatePhrase.test(lowerText)
+    && !/(closed\s+won|closed-won)/.test(lowerText)) return 'Created_Time';
   return 'Closing_Date';
 }
 
@@ -1206,7 +1234,8 @@ function dateFieldRoleForQuestion(lowerText, module) {
   if (/(modified|updated)/.test(lowerText)) return 'modified';
   const closeDatePhrase = /(closing\s+date|close\s+date|closed\s+date|deal\s+close|deal close)/i;
   if (/(created|creation|new|added|entered|today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)/.test(lowerText)
-    && !closeDatePhrase.test(lowerText)) return 'created';
+    && !closeDatePhrase.test(lowerText)
+    && !/(closed\s+won|closed-won)/.test(lowerText)) return 'created';
   if (module === 'Deals') return 'closing';
   if (['Calls', 'Meetings'].includes(module)) return 'activity';
   return 'created';

@@ -8,6 +8,7 @@ const CRM_OPERATORS = Object.freeze([
   'greater_equal',
   'less_equal',
   'in',
+  'not_in',
   'between',
   'is_null',
   'is_not_null'

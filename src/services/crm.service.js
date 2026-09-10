@@ -43,6 +43,7 @@ class CrmService {
       return runWithCrmDiagnostics(diagnostics, () => this.query(input, executionContext));
     }
     diagnostics = activeDiagnostics;
+    if (input?.domain && input.domain !== 'CRM') throw createAppError('DOMAIN_AMBIGUOUS', 'Only the CRM domain is supported by this service.', 400, { requested_domain: input.domain, supported_domain: 'CRM' });
     rejectForbiddenInternalFieldNames(input);
     const executionId = randomUUID();
     const startedAt = Date.now();
@@ -69,7 +70,7 @@ class CrmService {
       normalizedInput = {
         ...normalizedInput,
         metadata_driven: true,
-        module_api_name: normalizedInput.module_api_name || await this.zohoService.resolveModuleApiName(normalizedInput.module)
+        module_api_name: await this.zohoService.resolveModuleApiName(normalizedInput.module)
       };
       updateDiagnostics(diagnostics, { module_api_name: normalizedInput.module_api_name, stage: 'module_metadata_response' });
       recordCrmEvent('MODULE_METADATA_RESPONSE', diagnostics, { module: normalizedInput.module, module_api_name: normalizedInput.module_api_name });
@@ -138,60 +139,27 @@ class CrmService {
       this.logExecution(executionId, startedAt, statsAtStart, 'aggregate');
       return result;
     }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_conversion') {
-      const result = await this.leadConversionAnalysis(request);
-      this.logExecution(executionId, startedAt, statsAtStart, 'lead_conversion');
-      return result;
-    }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'highest_creation_day') {
-      const result = await this.highestCreationDayAnalysis(request, executionContext);
-      this.logExecution(executionId, startedAt, statsAtStart, 'highest_creation_day');
-      return result;
-    }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_closed_won_conversion') {
-      const result = await this.leadClosedWonConversionAnalysis(request, executionContext);
-      this.logExecution(executionId, startedAt, statsAtStart, 'lead_closed_won_conversion');
-      return result;
-    }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'conversion_funnel') {
-      const result = await this.conversionFunnelAnalysis(request, executionContext);
-      this.logExecution(executionId, startedAt, statsAtStart, 'conversion_funnel');
-      return result;
-    }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_source_report') {
-      const result = await this.leadSourceReport(request, executionContext);
-      this.logExecution(executionId, startedAt, statsAtStart, 'lead_source_report');
-      return result;
-    }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'lead_source_conversion_report') {
-      const result = await this.leadSourceConversionReport(request, executionContext);
-      this.logExecution(executionId, startedAt, statsAtStart, 'lead_source_conversion_report');
-      return result;
-    }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'owner_performance') {
-      const result = await this.ownerPerformanceReport(request, executionContext);
-      this.logExecution(executionId, startedAt, statsAtStart, 'owner_performance');
-      return result;
-    }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'sales_performance') {
-      const result = await this.salesPerformanceAnalysis(request, executionContext);
-      this.logExecution(executionId, startedAt, statsAtStart, 'sales_performance');
-      return result;
-    }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'today_activity') {
-      const result = await this.todayActivityAnalysis(request, executionContext);
-      this.logExecution(executionId, startedAt, statsAtStart, 'today_activity');
-      return result;
-    }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'closed_won_summary') {
-      const result = await this.closedWonSummary(request, executionContext);
-      this.logExecution(executionId, startedAt, statsAtStart, 'closed_won_summary');
-      return result;
-    }
-    if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'count_and_records') {
-      const result = await this.countAndRecords(request, normalizedInput.retrieve_all === true, executionContext);
-      this.logExecution(executionId, startedAt, statsAtStart, 'count_and_records');
-      return result;
+    if (request.request_type === 'analysis') {
+      const analysisType = normalizedInput.analysis?.type;
+      const analysisHandlers = {
+        lead_conversion: () => this.leadConversionAnalysis(request),
+        highest_creation_day: () => this.highestCreationDayAnalysis(request, executionContext),
+        lead_closed_won_conversion: () => this.leadClosedWonConversionAnalysis(request, executionContext),
+        conversion_funnel: () => this.conversionFunnelAnalysis(request, executionContext),
+        lead_source_report: () => this.leadSourceReport(request, executionContext),
+        lead_source_conversion_report: () => this.leadSourceConversionReport(request, executionContext),
+        owner_performance: () => this.ownerPerformanceReport(request, executionContext),
+        sales_performance: () => this.salesPerformanceAnalysis(request, executionContext),
+        today_activity: () => this.todayActivityAnalysis(request, executionContext),
+        closed_won_summary: () => this.closedWonSummary(request, executionContext),
+        count_and_records: () => this.countAndRecords(request, normalizedInput.retrieve_all === true, executionContext)
+      };
+      const handler = analysisHandlers[analysisType];
+      if (handler) {
+        const result = await handler();
+        this.logExecution(executionId, startedAt, statsAtStart, analysisType);
+        return result;
+      }
     }
     if (request.request_type === 'analysis' && normalizedInput.analysis?.type === 'metadata_fields') {
       const moduleName = await this.zohoService.resolveModuleApiName(normalizedInput.module_name || normalizedInput.module);
@@ -220,6 +188,10 @@ class CrmService {
       return { module: 'Files', request_type: 'files', count: result.files.length, data: result.files, pagination: { limit: request.limit, offset: request.offset, returned: result.files.length, more_records: Boolean(result.info.more_records) } };
     }
     const result = await this.zohoService.query(request);
+    const acceptedResponseModules = new Set([request.module_api_name, request.module].filter(Boolean));
+    if (result.module_api_name && request.module_api_name && !acceptedResponseModules.has(result.module_api_name)) {
+      throw createAppError('MODULE_RESPONSE_MISMATCH', `Zoho returned module '${result.module_api_name}' for requested module '${request.module_api_name}'.`, 502, { requested_module: request.module, requested_module_api_name: request.module_api_name, response_module_api_name: result.module_api_name, stage: 'result_validation' });
+    }
     const data = result.records.map(sanitizeZohoRecord);
     const info = result.info || {};
 
@@ -271,7 +243,7 @@ class CrmService {
     return {
       request_type: 'comparison',
       module: request.module,
-      module_api_name: request.module_api_name || await this.zohoService.resolveModuleApiName(request.module, { preferStatic: true }),
+      module_api_name: request.module_api_name || await this.zohoService.resolveModuleApiName(request.module),
       fields: request.fields,
       filters: request.filters,
       comparison: comparisonResult,
@@ -339,9 +311,10 @@ class CrmService {
   async aggregate(request, aggregate) {
     validateAggregateQuery({ module: request.module, fields: request.fields, filters: request.filters, aggregate, groupBy: request.group_by, sort: request.sort, metadataValidated: true });
     const expression = `${aggregate.operation.toUpperCase()}(${aggregate.field})`;
-    const moduleApiName = request.module_api_name || CRM_API_NAMES[request.module];
+    const moduleApiName = request.module_api_name
+      || (typeof this.zohoService.resolveModuleApiName === 'function' ? await this.zohoService.resolveModuleApiName(request.module) : CRM_API_NAMES[request.module]);
     if (!moduleApiName) throw createAppError('MODULE_UNAVAILABLE', `No Zoho API module mapping exists for '${request.module}'.`, 404, { requested_module: request.module, resolved_api_name: null, reason: 'No exact module mapping is available.' });
-    const selectQuery = `select ${request.group_by ? `${request.group_by}, ` : ''}${expression} from ${moduleApiName} where ${buildWhereClause(buildFilterClauses(request.filters))}${request.group_by ? ` group by ${request.group_by}` : ''}`;
+    const selectQuery = `select ${request.group_by ? `${request.group_by}, ` : ''}${expression} from ${moduleApiName} where ${buildWhereClause(buildFilterClauses(request.filters))}${request.group_by ? ` group by ${request.group_by}` : ''}${request.having_filter ? ` having ${buildWhereClause(buildFilterClauses([request.having_filter]))}` : ''}`;
     const result = await this.zohoService.aggregate(selectQuery);
     const aggregateKey = expression;
     const rows = result.rows.map((row) => ({
@@ -986,9 +959,11 @@ async function validateMetadataFields(zohoService, request) {
   const fields = [
     ...(Array.isArray(request.fields) ? request.fields : []),
     ...(Array.isArray(request.filters) ? request.filters.map((filter) => filter.field) : []),
+    ...collectExpressionFields(request.filter_expression),
     request.aggregate?.field,
     request.group_by,
-    request.sort?.field
+    request.having_filter?.field,
+    ...(Array.isArray(request.sort) ? request.sort.map((sort) => sort.field) : [request.sort?.field])
   ].filter(Boolean);
   const missing = [...new Set(fields.filter((field) => !metadata.fields.includes(field)))];
   if (missing.length > 0) throw createAppError('FIELD_NOT_AVAILABLE', `Zoho CRM metadata for '${moduleApiName}' does not expose the requested field(s).`, 400, { module: request.module, module_api_name: moduleApiName, field: missing[0], fields: missing });
@@ -1035,7 +1010,13 @@ async function materializeMetadataRequest(zohoService, input) {
         throw createAppError('FIELD_NOT_AVAILABLE', `CRM field '${field}' could not be resolved to a live Zoho API field for module '${input.module}'.`, 400, { module: input.module, module_api_name: moduleApiName, field, field_label: label || null, reason: 'Resolved name was not present in live field metadata.' });
       }
       if (!resolvedFieldDiagnostics.some((entry) => entry.api_name === metadataField.api_name)) {
-        resolvedFieldDiagnostics.push({ user_term: label || field, field_label: metadataField.display_label || metadataField.field_label || metadataField.label || label || field, api_name: metadataField.api_name, data_type: metadataField.data_type || null });
+        resolvedFieldDiagnostics.push({
+          user_term: label || field,
+          field_label: metadataField.display_label || metadataField.field_label || metadataField.label || label || field,
+          api_name: metadataField.api_name,
+          data_type: metadataField.data_type || null,
+          ...metadataCapabilityDetails(metadataField)
+        });
       }
       return metadataField.api_name;
     }
@@ -1043,7 +1024,14 @@ async function materializeMetadataRequest(zohoService, input) {
       'FIELD_NOT_AVAILABLE',
       `CRM field '${field}' could not be resolved to a live Zoho API field for module '${input.module}'.`,
       400,
-      { module: input.module, module_api_name: moduleApiName, field, field_label: label || null, reason: 'No match in live Zoho field metadata.' }
+      {
+        module: input.module,
+        module_api_name: moduleApiName,
+        field,
+        user_term: label || field,
+        candidate_fields: fields.filter((candidate) => candidate?.api_name).map((candidate) => ({ api_name: candidate.api_name, field_label: candidate.display_label || candidate.field_label || candidate.label || candidate.api_name })).slice(0, 50),
+        reason: 'No match in live Zoho field metadata.'
+      }
     );
   };
 
@@ -1060,24 +1048,65 @@ async function materializeMetadataRequest(zohoService, input) {
       user_term: apiName,
       field_label: metadataField.display_label || metadataField.field_label || metadataField.label || apiName,
       api_name: metadataField.api_name,
-      data_type: metadataField.data_type || null
+      data_type: metadataField.data_type || null,
+      ...metadataCapabilityDetails(metadataField)
     });
   }
   const resolvedFilters = (input.filters || []).map((filter) => ({
     ...filter,
     field: resolveField(filter.field, filter.field === 'Created_Time' || filter.field === '__date__' ? 'date' : filter.field_role || semanticRoleForField(filter.field, filter.field_label), filter.field_label, filter.field_role)
   }));
-  const resolvedSort = input.sort || (input.sort_field ? { field: input.sort_field, order: input.sort_order } : undefined);
-  if (resolvedSort) resolvedSort.field = resolveField(resolvedSort.field, resolvedSort.field === 'Created_Time' ? 'date' : resolvedSort.field_role || semanticRoleForField(resolvedSort.field, resolvedSort.field_label), resolvedSort.field_label, input.date_field_role);
+  const resolveExpression = (expression) => {
+    if (!expression) return expression;
+    if (expression.field) return {
+      ...expression,
+      field: resolveField(expression.field, expression.field_role || semanticRoleForField(expression.field, expression.field_label), expression.field_label)
+    };
+    return { ...expression, conditions: (expression.conditions || []).map(resolveExpression) };
+  };
+  const resolvedFilterExpression = resolveExpression(input.filter_expression);
+  const rawSort = input.sort || (input.sort_field ? { field: input.sort_field, order: input.sort_order } : undefined);
+  const resolvedSort = Array.isArray(rawSort)
+    ? rawSort.map((sort) => ({ ...sort, field: resolveField(sort.field, sort.field === 'Created_Time' ? 'date' : sort.field_role || semanticRoleForField(sort.field, sort.field_label), sort.field_label, input.date_field_role) }))
+    : rawSort;
+  if (resolvedSort && !Array.isArray(resolvedSort)) resolvedSort.field = resolveField(resolvedSort.field, resolvedSort.field === 'Created_Time' ? 'date' : resolvedSort.field_role || semanticRoleForField(resolvedSort.field, resolvedSort.field_label), resolvedSort.field_label, input.date_field_role);
   const aggregate = input.aggregate ? { ...input.aggregate, field: resolveField(input.aggregate.field, input.aggregate.operation === 'count' ? undefined : 'numeric') } : input.aggregate;
   const groupBy = input.group_by ? resolveField(input.group_by, undefined, input.group_by_label) : input.group_by;
+  const havingFilter = input.having_filter ? {
+    ...input.having_filter,
+    field: resolveField(input.having_filter.field, input.having_filter.field_role || semanticRoleForField(input.having_filter.field, input.having_filter.field_label), input.having_filter.field_label)
+  } : input.having_filter;
   const usedFields = [
     ...resolvedFields,
     ...resolvedFilters.map((filter) => filter.field),
-    resolvedSort?.field,
+    ...collectExpressionFields(resolvedFilterExpression),
+    ...(Array.isArray(resolvedSort) ? resolvedSort.map((sort) => sort.field) : [resolvedSort?.field]),
     aggregate?.field,
-    groupBy
+    groupBy,
+    havingFilter?.field
   ].filter(Boolean);
+  const metadataByResolvedName = new Map(fields.filter((field) => field?.api_name).map((field) => [field.api_name, field]));
+  for (const filter of resolvedFilters) {
+    const metadataField = metadataByResolvedName.get(filter.field);
+    if (metadataField?.filterable === false || metadataField?.searchable === false && ['contains', 'starts_with'].includes(filter.operator)) {
+      throw createAppError('INVALID_QUERY', `CRM field '${filter.field}' cannot be used for this filter.`, 400, { module: input.module, module_api_name: moduleApiName, field: filter.field, operator: filter.operator, reason: 'Field metadata does not permit this filter.' });
+    }
+  }
+  if (resolvedSort) {
+    const sorts = Array.isArray(resolvedSort) ? resolvedSort : [resolvedSort];
+    for (const sort of sorts) {
+      const metadataField = metadataByResolvedName.get(sort.field);
+      if (metadataField?.sortable === false) throw createAppError('INVALID_QUERY', `CRM field '${sort.field}' cannot be sorted.`, 400, { module: input.module, module_api_name: moduleApiName, field: sort.field, reason: 'Field metadata marks the field as non-sortable.' });
+    }
+  }
+  if (groupBy) {
+    const metadataField = metadataByResolvedName.get(groupBy);
+    if (metadataField?.groupable === false) throw createAppError('INVALID_QUERY', `CRM field '${groupBy}' cannot be grouped.`, 400, { module: input.module, module_api_name: moduleApiName, field: groupBy, reason: 'Field metadata marks the field as non-groupable.' });
+  }
+  if (aggregate && aggregate.operation !== 'count') {
+    const metadataField = metadataByResolvedName.get(aggregate.field);
+    if (metadataField?.aggregatable === false) throw createAppError('FIELD_OPERATION_NOT_SUPPORTED', `CRM field '${aggregate.field}' cannot be aggregated.`, 400, { module: input.module, module_api_name: moduleApiName, field: aggregate.field, operation: aggregate.operation });
+  }
   const missingField = usedFields.find((field) => !apiNames.has(field));
   if (fields.length > 0 && missingField) {
     if (!input._metadata_refreshed && typeof zohoService.getFieldMetadata === 'function') {
@@ -1095,7 +1124,7 @@ async function materializeMetadataRequest(zohoService, input) {
   const resolvedComparison = input.comparison && fields.length > 0 && resolvedFilters.length === 0 && input.date_field_role
     ? { ...input.comparison, date_field: chooseMetadataDateField(fields, input.date_field_role) }
     : input.comparison;
-  return { ...input, fields: resolvedFields, filters: resolvedFilters, sort: resolvedSort, aggregate, group_by: groupBy, comparison: resolvedComparison, sort_field: undefined, sort_order: undefined, _resolved_field_diagnostics: resolvedFieldDiagnostics };
+  return { ...input, fields: resolvedFields, filters: resolvedFilters, filter_expression: resolvedFilterExpression, sort: resolvedSort, aggregate, group_by: groupBy, having_filter: havingFilter, comparison: resolvedComparison, sort_field: undefined, sort_order: undefined, _resolved_field_diagnostics: resolvedFieldDiagnostics };
 }
 
 function selectMetadataDefaults(metadata, apiNames) {
@@ -1105,6 +1134,20 @@ function selectMetadataDefaults(metadata, apiNames) {
     .map((field) => field.api_name);
   const fallback = [...apiNames];
   return [...new Set(['id', ...(selectable.length > 0 ? selectable : fallback)])].slice(0, 20);
+}
+
+function metadataCapabilityDetails(field) {
+  const details = {};
+  for (const capability of ['filterable', 'sortable', 'groupable']) {
+    if (Object.prototype.hasOwnProperty.call(field || {}, capability)) details[capability] = field[capability] === true;
+  }
+  return details;
+}
+
+function collectExpressionFields(expression) {
+  if (!expression) return [];
+  if (expression.field) return [expression.field];
+  return (expression.conditions || []).flatMap(collectExpressionFields);
 }
 
 function selectMetadataSearchFields(metadata, apiNames) {

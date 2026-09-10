@@ -89,18 +89,23 @@ function buildFilterClauses(filters) {
     if (operator === 'greater_equal') return [`${field} >= ${formatComparisonValue(field, value)}`];
     if (operator === 'less_equal') return [`${field} <= ${formatComparisonValue(field, value)}`];
     if (operator === 'in') return [`${field} in (${value.map((item) => formatValue(field, item)).join(', ')})`];
+    if (operator === 'not_in') return [`${field} not in (${value.map((item) => formatValue(field, item)).join(', ')})`];
     if (operator === 'between') return [`${field} >= ${formatDateComparisonValue(field, value[0])} and ${field} ${DATETIME_FIELDS.has(field) ? '<' : '<='} ${formatDateComparisonValue(field, value[1], true, filter.exclusive_end === true)}`];
     return [];
   });
 }
 
-function buildCoqlQuery({ module, fields, filters, sort }) {
+function buildCoqlQuery({ module, fields, filters, filter_expression: filterExpression, sort, having_filter: havingFilter }) {
   validateModuleFieldScope({ module, fields, filters, sort });
   const clauses = buildFilterClauses(filters);
   const moduleName = CRM_API_NAMES[module] || module;
   let query = `select ${fields.join(', ')} from ${moduleName}`;
-  query += ` where ${buildWhereClause(clauses)}`;
-  if (sort) query += ` order by ${sort.field} ${sort.order}`;
+  query += ` where ${filterExpression ? buildLogicalFilterClause(filterExpression) : buildWhereClause(clauses)}`;
+  if (sort) {
+    const sorts = Array.isArray(sort) ? sort : [sort];
+    query += ` order by ${sorts.map(({ field, order }) => `${field} ${order}`).join(', ')}`;
+  }
+  if (havingFilter) query += ` having ${buildWhereClause(buildFilterClauses([havingFilter]))}`;
   return query;
 }
 
@@ -114,4 +119,18 @@ function buildWhereClause(clauses) {
   return expression;
 }
 
-module.exports = { buildCoqlQuery, buildFilterClauses, buildWhereClause, buildModuleCriteria, buildCriteria, formatValue, formatComparisonValue };
+function buildLogicalFilterClause(expression) {
+  if (!expression || typeof expression !== 'object') return '(id is not null)';
+  if (expression.field) {
+    const clause = buildFilterClauses([expression])[0];
+    return clause ? `(${clause})` : '(id is not null)';
+  }
+  const operator = String(expression.operator || 'AND').toUpperCase();
+  const conditions = Array.isArray(expression.conditions) ? expression.conditions.map(buildLogicalFilterClause) : [];
+  if (conditions.length === 0) return '(id is not null)';
+  if (operator === 'NOT') return `(not ${conditions[0]})`;
+  if (!['AND', 'OR'].includes(operator)) throw new Error(`Unsupported logical filter operator '${operator}'.`);
+  return `(${conditions.join(` ${operator.toLowerCase()} `)})`;
+}
+
+module.exports = { buildCoqlQuery, buildFilterClauses, buildWhereClause, buildLogicalFilterClause, buildModuleCriteria, buildCriteria };

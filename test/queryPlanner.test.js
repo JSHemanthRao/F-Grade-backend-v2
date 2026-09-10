@@ -4,6 +4,7 @@ const { planQuestion, createCrmController } = require('../src/controllers/crm.co
 const { CrmService } = require('../src/services/crm.service');
 const { validateCrmQuery } = require('../src/validators/crmQuery.validator');
 const { createCrmDiagnostics } = require('../src/utils/crmDiagnostics');
+const { buildCoqlQuery, buildLogicalFilterClause } = require('../src/services/coql.service');
 
 const periods = ['today', 'yesterday', 'tomorrow', 'this week', 'last week', 'next week', 'this month', 'last month', 'next month', 'this quarter', 'last quarter', 'next quarter', 'this year', 'last year', 'next year'];
 
@@ -40,6 +41,53 @@ test('plans all requested numeric comparison operators', () => {
     const request = planQuestion(`Show deals with Amount ${symbol} 1000`);
     assert.equal(request.filters.find((filter) => filter.field === 'Amount').operator, operator);
   }
+});
+
+test('plans numeric between filters without inventing a field name', () => {
+  const request = planQuestion('Show me deals where the amount is between 50000 and 100000');
+  assert.deepEqual(request.filters.find((filter) => filter.operator === 'between'), { field: 'Amount', operator: 'between', value: [50000, 100000] });
+  assert.ok(!request.filters.some((filter) => /^(semantic|the amount|amount)$/.test(filter.field)));
+});
+
+test('preserves an explicit Leads module for Closed Won questions', () => {
+  const request = planQuestion('Show me leads that are Closed Won');
+  assert.equal(request.module, 'Leads');
+});
+
+test('plans exclusions as NOT IN and supports multi-field sorting', () => {
+  const request = planQuestion('Show deals excluding stage Closed Lost or Prospect, sort by amount descending then created newest');
+  assert.deepEqual(request.filters.find((filter) => filter.operator === 'not_in'), { field: 'Stage', operator: 'not_in', value: ['closed lost', 'prospect'] });
+  assert.deepEqual(request.sort, [{ field: 'Amount', order: 'desc' }, { field: 'Created_Time', order: 'desc' }]);
+});
+
+test('builds advanced COQL with NOT IN, multi-sort, and HAVING', () => {
+  const query = buildCoqlQuery({
+    module: 'Deals',
+    fields: ['Owner', 'Amount'],
+    filters: [{ field: 'Stage', operator: 'not_in', value: ['Closed Lost', 'Prospecting'] }],
+    sort: [{ field: 'Amount', order: 'desc' }, { field: 'Owner', order: 'asc' }],
+    having_filter: { field: 'Amount', operator: 'greater_than', value: 50000 }
+  });
+  assert.equal(query, "select Owner, Amount from Deals where (Stage not in ('Closed Lost', 'Prospecting')) order by Amount desc, Owner asc having (Amount > 50000)");
+});
+
+test('preserves nested AND, OR, and NOT filter logic', () => {
+  const expression = {
+    operator: 'AND',
+    conditions: [
+      { operator: 'OR', conditions: [
+        { field: 'Stage', operator: 'equals', value: 'Closed Won' },
+        { field: 'Stage', operator: 'equals', value: 'Negotiation' }
+      ] },
+      { operator: 'NOT', conditions: [{ field: 'Amount', operator: 'less_than', value: 0 }] }
+    ]
+  };
+  assert.equal(buildLogicalFilterClause(expression), "(((Stage = 'Closed Won') or (Stage = 'Negotiation')) and (not (Amount < 0)))");
+  assert.doesNotThrow(() => validateCrmQuery({ module: 'Deals', fields: ['id'], filter_expression: expression }));
+});
+
+test('rejects Books questions instead of routing them through CRM', () => {
+  assert.throws(() => planQuestion('Show me Zoho Books invoices'), (error) => error.code === 'DOMAIN_AMBIGUOUS');
 });
 
 test('validates BETWEEN, IS NULL, and IS NOT NULL filters', () => {

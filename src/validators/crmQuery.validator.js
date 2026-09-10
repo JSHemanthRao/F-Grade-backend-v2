@@ -26,7 +26,7 @@ function validateCrmQuery(body) {
     throw createAppError('INVALID_CRM_REQUEST', 'CRM request validation failed.', 400, { errors: [{ path: 'body', message: 'Request body must be a JSON object.' }] });
   }
 
-  const { module, fields, filters = [], sort, sort_field, sort_order, limit = 20, offset = 0, request_type = 'records', aggregate, group_by } = body;
+  const { module, fields, filters = [], filter_expression: filterExpression, sort, sort_field, sort_order, limit = 20, offset = 0, request_type = 'records', aggregate, group_by, having_filter: havingFilter } = body;
   const metadataDriven = body.metadata_driven === true;
   // Allow either user-friendly module keys (e.g., 'Meetings') or API names (e.g., 'Events')
   const resolveModuleKey = (mod) => {
@@ -40,6 +40,19 @@ function validateCrmQuery(body) {
   const isVirtualAnalysisModule = module === 'CRM' && request_type === 'analysis';
   const defaultModuleFields = supportedFields ? supportedFields.slice(0, 6) : [];
   const addError = (path, message) => errors.push({ path, message });
+  const validateExpression = (expression, path = 'filter_expression') => {
+    if (!expression || typeof expression !== 'object' || Array.isArray(expression)) return addError(path, 'filter_expression must be an object.');
+    if (expression.field) {
+      if (typeof expression.field !== 'string' || !expression.field.trim()) addError(`${path}.field`, 'Expression field must be a non-empty string.');
+      if (!OPERATOR_SET.has(expression.operator)) addError(`${path}.operator`, `Operator must be one of: ${CRM_OPERATORS.join(', ')}.`);
+      return;
+    }
+    const operator = String(expression.operator || '').toUpperCase();
+    if (!['AND', 'OR', 'NOT'].includes(operator) || !Array.isArray(expression.conditions) || expression.conditions.length === 0) return addError(path, 'Logical expressions require AND, OR, or NOT with conditions.');
+    if (operator === 'NOT' && expression.conditions.length !== 1) return addError(`${path}.conditions`, 'NOT requires exactly one condition.');
+    expression.conditions.forEach((condition, index) => validateExpression(condition, `${path}.conditions[${index}]`));
+  };
+  if (filterExpression !== undefined) validateExpression(filterExpression);
   const invalidFieldMessage = (field) => `Field '${field}' is not supported for module '${module}'. Use a valid Zoho CRM API field name. Allowed fields: ${supportedFields ? supportedFields.join(', ') : 'none'}.`;
 
   const requestTypes = new Set(['records', 'count', 'aggregate', 'comparison', 'analysis', 'search', 'bulk_read']);
@@ -108,6 +121,7 @@ function validateCrmQuery(body) {
     } else if (VALUE_OPERATORS.has(filter.operator)) {
       if (!hasValue) addError(`${path}.value`, `Operator '${filter.operator}' requires a value.`);
       else if (filter.operator === 'in' && (!Array.isArray(filter.value) || filter.value.length === 0 || filter.value.some((value) => !isValue(value)))) addError(`${path}.value`, 'in requires a non-empty array of scalar values.');
+      else if (['in', 'not_in'].includes(filter.operator) && (!Array.isArray(filter.value) || filter.value.length === 0 || filter.value.some((value) => !isValue(value)))) addError(`${path}.value`, `${filter.operator} requires a non-empty array of scalar values.`);
       else if (filter.operator === 'between') {
         const betweenValue = normalizeBetweenValue(filter.value);
         if (!betweenValue || betweenValue.length !== 2 || betweenValue.some((value) => !hasNonEmptyValue(value))) {
@@ -119,6 +133,12 @@ function validateCrmQuery(body) {
       else if (!['in', 'between'].includes(filter.operator) && !isValue(filter.value)) addError(`${path}.value`, `Operator '${filter.operator}' requires a scalar value.`);
     }
   });
+
+  if (havingFilter !== undefined) {
+    if (request_type !== 'aggregate' || !havingFilter || typeof havingFilter !== 'object' || Array.isArray(havingFilter)) addError('having_filter', 'having_filter is only allowed as one filter object on aggregate requests.');
+    else if (typeof havingFilter.field !== 'string' || !havingFilter.field || !OPERATOR_SET.has(havingFilter.operator)) addError('having_filter', 'having_filter requires a valid field and operator.');
+    else if (NULL_OPERATORS.has(havingFilter.operator) ? Object.prototype.hasOwnProperty.call(havingFilter, 'value') : !hasNonEmptyValue(havingFilter.value) && !['in', 'not_in', 'between'].includes(havingFilter.operator)) addError('having_filter.value', 'having_filter value is invalid.');
+  }
 
   let normalizedSort = sort;
   const hasFlatSort = sort_field !== undefined || sort_order !== undefined;
@@ -137,9 +157,12 @@ function validateCrmQuery(body) {
   } else if (sort !== undefined) {
     if (!sort || typeof sort !== 'object' || Array.isArray(sort)) addError('sort', 'sort must be an object.');
     else {
-      if (typeof sort.field !== 'string' || sort.field.length === 0) addError('sort.field', 'sort.field must be a non-empty string.');
-      else if (!metadataDriven && supportedFields && !supportedFields.includes(sort.field) && !isApiFieldName(sort.field)) addError('sort.field', invalidFieldMessage(sort.field));
-      if (!['asc', 'desc'].includes(sort.order)) addError('sort.order', "sort.order must be either 'asc' or 'desc'.");
+      const sorts = Array.isArray(sort) ? sort : [sort];
+      sorts.forEach((sortItem, index) => {
+        if (!sortItem || typeof sortItem !== 'object' || typeof sortItem.field !== 'string' || sortItem.field.length === 0) addError(`sort[${index}].field`, 'sort.field must be a non-empty string.');
+        else if (!metadataDriven && supportedFields && !supportedFields.includes(sortItem.field) && !isApiFieldName(sortItem.field)) addError(`sort[${index}].field`, invalidFieldMessage(sortItem.field));
+        if (!['asc', 'desc'].includes(sortItem?.order)) addError(`sort[${index}].order`, "sort.order must be either 'asc' or 'desc'.");
+      });
     }
   }
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) addError('limit', 'limit must be an integer between 1 and 200.');
@@ -151,7 +174,7 @@ function validateCrmQuery(body) {
     400,
     { errors }
   );
-  return { module, fields: normalizedFields, filters: normalizedFilters, sort: normalizedSort, limit, offset, request_type, aggregate, group_by, comparison: body.comparison, date_range: body.date_range, analysis: body.analysis };
+  return { domain: body.domain || 'CRM', module, fields: normalizedFields, filters: normalizedFilters, filter_expression: filterExpression, sort: normalizedSort, limit, offset, request_type, aggregate, group_by, having_filter: havingFilter, relationships: body.relationships || [], aggregations: body.aggregations || [], comparison: body.comparison, date_range: body.date_range, analysis: body.analysis };
 }
 
 function validateModuleFieldScope({ module, fields = [], filters = [], sort, aggregate, group_by } = {}) {
@@ -173,7 +196,8 @@ function validateModuleFieldScope({ module, fields = [], filters = [], sort, agg
   if (!supportedFields) errors.push({ path: 'module', field: module });
   fields.forEach((field, index) => { if (!isSupported(field)) addInvalid(`fields[${index}]`, field); });
   filters.forEach((filter, index) => { if (!isSupported(filter?.field)) addInvalid(`filters[${index}].field`, filter?.field); });
-  if (sort && !isSupported(sort.field)) addInvalid('sort.field', sort.field);
+  const sorts = Array.isArray(sort) ? sort : (sort ? [sort] : []);
+  sorts.forEach((sortItem, index) => { if (!isSupported(sortItem?.field)) addInvalid(`sort[${index}].field`, sortItem?.field); });
   if (aggregate && !isSupported(aggregate.field)) addInvalid('aggregate.field', aggregate.field);
   if (group_by && !isSupported(group_by)) addInvalid('group_by', group_by);
 
