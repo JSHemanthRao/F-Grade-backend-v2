@@ -1032,8 +1032,8 @@ function extractFieldComparison(lowerText) {
   const between = lowerText.match(new RegExp(`\\b${fieldPattern}\\s+(?:is\\s+)?between\\s+₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)\\s+and\\s+₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
   if (between) {
     const fieldAliases = { amount: 'Amount', 'deal value': 'Amount', value: 'Amount', probability: 'Probability', 'unit price': 'Unit_Price', qty_in_stock: 'Qty_in_Stock' };
-    const field = fieldAliases[between[1].replace(/\\s+/g, ' ').toLowerCase()];
-    return field ? { field, operator: 'between', value: [Number(between[2].replace(/,/g, '')), Number(between[3].replace(/,/g, ''))] } : null;
+    const semanticField = fieldAliases[between[1].replace(/\\s+/g, ' ').toLowerCase()];
+    return semanticField ? { field: semanticField, operator: 'between', value: [Number(between[2].replace(/,/g, '')), Number(between[3].replace(/,/g, ''))] } : null;
   }
   const symbols = lowerText.match(new RegExp(`${fieldPattern}\\s*(>=|<=|!=|=|>|<)\\s*₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
   const words = lowerText.match(new RegExp(`\\b${fieldPattern}\\s+(greater than|more than|at least|less than|at most|equal to|not equal to)\\s*₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
