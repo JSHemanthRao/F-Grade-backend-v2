@@ -388,7 +388,6 @@ function planQuestion(question) {
   if (searchTerm) {
     return {
       module,
-      module_api_name: CRM_API_NAMES[module],
       complexity: 'MODERATE',
       request_type: 'search',
       fields: ['id'],
@@ -407,7 +406,6 @@ function planQuestion(question) {
     const aggregateOperation = detectAggregateOperation(lower) || { operation: 'count', field: 'id' };
     return {
       module,
-      module_api_name: CRM_API_NAMES[module],
       complexity: 'MODERATE',
       request_type: 'comparison',
       fields: ['id'],
@@ -969,6 +967,7 @@ function assertExplicitModuleRouting(explicitModule, plannedModule) {
 }
 
 function defaultFields(module) {
+  if (module === 'Deals') return ['Deal_Name', 'Amount', 'Stage', 'Closing_Date', 'Owner', 'Created_Time'];
   if (module === 'Leads') return ['First_Name', 'Last_Name', 'Company', 'Created_Time', 'Lead_Source', 'Owner'];
   if (module === 'Accounts') return ['Account_Name', 'Industry', 'Owner', 'Created_Time'];
   if (module === 'Contacts') return ['First_Name', 'Last_Name', 'Account_Name', 'Email', 'Owner'];

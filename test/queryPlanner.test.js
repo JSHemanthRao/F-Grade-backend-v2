@@ -23,7 +23,7 @@ test('plans standard period comparisons without changing the module', () => {
   const request = planQuestion('Compare leads created today vs yesterday');
   assert.equal(request.request_type, 'comparison');
   assert.equal(request.module, 'Leads');
-  assert.equal(request.module_api_name, 'Leads');
+  assert.equal(request.module_api_name, undefined);
   assert.deepEqual(request.comparison, { current_period: 'today', previous_period: 'yesterday', date_field: 'Created_Time', operation: 'count', field: 'id' });
   assert.equal(request.date_range.current.period, 'today');
   assert.equal(request.date_range.previous.period, 'yesterday');

@@ -1091,6 +1091,7 @@ async function materializeMetadataRequest(zohoService, input) {
   const metadataByResolvedName = new Map(fields.filter((field) => field?.api_name).map((field) => [field.api_name, field]));
   for (const filter of resolvedFilters) {
     const metadataField = metadataByResolvedName.get(filter.field);
+    validateFilterTypeCompatibility(input, filter, metadataField);
     if (metadataField?.filterable === false || metadataField?.searchable === false && ['contains', 'starts_with'].includes(filter.operator)) {
       throw createAppError('INVALID_QUERY', `CRM field '${filter.field}' cannot be used for this filter.`, 400, { module: input.module, module_api_name: moduleApiName, field: filter.field, operator: filter.operator, reason: 'Field metadata does not permit this filter.' });
     }
@@ -1142,6 +1143,28 @@ function metadataCapabilityDetails(field) {
     if (Object.prototype.hasOwnProperty.call(field || {}, capability)) details[capability] = field[capability] === true;
   }
   return details;
+}
+
+function validateFilterTypeCompatibility(input, filter, metadataField) {
+  if (!metadataField?.data_type) return;
+  const type = String(metadataField.data_type).toLowerCase();
+  const numeric = ['currency', 'double', 'decimal', 'integer', 'long', 'number', 'bigint'].includes(type);
+  const date = ['date', 'datetime'].includes(type);
+  const text = ['text', 'string', 'email', 'phone', 'picklist', 'multiselectpicklist'].includes(type);
+  const numericOperators = ['greater_than', 'less_than', 'greater_equal', 'less_equal'];
+  const stringOperators = ['contains', 'starts_with'];
+  const invalid = numericOperators.includes(filter.operator) && !numeric
+    || filter.operator === 'between' && !numeric && !date
+    || stringOperators.includes(filter.operator) && !text;
+  if (invalid) {
+    throw createAppError('FIELD_OPERATION_NOT_SUPPORTED', `CRM field '${filter.field}' does not support operator '${filter.operator}'.`, 400, {
+      module: input.module,
+      module_api_name: input.module_api_name,
+      field: filter.field,
+      data_type: metadataField.data_type,
+      operator: filter.operator
+    });
+  }
 }
 
 function collectExpressionFields(expression) {
