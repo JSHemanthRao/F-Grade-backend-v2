@@ -478,7 +478,7 @@ test('authenticates, calls Zoho COQL, and normalizes the CRM response', async ()
   assert.equal(calls.length, 2);
   assert.equal(calls[0].body, null);
   assert.equal(calls[1].url, 'https://www.zohoapis.com/crm/v8/coql');
-  assert.equal(calls[1].body.select_query, "select Deal_Name, Account_Name, Amount, Stage, Closing_Date, Owner from Deals where ((Stage = 'Closed Won') and (Amount > 50000)) order by Amount desc limit 0, 20");
+  assert.equal(calls[1].body.select_query, "select Deal_Name, Account_Name, Amount, Stage, Closing_Date, Owner from Deals where ((Stage = 'Closed Won') and (Amount > 50000)) order by Amount desc, id desc limit 0, 20");
   assert.equal(calls[1].options.headers.Authorization, 'Zoho-oauthtoken server-token');
   assert.deepEqual(result, {
     module: 'Deals',
@@ -565,7 +565,7 @@ test('retrieves only Closed Won Deals within the requested Closing_Date range', 
     offset: 0
   });
 
-  assert.equal(calls[0], "select Deal_Name, Stage, Closing_Date, Amount from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) order by Closing_Date desc limit 0, 20");
+  assert.equal(calls[0], "select Deal_Name, Stage, Closing_Date, Amount from Deals where ((Stage = 'Closed Won') and (Closing_Date >= '2026-07-01' and Closing_Date <= '2026-07-31')) order by Closing_Date desc, id desc limit 0, 20");
   assert.equal(result.count, 2);
   assert.equal(result.pagination.more_records, false);
   assert.ok(result.data.every((record) => record.Stage === 'Closed Won'));
@@ -719,7 +719,7 @@ test('preserves the original filters when requesting the next page', async () =>
   };
   await service.query({ ...request, offset: 0 });
   await service.query({ ...request, offset: 20 });
-  const expectedQuery = "select Deal_Name, Amount, Stage from Deals where ((Stage = 'Closed Won') and (Amount > 50000)) order by Amount desc";
+  const expectedQuery = "select Deal_Name, Amount, Stage from Deals where ((Stage = 'Closed Won') and (Amount > 50000)) order by Amount desc, id desc";
   assert.equal(queries[0], `${expectedQuery} limit 0, 20`);
   assert.equal(queries[1], `${expectedQuery} limit 20, 20`);
 });

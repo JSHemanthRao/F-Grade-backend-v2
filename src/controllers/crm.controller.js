@@ -78,7 +78,7 @@ function createCrmController(crmService = new CrmService()) {
         const previous = conversationId ? conversationContext.get(conversationId) : null;
         const resolvedQuestion = resolveFollowUpQuestion(question, previous);
         const explicitModule = extractExplicitModule(resolvedQuestion.toLowerCase());
-        const plannedRequest = applyPaginationFollowUp(planCrmQuestion(resolvedQuestion), question, previous);
+        const plannedRequest = planContinuationAwareRequest(planCrmQuestion(resolvedQuestion), question, previous);
         updateDiagnostics(diagnostics, {
           resolved_module: plannedRequest.module || explicitModule || 'not_reached',
           module_api_name: plannedRequest.module_api_name || 'not_reached',
@@ -109,7 +109,16 @@ function createCrmController(crmService = new CrmService()) {
         });
         recordCrmEvent('RESPONSE_NORMALIZED', diagnostics, { module: diagnostics.resolved_module, request_type: diagnostics.request_type });
         if (conversationId) {
-          conversationContext.set(conversationId, { question: resolvedQuestion, plannedRequest });
+          const canonicalState = buildCanonicalConversationState(resolvedQuestion, plannedRequest, result, diagnostics.request_id);
+          const previousState = previous?.canonicalState;
+          if (previousState && isDuplicatePage(previousState, canonicalState) && canonicalState.pagination.offset > previousState.pagination.offset) {
+            const error = new Error('The requested next page returned the same records as the previous page.');
+            error.code = 'PAGINATION_DUPLICATE_PAGE';
+            error.statusCode = 409;
+            error.details = { request_id: diagnostics.request_id };
+            throw error;
+          }
+          conversationContext.set(conversationId, { question: resolvedQuestion, plannedRequest, canonicalState });
           if (conversationContext.size > 1000) conversationContext.delete(conversationContext.keys().next().value);
         }
         const answer = isDashboardRequest(resolvedQuestion)
@@ -196,11 +205,117 @@ function resolveFollowUpQuestion(question, previous) {
 }
 
 function applyPaginationFollowUp(plannedRequest, originalQuestion, previous) {
-  const match = String(originalQuestion || '').match(/^\s*next\s+(\d+)\b/i);
-  if (!match || !previous?.plannedRequest) return plannedRequest;
-  const limit = Math.min(Math.max(Number(match[1]), 1), 200);
-  const previousLimit = Number(previous.plannedRequest.limit) || limit;
-  return { ...previous.plannedRequest, limit, offset: (Number(previous.plannedRequest.offset) || 0) + previousLimit };
+  return planContinuationAwareRequest(plannedRequest, originalQuestion, previous);
+}
+
+function planContinuationAwareRequest(plannedRequest, originalQuestion, previous) {
+  const text = String(originalQuestion || '').trim();
+  if (!previous?.canonicalState) return plannedRequest;
+  if (!isPaginationContinuation(text) && !isExplicitPageRequest(text)) return plannedRequest;
+
+  const priorRequest = previous.plannedRequest || plannedRequest;
+  const previousLimit = Number(previous.canonicalState.pagination.limit) || Number(priorRequest.limit) || 20;
+  const requestedLimit = extractPageSize(text) || previousLimit;
+  const nextOffset = isExplicitPageRequest(text)
+    ? Math.max(0, (extractPageNumber(text) - 1) * requestedLimit)
+    : (Number(previous.canonicalState.pagination.offset) || 0) + previousLimit;
+
+  return {
+    ...priorRequest,
+    limit: requestedLimit,
+    offset: nextOffset,
+    pagination: { ...(priorRequest.pagination || plannedRequest.pagination || {}), limit: requestedLimit, offset: nextOffset }
+  };
+}
+
+function isPaginationContinuation(text) {
+  return /^(?:proceed|continue|next(?:\s+\d+)?|show me the next \d+|next page)\b/i.test(text);
+}
+
+function isExplicitPageRequest(text) {
+  return /\bpage\s+\d+\b/i.test(text);
+}
+
+function extractPageSize(text) {
+  const match = String(text || '').match(/(?:next|show me the next|show me|show|give me)\s+(\d+)\b/i);
+  return match ? Math.min(Math.max(Number(match[1]), 1), 200) : null;
+}
+
+function extractPageNumber(text) {
+  const match = String(text || '').match(/\bpage\s+(\d+)\b/i);
+  return match ? Math.min(Math.max(Number(match[1]), 1), 1000) : 1;
+}
+
+function buildCanonicalConversationState(question, plannedRequest, result, requestId) {
+  const pagination = plannedRequest?.pagination || { limit: plannedRequest?.limit, offset: plannedRequest?.offset };
+  const recordIds = Array.isArray(result?.data)
+    ? result.data.map((record) => String(record?.id || record?.ID || '')).filter(Boolean)
+    : [];
+  return {
+    request_id: requestId,
+    original_question: question,
+    domain: plannedRequest?.domain || 'CRM',
+    module: plannedRequest?.module || null,
+    module_api_name: plannedRequest?.module_api_name || null,
+    filters: Array.isArray(plannedRequest?.filters) ? plannedRequest.filters : [],
+    sort: normalizeSortForFingerprint(plannedRequest?.sort),
+    group_by: plannedRequest?.group_by || null,
+    aggregate: plannedRequest?.aggregate || null,
+    response_fields: Array.isArray(plannedRequest?.response_fields) ? plannedRequest.response_fields : Array.isArray(plannedRequest?.fields) ? plannedRequest.fields : [],
+    pagination: {
+      limit: Number(pagination?.limit) || 20,
+      offset: Number(pagination?.offset) || 0,
+      returned: Number(result?.returned ?? recordIds.length ?? 0),
+      more_records: Boolean(result?.more_records ?? result?.pagination?.more_records)
+    },
+    record_ids: recordIds
+  };
+}
+
+function normalizeSortForFingerprint(sort) {
+  if (!sort) return [];
+  const sorts = Array.isArray(sort) ? sort : [sort];
+  return sorts.map((item) => ({ field: item.field, order: item.order || item.direction || 'asc' }));
+}
+
+function isSameQueryShape(previousState, plannedRequest) {
+  if (!previousState || !plannedRequest) return false;
+  return stableStringify({
+    domain: previousState.domain,
+    module: previousState.module,
+    module_api_name: previousState.module_api_name,
+    filters: previousState.filters,
+    sort: previousState.sort,
+    group_by: previousState.group_by,
+    aggregate: previousState.aggregate,
+    response_fields: previousState.response_fields
+  }) === stableStringify({
+    domain: plannedRequest.domain || 'CRM',
+    module: plannedRequest.module || null,
+    module_api_name: plannedRequest.module_api_name || null,
+    filters: Array.isArray(plannedRequest.filters) ? plannedRequest.filters : [],
+    sort: normalizeSortForFingerprint(plannedRequest.sort),
+    group_by: plannedRequest.group_by || null,
+    aggregate: plannedRequest.aggregate || null,
+    response_fields: Array.isArray(plannedRequest.response_fields) ? plannedRequest.response_fields : Array.isArray(plannedRequest.fields) ? plannedRequest.fields : []
+  });
+}
+
+function isDuplicatePage(previousState, currentState) {
+  return previousState.pagination.offset !== currentState.pagination.offset
+    && previousState.pagination.limit === currentState.pagination.limit
+    && stableStringify(previousState.record_ids) === stableStringify(currentState.record_ids)
+    && previousState.record_ids.length > 0;
+}
+
+function stableStringify(value) {
+  return JSON.stringify(value, (_key, innerValue) => {
+    if (!innerValue || typeof innerValue !== 'object' || Array.isArray(innerValue)) return innerValue;
+    return Object.keys(innerValue).sort().reduce((acc, key) => {
+      acc[key] = innerValue[key];
+      return acc;
+    }, {});
+  });
 }
 
 function hasExplicitModuleIntent(text) {

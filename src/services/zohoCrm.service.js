@@ -600,11 +600,19 @@ function buildDynamicCoqlQuery({ module, fields, filters, filter_expression: fil
   let query = `select ${fields.join(', ')} from ${module}`;
   query += ` where ${filterExpression ? buildLogicalFilterClause(filterExpression) : (clauses.length > 0 ? buildWhereClause(clauses) : '(id is not null)')}`;
   if (sort) {
-    const sorts = Array.isArray(sort) ? sort : [sort];
+    const sorts = ensureStableSort(Array.isArray(sort) ? sort : [sort]);
     query += ` order by ${sorts.map(({ field, order }) => `${field} ${order}`).join(', ')}`;
   }
   if (havingFilter) query += ` having ${buildWhereClause(buildFilterClauses([havingFilter]))}`;
   return query;
+}
+
+function ensureStableSort(sorts) {
+  const normalized = sorts.filter((item) => item && item.field);
+  if (normalized.length === 0) return normalized;
+  const hasIdSort = normalized.some((item) => String(item.field).toLowerCase() === 'id');
+  if (!hasIdSort) normalized.push({ field: 'id', order: 'desc' });
+  return normalized;
 }
 
 function mapZohoStatus(status, upstreamCode) {

@@ -196,6 +196,77 @@ test('advances the exact module offset for next-page follow-ups', async () => {
   assert.equal(calls[1].offset, 10);
 });
 
+test('keeps canonical filters and sort while advancing proceed pagination', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const start = input.offset || 0;
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        returned: 20,
+        more_records: true,
+        data: Array.from({ length: 20 }, (_, index) => ({ id: String(start + index + 1) }))
+      };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+
+  await controller.assistant({ body: { conversation_id: 'pagination-canonical', question: 'Show me deals between 50000 and 200000 sorted from highest to lowest.' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-canonical', question: 'proceed' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-canonical', question: 'proceed' } }, response(), (error) => { throw error; });
+
+  assert.equal(calls[0].module, 'Deals');
+  assert.equal(calls[0].offset, 0);
+  assert.equal(calls[1].offset, 20);
+  assert.equal(calls[2].offset, 40);
+  assert.deepEqual(calls[0].filters, calls[1].filters);
+  assert.deepEqual(calls[0].sort, calls[1].sort);
+  assert.equal(calls[1].limit, 20);
+  assert.equal(calls[2].limit, 20);
+});
+
+test('supports explicit page numbers with a stable offset calculation', async () => {
+  const calls = [];
+  const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, request_type: input.request_type, returned: 20, more_records: true, data: [] }; } });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  await controller.assistant({ body: { conversation_id: 'pagination-pages', question: 'Show me deals' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-pages', question: 'page 4' } }, response(), (error) => { throw error; });
+  assert.equal(calls[1].offset, 60);
+  assert.equal(calls[1].limit, 20);
+});
+
+test('resets pagination when the query shape changes', async () => {
+  const calls = [];
+  const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, request_type: input.request_type, returned: 20, more_records: true, data: [] }; } });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  await controller.assistant({ body: { conversation_id: 'pagination-reset', question: 'Show me deals above 50000' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-reset', question: 'Show me leads' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-reset', question: 'next 20' } }, response(), (error) => { throw error; });
+  assert.equal(calls[1].module, 'Leads');
+  assert.equal(calls[1].offset, 0);
+  assert.equal(calls[2].module, 'Leads');
+  assert.equal(calls[2].offset, 20);
+});
+
+test('adds a stable id sort when the primary sort is not unique', async () => {
+  const { ZohoCrmService } = require('../src/services/zohoCrm.service');
+  const zoho = new ZohoCrmService();
+  zoho.authService = { getAccessToken: async () => 'token', getApiDomain: () => 'https://example.com' };
+  zoho.resolveModuleApiName = async () => 'Deals';
+  zoho.getFieldMetadata = async () => ({ fields: ['id', 'Amount'], metadata: [{ api_name: 'id', data_type: 'text' }, { api_name: 'Amount', data_type: 'currency' }] });
+  zoho.getCoqlSafeFields = async () => ['id', 'Amount'];
+  let selectQuery;
+  zoho.executeRequest = async (_method, _url, options) => {
+    selectQuery = options.data.select_query;
+    return { data: { data: [], info: { more_records: false } } };
+  };
+
+  await zoho.query({ module: 'Deals', fields: ['Amount'], sort: { field: 'Amount', order: 'desc' }, limit: 20, offset: 0 });
+  assert.match(selectQuery, /order by Amount desc, id desc limit 0, 20$/);
+});
+
 test('preserves exact activity and lookup routing', () => {
   assert.equal(planQuestion('Show calls created today').module, 'Calls');
   assert.equal(planQuestion('Show tasks created today').module, 'Tasks');
