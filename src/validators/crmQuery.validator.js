@@ -319,7 +319,6 @@ function validateCrmQuery(body) {
   }
 
   return true;
-}
 
 function validateAggregateQuery({ module, fields = [], filters = [], aggregate, groupBy, sort, metadataValidated = false } = {}) {
   if (!aggregate || typeof aggregate !== 'object') {
