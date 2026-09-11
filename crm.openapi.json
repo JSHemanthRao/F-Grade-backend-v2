@@ -3,7 +3,8 @@
   "info": {
     "title": "Zoho CRM Natural Language Assistant",
     "version": "2.0.0",
-    "description": "Read-only natural-language Zoho CRM assistant. The backend receives the user's original question and dynamically resolves the CRM domain, module, fields, filters, dates, sorting, grouping, aggregation, pagination, relationships, and execution strategy using live Zoho CRM metadata. Meetings are resolved to the Zoho CRM Events API module. CRM requests must never be routed to Zoho Books and modules must never be substituted when no records are found."
+    "description": "Read-only natural-language Zoho CRM assistant. The backend receives the user's original question and dynamically resolves the CRM domain, module, fields, filters, dates, sorting, grouping, aggregation, pagination, relationships, and execution strategy using live Zoho CRM metadata. Meetings are resolved to the Zoho CRM Events API module. CRM requests must never be routed to Zoho Books and modules must never be substituted when no records are found.",
+    "x-copilot-studio-tool-description": "Use this CRM assistant only for read-only, natural-language Zoho CRM questions. Never invent module names, field names, filters, or aggregate metrics. Never emit a Leads field named Converted; conversion questions must remain natural language and be routed to the backend analysis planner instead of a synthetic Converted field."
   },
   "servers": [
     {
@@ -86,11 +87,6 @@
             "type": "string",
             "minLength": 1,
             "description": "The user's complete original natural-language Zoho CRM request. Pass it exactly as the user provided it. Do not rewrite, summarize, translate, interpret, normalize, or convert it into structured query parameters. Examples: 'show me deals above 50000', 'show me today's meetings', 'compare calls and meetings this week', 'show me the next 20 deals'."
-          },
-          "conversation_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Stable conversation or session identifier used only for conversational continuity such as 'proceed', 'next 20', 'next page', or other follow-up requests. Do not use this value to construct CRM queries. The backend owns all query interpretation and pagination state."
           }
         }
       },
@@ -169,6 +165,10 @@
           "module": {
             "type": "string",
             "description": "Canonical CRM display module resolved by the backend."
+          },
+          "module_api_name": {
+            "type": "string",
+            "description": "Exact Zoho CRM API module name for the resolved request."
           },
           "request_type": {
             "type": "string",

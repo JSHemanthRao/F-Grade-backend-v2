@@ -520,33 +520,67 @@ async todayActivityAnalysis(request, executionContext = createExecutionContext()
 
   log('info', `[CRM todayActivity] retrieving audit log for ${today}`);
 
-  const result = await this.zohoService.getAuditLogs({
-    date_range: {
-      start,
-      end
-    },
-    modules: ['Calls', 'Events', 'Tasks']
-  });
+  const standardModules = ['Calls', 'Events', 'Tasks'];
+  const customModuleSpecs = await discoverActivityModuleSpecs(this.zohoService);
+  const allModules = [...new Set([...standardModules, ...customModuleSpecs.map((spec) => spec.module)])];
 
-  const logs = Array.isArray(result.records)
-    ? result.records
-    : [];
+  let activityLogs = [];
+  if (typeof this.zohoService.getAuditLogs === 'function') {
+    const result = await this.zohoService.getAuditLogs({
+      date_range: {
+        start,
+        end
+      },
+      modules: allModules
+    });
 
-  const activityLogs = logs.filter((logEntry) => {
-    const moduleName =
-      logEntry.module?.api_name ||
-      logEntry.module?.name ||
-      logEntry.module ||
-      '';
+    const logs = Array.isArray(result?.records)
+      ? result.records
+      : [];
 
-    return ['Calls', 'Events', 'Tasks'].includes(String(moduleName));
-  });
+    activityLogs = logs.filter((logEntry) => {
+      const moduleName =
+        logEntry.module?.api_name ||
+        logEntry.module?.name ||
+        logEntry.module ||
+        '';
+
+      return standardModules.includes(String(moduleName));
+    });
+  }
+
+  const customActivityLogs = [];
+  let customActivityTotal = 0;
+  for (const spec of customModuleSpecs) {
+    try {
+      const countResult = await this.zohoService.count(spec.module, [{ field: spec.dateField, operator: 'between', value: [start, end] }]);
+      const queryResult = await this.zohoService.query({
+        module: spec.module,
+        fields: spec.fields || ['id'],
+        filters: [{ field: spec.dateField, operator: 'between', value: [start, end] }],
+        limit: request.limit || 10,
+        offset: request.offset || 0
+      });
+      const rows = Array.isArray(queryResult?.records) ? queryResult.records : [];
+      const mappedRows = rows.map((record) => ({ ...record, module: spec.module }));
+      customActivityLogs.push(...mappedRows);
+      customActivityTotal += Number(countResult?.count || mappedRows.length || 0);
+      if (countResult?.count > 0 && mappedRows.length === 0) {
+        customActivityLogs.push({ module: spec.module, count: countResult.count, date_field: spec.dateField, created_at: new Date().toISOString() });
+      }
+    } catch (_error) {
+      continue;
+    }
+  }
+
+  const allActivityLogs = [...activityLogs, ...customActivityLogs];
+  const totalActivityCount = Math.max(allActivityLogs.length, customActivityTotal);
 
   const summary = {
     calls: 0,
     meetings: 0,
     tasks: 0,
-    total_activities: activityLogs.length
+    total_activities: totalActivityCount
   };
 
   for (const logEntry of activityLogs) {
@@ -567,14 +601,14 @@ async todayActivityAnalysis(request, executionContext = createExecutionContext()
     analysis: 'today_activity',
     data_source: 'Zoho CRM Audit Log',
     date: today,
-    total_count: activityLogs.length,
+    total_count: totalActivityCount,
     summary,
-    activity_rows: activityLogs,
-    data: activityLogs,
+    activity_rows: allActivityLogs,
+    data: allActivityLogs,
     pagination: {
       limit: request.limit,
       offset: request.offset,
-      returned: activityLogs.length,
+      returned: allActivityLogs.length,
       more_records: false
     }
   };
@@ -1366,12 +1400,21 @@ async function discoverActivityModuleSpecs(zohoService) {
   const moduleList = Array.isArray(metadata?.modules) ? metadata.modules : [];
   const standardModules = new Set(['Leads', 'Contacts', 'Accounts', 'Deals', 'Tasks', 'Calls', 'Meetings', 'Notes', 'Products', 'Vendors', 'Quotes', 'Sales Orders', 'Purchase Orders', 'Campaigns', 'Renewal Accounts']);
   const fieldCandidates = [
-  { field: 'Start_DateTime', labelField: 'Event_Title', fields: ['Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Owner', 'Participants'] },
-    { field: 'Due_Date', labelField: 'Subject', fields: ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'] },
     { field: 'Created_Time', labelField: 'Subject', fields: ['Subject', 'Owner', 'Created_Time', 'Modified_Time'] },
     { field: 'Modified_Time', labelField: 'Subject', fields: ['Subject', 'Owner', 'Created_Time', 'Modified_Time'] },
+    { field: 'Due_Date', labelField: 'Subject', fields: ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'] },
+    { field: 'Start_DateTime', labelField: 'Event_Title', fields: ['Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Owner', 'Participants'] },
     { field: 'Call_Start_Time', labelField: 'Subject', fields: ['Subject', 'Call_Type', 'Call_Start_Time', 'Status', 'Owner', 'Created_Time'] }
   ];
+
+  const flattenFieldNames = (value) => {
+    if (Array.isArray(value)) return value.flatMap((entry) => flattenFieldNames(entry));
+    if (!value || typeof value !== 'object') return typeof value === 'string' ? [value] : [];
+    return ['api_name', 'name', 'field_name', 'field_label', 'display_label', 'label']
+      .map((key) => value[key])
+      .filter(Boolean)
+      .flatMap((entry) => flattenFieldNames(entry));
+  };
 
   const discovered = [];
   for (const moduleInfo of moduleList) {
@@ -1380,8 +1423,13 @@ async function discoverActivityModuleSpecs(zohoService) {
     try {
       const fieldMetadata = await zohoService.getFieldMetadata(apiName);
       const fields = Array.isArray(fieldMetadata?.fields) ? fieldMetadata.fields : [];
-      const match = fieldCandidates.find((candidate) => fields.includes(candidate.field));
-      if (match) discovered.push({ module: apiName, dateField: match.field, fields: match.fields, labelField: match.labelField });
+      const fieldNames = new Set(flattenFieldNames(fields));
+      const match = fieldCandidates.find((candidate) => fieldNames.has(candidate.field))
+        || fieldCandidates.find((candidate) => candidate.fields.some((field) => fieldNames.has(field)))
+        || fieldCandidates.find((candidate) => fieldNames.has(candidate.fields[0]));
+      if (match) {
+        discovered.push({ module: apiName, dateField: match.field, fields: match.fields, labelField: match.labelField });
+      }
     } catch (_error) {
       continue;
     }

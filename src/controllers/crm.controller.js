@@ -739,37 +739,17 @@ function planQuestion(question) {
     };
   }
   if (isLeadConversionQuestion(lower)) {
-  return {
-    module: 'Leads',
-    module_api_name: 'Leads',
-
-    complexity: 'MULTI-STEP',
-    request_type: 'analysis',
-
-    analysis: {
-      type: isLeadToClosedWonQuestion(lower)
-        ? 'lead_closed_won_conversion'
-        : 'lead_conversion',
-
-      source_module: 'Leads',
-      source_module_api_name: 'Leads',
-
-      target_module: 'Deals',
-      target_module_api_name: 'Deals',
-
-      cross_module: true,
-      relationship: 'lead_to_deal'
-    },
-
-    fields: ['id'],
-
-    // Do not reuse the normal planner filters here.
-    filters: [],
-
-    limit: 20,
-    offset: 0
-  };
-}
+    return {
+      module: 'Leads',
+      complexity: 'MULTI-STEP',
+      request_type: 'analysis',
+      analysis: { type: isLeadToClosedWonQuestion(lower) ? 'lead_closed_won_conversion' : 'lead_conversion' },
+      fields: ['id'],
+      filters: [],
+      limit: 20,
+      offset: 0
+    };
+  }
 
   const groupBy = extractGroupBy(lower);
   if (groupBy && !/(dashboard|report)/.test(lower)) {
@@ -993,20 +973,28 @@ function buildAssistantAnswer(question, result) {
   }
 
 if (result?.analysis === 'today_activity') {
-  const summary = result.summary || {};
+  const rows = Array.isArray(result?.activity_rows) && result.activity_rows.length > 0
+    ? result.activity_rows
+    : [
+        { module: 'Calls', count: 0, latest_record: null, date_field: 'Created_Time' },
+        { module: 'Meetings', count: 0, latest_record: null, date_field: 'Start_DateTime' },
+        { module: 'Tasks', count: 0, latest_record: null, date_field: 'Due_Date' }
+      ];
 
-  if (!result.total_count) {
-    return 'No verified CRM activity was recorded in the Audit Log today.';
+  const lines = [
+    '| Module | Count | Latest record | Date field |',
+    '| --- | ---: | --- | --- |'
+  ];
+
+  for (const row of rows) {
+    const moduleName = row?.module || 'Unknown';
+    const count = Number(row?.count || 0);
+    const latestRecord = row?.latest_record ?? '—';
+    const dateField = row?.date_field || '—';
+    lines.push(`| ${moduleName} | ${count} | ${latestRecord} | ${dateField} |`);
   }
 
-  return [
-    `Today's CRM Activity Report`,
-    '',
-    `Calls: ${summary.calls || 0}`,
-    `Meetings: ${summary.meetings || 0}`,
-    `Tasks: ${summary.tasks || 0}`,
-    `Total Activities: ${summary.total_activities || 0}`
-  ].join('\n');
+  return lines.join('\n');
 }
 
   if (result?.request_type === 'aggregate') {

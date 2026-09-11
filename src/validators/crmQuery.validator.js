@@ -20,6 +20,24 @@ function hasNonEmptyValue(value) {
   return isValue(value) && (typeof value !== 'string' || value.trim().length > 0);
 }
 
+function isApiFieldName(field) {
+  return typeof field === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(field) && field !== 'Converted';
+}
+
+function resolveModuleKey(moduleName) {
+  if (!moduleName || typeof moduleName !== 'string') return undefined;
+  const trimmed = moduleName.trim();
+  if (!trimmed) return undefined;
+  const direct = CRM_MODULES[trimmed] ? trimmed : undefined;
+  if (direct) return direct;
+  const canonical = Object.keys(CRM_MODULES).find((key) => key.toLowerCase() === trimmed.toLowerCase());
+  if (canonical) return canonical;
+  const apiNameMatch = Object.keys(CRM_API_NAMES).find((key) => key.toLowerCase() === trimmed.toLowerCase());
+  if (apiNameMatch) return apiNameMatch;
+  const apiValueMatch = Object.keys(CRM_API_NAMES).find((key) => CRM_API_NAMES[key].toLowerCase() === trimmed.toLowerCase());
+  return apiValueMatch || undefined;
+}
+
 function validateCrmQuery(body) {
   const errors = [];
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -28,18 +46,13 @@ function validateCrmQuery(body) {
 
   const { module, fields, filters = [], filter_expression: filterExpression, sort, sort_field, sort_order, limit = 20, offset = 0, request_type = 'records', aggregate, group_by, having_filter: havingFilter } = body;
   const metadataDriven = body.metadata_driven === true;
-  // Allow either user-friendly module keys (e.g., 'Meetings') or API names (e.g., 'Events')
-  const resolveModuleKey = (mod) => {
-    if (!mod) return undefined;
-    if (CRM_MODULES[mod]) return mod;
-    const mapped = Object.keys(CRM_API_NAMES).find((k) => CRM_API_NAMES[k] === mod);
-    return mapped;
-  };
   const resolvedModuleKey = resolveModuleKey(module);
   const supportedFields = resolvedModuleKey ? CRM_MODULES[resolvedModuleKey] : undefined;
+  const canonicalModule = resolvedModuleKey || module;
   const isVirtualAnalysisModule = module === 'CRM' && request_type === 'analysis';
   const defaultModuleFields = supportedFields ? supportedFields.slice(0, 6) : [];
   const addError = (path, message) => errors.push({ path, message });
+
   const validateExpression = (expression, path = 'filter_expression') => {
     if (!expression || typeof expression !== 'object' || Array.isArray(expression)) return addError(path, 'filter_expression must be an object.');
     if (expression.field) {
@@ -52,22 +65,19 @@ function validateCrmQuery(body) {
     if (operator === 'NOT' && expression.conditions.length !== 1) return addError(`${path}.conditions`, 'NOT requires exactly one condition.');
     expression.conditions.forEach((condition, index) => validateExpression(condition, `${path}.conditions[${index}]`));
   };
+
   if (filterExpression !== undefined) validateExpression(filterExpression);
-  const invalidFieldMessage = (field) => `Field '${field}' is not supported for module '${module}'. Use a valid Zoho CRM API field name. Allowed fields: ${supportedFields ? supportedFields.join(', ') : 'none'}.`;
+  const invalidFieldMessage = (field) => `Field '${field}' is not supported for module '${canonicalModule}'. Use a valid Zoho CRM API field name. Allowed fields: ${supportedFields ? supportedFields.join(', ') : 'none'}.`;
 
   const requestTypes = new Set(['records', 'count', 'aggregate', 'comparison', 'analysis', 'search', 'bulk_read']);
   const metricRequest = request_type !== 'records';
+
   if (typeof module !== 'string' || module.trim().length === 0) addError('module', 'module must be a non-empty string.');
-  // Module availability is authoritative only after the live settings/modules lookup.
   if (!requestTypes.has(request_type)) addError('request_type', 'request_type must be one of: records, count, aggregate, analysis, search, bulk_read.');
+
   if (!Array.isArray(fields) || fields.length === 0) {
-    if (!metricRequest) {
-      if ((supportedFields && supportedFields.length > 0) || isVirtualAnalysisModule) {
-        // Connector payloads can omit fields for a module-only request. Fill with a safe default set
-        // so the request still executes instead of failing validation.
-      } else {
-        addError('fields', 'fields must be a non-empty array for record requests.');
-      }
+    if (!metricRequest && !(supportedFields && supportedFields.length > 0) && !isVirtualAnalysisModule) {
+      addError('fields', 'fields must be a non-empty array for record requests.');
     }
   } else {
     const duplicates = fields.filter((field, index) => fields.indexOf(field) !== index);
@@ -82,20 +92,24 @@ function validateCrmQuery(body) {
   const normalizedFields = Array.isArray(fields) && fields.length > 0
     ? fields
     : (metricRequest ? ['id'] : (metadataDriven ? [] : (supportedFields ? defaultModuleFields : [])));
+
   if (request_type === 'aggregate') {
-      if (!aggregate || typeof aggregate !== 'object' || Array.isArray(aggregate)) {
-        addError('aggregate', 'aggregate is required for aggregate requests and must be an object.');
-      } else {
-        if (!['sum', 'avg', 'min', 'max', 'count'].includes(aggregate.operation)) addError('aggregate.operation', 'aggregate.operation must be one of: sum, avg, min, max, count.');
-        if (typeof aggregate.field !== 'string' || aggregate.field.length === 0) addError('aggregate.field', 'aggregate.field must be a non-empty string.');
-        else if (!metadataDriven && supportedFields && !supportedFields.includes(aggregate.field) && !isApiFieldName(aggregate.field)) addError('aggregate.field', invalidFieldMessage(aggregate.field));
-      }
+    if (!aggregate || typeof aggregate !== 'object' || Array.isArray(aggregate)) {
+      addError('aggregate', 'aggregate is required for aggregate requests and must be an object.');
+    } else {
+      if (!['sum', 'avg', 'min', 'max', 'count'].includes(aggregate.operation)) addError('aggregate.operation', 'aggregate.operation must be one of: sum, avg, min, max, count.');
+      if (typeof aggregate.field !== 'string' || aggregate.field.length === 0) addError('aggregate.field', 'aggregate.field must be a non-empty string.');
+      else if (!metadataDriven && supportedFields && !supportedFields.includes(aggregate.field) && !isApiFieldName(aggregate.field)) addError('aggregate.field', invalidFieldMessage(aggregate.field));
+    }
   }
+
   if (request_type === 'comparison' && (!aggregate || typeof aggregate !== 'object' || !['sum', 'avg', 'min', 'max', 'count'].includes(aggregate.operation) || typeof aggregate.field !== 'string')) {
     addError('aggregate', 'comparison requests require an aggregate with operation count, sum, avg, min, or max and a field.');
   }
+
   if (group_by !== undefined && (typeof group_by !== 'string' || group_by.length === 0)) addError('group_by', 'group_by must be a non-empty string.');
   else if (group_by !== undefined && !metadataDriven && supportedFields && !supportedFields.includes(group_by) && !isApiFieldName(group_by)) addError('group_by', invalidFieldMessage(group_by));
+
   if (Array.isArray(fields) && fields.length > 500) addError('fields', 'A COQL query cannot select more than 500 fields.');
   if (Array.isArray(filters) && filters.length > 25) addError('filters', 'A COQL query cannot contain more than 25 criteria.');
 
@@ -129,8 +143,9 @@ function validateCrmQuery(body) {
         } else {
           normalizedFilters[index] = { ...filter, value: betweenValue };
         }
+      } else if (!['in', 'between'].includes(filter.operator) && !isValue(filter.value)) {
+        addError(`${path}.value`, `Operator '${filter.operator}' requires a scalar value.`);
       }
-      else if (!['in', 'between'].includes(filter.operator) && !isValue(filter.value)) addError(`${path}.value`, `Operator '${filter.operator}' requires a scalar value.`);
     }
   });
 
@@ -166,162 +181,42 @@ function validateCrmQuery(body) {
       });
     }
   }
+
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) addError('limit', 'limit must be an integer between 1 and 200.');
   if (!Number.isInteger(offset) || offset < 0) addError('offset', 'offset must be a non-negative integer.');
 
-  if (errors.length > 0) throw createAppError(
-    'INVALID_CRM_REQUEST',
-    `CRM request validation failed: ${errors.map((error) => `${error.path}: ${error.message}`).join('; ')}`,
-    400,
-    { errors }
-  );
-  return { domain: body.domain || 'CRM', module, fields: normalizedFields, requested_fields: body.requested_fields || [], execution_fields: body.execution_fields, response_fields: body.response_fields, filters: normalizedFilters, filter_expression: filterExpression, sort: normalizedSort, limit, offset, request_type, aggregate, group_by, having_filter: havingFilter, relationships: body.relationships || [], aggregations: body.aggregations || [], comparison: body.comparison, date_range: body.date_range, analysis: body.analysis };
-}
-
- validateModuleFieldScope({
-  module: request.module,
-  fields: request.fields,
-  filters: request.filters,
-  sort: request.sort,
-  aggregate: request.aggregate,
-  group_by: request.group_by,
-  analysis: request.analysis
-});
-
-  /*
-   * Multi-module analyses are intentionally allowed to use
-   * fields from more than one CRM module.
-   *
-   * Example:
-   *   lead_conversion
-   *     Leads -> Converted__s / Converted_Date_Time
-   *     Deals -> related converted Deal
-   *
-   * These analyses perform their own module-specific validation
-   * inside the service layer.
-   */
-  const analysisType =
-    typeof analysis === 'string'
-      ? analysis
-      : analysis?.type;
-
-  const multiModuleAnalyses = new Set([
-    'lead_conversion',
-    'lead_closed_won_conversion',
-    'conversion_funnel',
-    'sales_performance',
-    'lead_source_conversion_report',
-    'owner_performance',
-    'today_activity'
-  ]);
-
-  if (multiModuleAnalyses.has(analysisType)) {
-    return true;
-  }
-
-  const resolveModuleKey = (mod) => {
-    if (!mod) return undefined;
-
-    if (CRM_MODULES[mod]) {
-      return mod;
-    }
-
-    const mapped = Object.keys(CRM_API_NAMES).find(
-      (key) => CRM_API_NAMES[key] === mod
-    );
-
-    return mapped;
-  };
-
-  const resolvedModuleKey = resolveModuleKey(module);
-  const supportedFields = resolvedModuleKey
-    ? CRM_MODULES[resolvedModuleKey]
-    : undefined;
-
-  /*
-   * Live metadata is the source of truth.
-   * Static scope validation is only used for legacy callers.
-   */
-  if (!resolvedModuleKey || !supportedFields) {
-    return true;
-  }
-
-  const errors = [];
-
-  const addInvalid = (path, field) => {
-    errors.push({
-      path,
-      field
-    });
-  };
-
-  const isSupported = (field) =>
-    typeof field === 'string' &&
-    supportedFields.includes(field);
-
-  fields.forEach((field, index) => {
-    if (!isSupported(field)) {
-      addInvalid(`fields[${index}]`, field);
-    }
-  });
-
-  filters.forEach((filter, index) => {
-    if (!isSupported(filter?.field)) {
-      addInvalid(
-        `filters[${index}].field`,
-        filter?.field
-      );
-    }
-  });
-
-  const sorts = Array.isArray(sort)
-    ? sort
-    : (sort ? [sort] : []);
-
-  sorts.forEach((sortItem, index) => {
-    if (!isSupported(sortItem?.field)) {
-      addInvalid(
-        `sort[${index}].field`,
-        sortItem?.field
-      );
-    }
-  });
-
-  if (aggregate && !isSupported(aggregate.field)) {
-    addInvalid(
-      'aggregate.field',
-      aggregate.field
-    );
-  }
-
-  if (group_by && !isSupported(group_by)) {
-    addInvalid(
-      'group_by',
-      group_by
-    );
-  }
-
   if (errors.length > 0) {
-    const allowed = supportedFields
-      ? supportedFields.join(', ')
-      : 'none';
-
     throw createAppError(
-      'INVALID_CRM_FIELD_SCOPE',
-      `CRM query field scope validation failed for module '${module}'. Every field must belong to this module. Allowed fields: ${allowed}.`,
+      'INVALID_CRM_REQUEST',
+      `CRM request validation failed: ${errors.map((error) => `${error.path}: ${error.message}`).join('; ')}`,
       400,
-      {
-        module,
-        allowed_fields: supportedFields || [],
-        invalid_fields: errors
-      }
+      { errors }
     );
   }
 
-  return true;
-
-
-  
+  return {
+    domain: body.domain || 'CRM',
+    module: canonicalModule,
+    fields: normalizedFields,
+    requested_fields: body.requested_fields || [],
+    execution_fields: body.execution_fields,
+    response_fields: body.response_fields,
+    filters: normalizedFilters,
+    filter_expression: filterExpression,
+    sort: normalizedSort,
+    limit,
+    offset,
+    request_type,
+    aggregate,
+    group_by,
+    having_filter: havingFilter,
+    relationships: body.relationships || [],
+    aggregations: body.aggregations || [],
+    comparison: body.comparison,
+    date_range: body.date_range,
+    analysis: body.analysis
+  };
+}
 
 function validateAggregateQuery({ module, fields = [], filters = [], aggregate, groupBy, sort, metadataValidated = false } = {}) {
   if (!aggregate || typeof aggregate !== 'object') {
@@ -340,8 +235,76 @@ function validateAggregateQuery({ module, fields = [], filters = [], aggregate, 
   return true;
 }
 
-function isApiFieldName(field) {
-  return typeof field === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(field) && field !== 'Converted';
+function validateModuleFieldScope({
+  module,
+  fields = [],
+  filters = [],
+  sort,
+  aggregate,
+  group_by,
+  analysis
+} = {}) {
+  const analysisType = typeof analysis === 'string' ? analysis : analysis?.type;
+  const multiModuleAnalyses = new Set([
+    'lead_conversion',
+    'lead_closed_won_conversion',
+    'conversion_funnel',
+    'sales_performance',
+    'lead_source_conversion_report',
+    'owner_performance',
+    'today_activity'
+  ]);
+
+  if (multiModuleAnalyses.has(analysisType)) {
+    return true;
+  }
+
+  const resolvedModuleKey = resolveModuleKey(module);
+  const supportedFields = resolvedModuleKey ? CRM_MODULES[resolvedModuleKey] : undefined;
+
+  if (!resolvedModuleKey || !supportedFields) {
+    return true;
+  }
+
+  const errors = [];
+  const addInvalid = (path, field) => errors.push({ path, field });
+  const isSupported = (field) => typeof field === 'string' && supportedFields.includes(field);
+
+  (Array.isArray(fields) ? fields : []).forEach((field, index) => {
+    if (!isSupported(field)) addInvalid(`fields[${index}]`, field);
+  });
+
+  (Array.isArray(filters) ? filters : []).forEach((filter, index) => {
+    if (!isSupported(filter?.field)) addInvalid(`filters[${index}].field`, filter?.field);
+  });
+
+  const sorts = Array.isArray(sort) ? sort : (sort ? [sort] : []);
+  sorts.forEach((sortItem, index) => {
+    if (!isSupported(sortItem?.field)) addInvalid(`sort[${index}].field`, sortItem?.field);
+  });
+
+  if (aggregate && !isSupported(aggregate.field)) addInvalid('aggregate.field', aggregate.field);
+  if (group_by && !isSupported(group_by)) addInvalid('group_by', group_by);
+
+  if (errors.length > 0) {
+    throw createAppError(
+      'INVALID_CRM_FIELD_SCOPE',
+      `CRM query field scope validation failed for module '${module}'. Every field must belong to this module. Allowed fields: ${supportedFields.join(', ')}.`,
+      400,
+      {
+        module,
+        allowed_fields: supportedFields,
+        invalid_fields: errors
+      }
+    );
+  }
+
+  return true;
 }
 
 module.exports = { validateCrmQuery, validateModuleFieldScope, validateAggregateQuery };
+
+
+
+
+
