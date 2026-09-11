@@ -73,9 +73,12 @@ function createCrmController(crmService = new CrmService()) {
           throw error;
         }
         const conversationId = typeof req.body?.conversation_id === 'string' && req.body.conversation_id.trim()
-          ? req.body.conversation_id.trim()
-          : null;
-        const previous = conversationId ? conversationContext.get(conversationId) : null;
+  ? req.body.conversation_id.trim()
+  : null;
+
+const previous = conversationId
+  ? conversationContext.get(conversationId)
+  : null;
         const resolvedQuestion = resolveFollowUpQuestion(question, previous);
         const explicitModule = extractExplicitModule(resolvedQuestion.toLowerCase());
         const plannedRequest = planContinuationAwareRequest(planCrmQuestion(resolvedQuestion), question, previous);
@@ -109,18 +112,48 @@ function createCrmController(crmService = new CrmService()) {
         });
         recordCrmEvent('RESPONSE_NORMALIZED', diagnostics, { module: diagnostics.resolved_module, request_type: diagnostics.request_type });
         if (conversationId) {
-          const canonicalState = buildCanonicalConversationState(resolvedQuestion, plannedRequest, result, diagnostics.request_id);
-          const previousState = previous?.canonicalState;
-          if (previousState && isDuplicatePage(previousState, canonicalState) && canonicalState.pagination.offset > previousState.pagination.offset) {
-            const error = new Error('The requested next page returned the same records as the previous page.');
-            error.code = 'PAGINATION_DUPLICATE_PAGE';
-            error.statusCode = 409;
-            error.details = { request_id: diagnostics.request_id };
-            throw error;
-          }
-          conversationContext.set(conversationId, { question: resolvedQuestion, plannedRequest, canonicalState });
-          if (conversationContext.size > 1000) conversationContext.delete(conversationContext.keys().next().value);
-        }
+  const canonicalState = buildCanonicalConversationState(
+    resolvedQuestion,
+    plannedRequest,
+    result,
+    diagnostics.request_id
+  );
+
+  const previousState = previous?.canonicalState;
+
+  if (
+    previousState &&
+    isSameQueryShape(previousState, plannedRequest) &&
+    isDuplicatePage(previousState, canonicalState) &&
+    canonicalState.pagination.offset > previousState.pagination.offset
+  ) {
+    const error = new Error(
+      'The requested next page returned the same records as the previous page.'
+    );
+
+    error.code = 'PAGINATION_DUPLICATE_PAGE';
+    error.statusCode = 409;
+    error.details = {
+      request_id: diagnostics.request_id,
+      previous_offset: previousState.pagination.offset,
+      current_offset: canonicalState.pagination.offset
+    };
+
+    throw error;
+  }
+
+  conversationContext.set(conversationId, {
+    question: resolvedQuestion,
+    plannedRequest,
+    canonicalState
+  });
+
+  if (conversationContext.size > 1000) {
+    conversationContext.delete(
+      conversationContext.keys().next().value
+    );
+  }
+}
         const answer = isDashboardRequest(resolvedQuestion)
           ? JSON.stringify(buildDashboardSpecification(resolvedQuestion, result), null, 2)
           : buildAssistantAnswer(resolvedQuestion, result);
