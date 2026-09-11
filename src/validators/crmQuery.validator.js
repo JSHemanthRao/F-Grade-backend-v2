@@ -320,6 +320,9 @@ function validateCrmQuery(body) {
 
   return true;
 
+
+  
+
 function validateAggregateQuery({ module, fields = [], filters = [], aggregate, groupBy, sort, metadataValidated = false } = {}) {
   if (!aggregate || typeof aggregate !== 'object') {
     throw createAppError('INVALID_CRM_AGGREGATE', 'An aggregate definition is required.', 400);
