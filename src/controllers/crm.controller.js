@@ -611,19 +611,6 @@ function planQuestion(question) {
     };
   }
 
-  if (isLeadConversionQuestion(lower)) {
-    return {
-      module: 'Leads',
-      complexity: 'MULTI-STEP',
-      request_type: 'analysis',
-      analysis: { type: isLeadToClosedWonQuestion(lower) ? 'lead_closed_won_conversion' : 'lead_conversion' },
-      fields: ['id'],
-      filters,
-      limit: 20,
-      offset: 0
-    };
-  }
-
   if (module === 'Leads' && isHighestLeadCreationDayQuestion(lower)) {
     return {
       module: 'Leads',
@@ -636,6 +623,7 @@ function planQuestion(question) {
       offset: 0
     };
   }
+
 
   const ownerName = extractOwnerName(text);
   if (ownerName) filters.push({ field: 'Owner', operator: 'equals', value: ownerName });
@@ -750,6 +738,38 @@ function planQuestion(question) {
       offset: 0
     };
   }
+  if (isLeadConversionQuestion(lower)) {
+  return {
+    module: 'Leads',
+    module_api_name: 'Leads',
+
+    complexity: 'MULTI-STEP',
+    request_type: 'analysis',
+
+    analysis: {
+      type: isLeadToClosedWonQuestion(lower)
+        ? 'lead_closed_won_conversion'
+        : 'lead_conversion',
+
+      source_module: 'Leads',
+      source_module_api_name: 'Leads',
+
+      target_module: 'Deals',
+      target_module_api_name: 'Deals',
+
+      cross_module: true,
+      relationship: 'lead_to_deal'
+    },
+
+    fields: ['id'],
+
+    // Do not reuse the normal planner filters here.
+    filters: [],
+
+    limit: 20,
+    offset: 0
+  };
+}
 
   const groupBy = extractGroupBy(lower);
   if (groupBy && !/(dashboard|report)/.test(lower)) {
@@ -776,20 +796,6 @@ function planQuestion(question) {
       aggregate: { operation: aggregateOperation.operation, field: aggregateOperation.field },
       date_field_role: dateFieldRole,
       filters,
-      limit: 20,
-      offset: 0
-    };
-  }
-
-  if (isLeadConversionQuestion(lower)) {
-    return {
-      module: 'Leads',
-      complexity: 'MULTI-STEP',
-      request_type: 'analysis',
-      analysis: { type: 'lead_conversion' },
-      fields: ['id'],
-      filters,
-      date_field_role: dateFieldRole,
       limit: 20,
       offset: 0
     };
@@ -843,17 +849,41 @@ function extractRecordLimit(lowerText) {
   return Math.min(Math.max(Number(match[1]), 1), 200);
 }
 
+function isLeadConversionQuestion(lowerText) {
+  const text = String(lowerText || '')
+    .trim()
+    .toLowerCase();
+
+  if (!text) {
+    return false;
+  }
+
+  const mentionsLeads =
+    /\b(?:lead|leads)\b/.test(text);
+
+  const mentionsDeals =
+    /\b(?:deal|deals)\b/.test(text);
+
+  const conversionIntent =
+    /\bconversion\s+rate\b/.test(text) ||
+    /\bconversion\s+percentage\b/.test(text) ||
+    /\bconversion\s+ratio\b/.test(text) ||
+    /\bconversion\b/.test(text) ||
+    /\bconverted\b/.test(text) ||
+    /\bconvert\b/.test(text) ||
+    /\b(?:lead|leads)\s+(?:to|into)\s+(?:deal|deals)\b/.test(text) ||
+    /\b(?:lead|leads)\s+(?:became|become)\s+(?:deal|deals)\b/.test(text) ||
+    /\b(?:converted|converting)\s+(?:to|into)\s+(?:deal|deals)\b/.test(text);
+
+  return mentionsLeads && mentionsDeals && conversionIntent;
+}
+
 function isComprehensiveSalesPerformanceRequest(lowerText) {
   const modules = ['leads', 'converted', 'accounts', 'contacts', 'deals'];
   const metrics = ['lead source', 'owner', 'closed won', 'conversion rate', 'created'];
   const moduleCount = modules.filter((term) => lowerText.includes(term)).length;
   const metricCount = metrics.filter((term) => lowerText.includes(term)).length;
   return moduleCount >= 4 && (metricCount >= 3 || /sales performance|compare|overall/.test(lowerText));
-}
-
-function isLeadConversionQuestion(lowerText) {
-  return /\b(?:conversion rate|conversion|converted|converted to deals?|became deals?|lead to deal)\b/.test(lowerText)
-    && /\b(?:lead|leads)\b/.test(lowerText);
 }
 
 function isConversionFunnelQuestion(lowerText) {

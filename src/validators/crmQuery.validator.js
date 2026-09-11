@@ -178,39 +178,146 @@ function validateCrmQuery(body) {
   return { domain: body.domain || 'CRM', module, fields: normalizedFields, requested_fields: body.requested_fields || [], execution_fields: body.execution_fields, response_fields: body.response_fields, filters: normalizedFilters, filter_expression: filterExpression, sort: normalizedSort, limit, offset, request_type, aggregate, group_by, having_filter: havingFilter, relationships: body.relationships || [], aggregations: body.aggregations || [], comparison: body.comparison, date_range: body.date_range, analysis: body.analysis };
 }
 
-function validateModuleFieldScope({ module, fields = [], filters = [], sort, aggregate, group_by } = {}) {
+ validateModuleFieldScope({
+  module: request.module,
+  fields: request.fields,
+  filters: request.filters,
+  sort: request.sort,
+  aggregate: request.aggregate,
+  group_by: request.group_by,
+  analysis: request.analysis
+});
+
+  /*
+   * Multi-module analyses are intentionally allowed to use
+   * fields from more than one CRM module.
+   *
+   * Example:
+   *   lead_conversion
+   *     Leads -> Converted__s / Converted_Date_Time
+   *     Deals -> related converted Deal
+   *
+   * These analyses perform their own module-specific validation
+   * inside the service layer.
+   */
+  const analysisType =
+    typeof analysis === 'string'
+      ? analysis
+      : analysis?.type;
+
+  const multiModuleAnalyses = new Set([
+    'lead_conversion',
+    'lead_closed_won_conversion',
+    'conversion_funnel',
+    'sales_performance',
+    'lead_source_conversion_report',
+    'owner_performance',
+    'today_activity'
+  ]);
+
+  if (multiModuleAnalyses.has(analysisType)) {
+    return true;
+  }
+
   const resolveModuleKey = (mod) => {
     if (!mod) return undefined;
-    if (CRM_MODULES[mod]) return mod;
-    const mapped = Object.keys(CRM_API_NAMES).find((k) => CRM_API_NAMES[k] === mod);
+
+    if (CRM_MODULES[mod]) {
+      return mod;
+    }
+
+    const mapped = Object.keys(CRM_API_NAMES).find(
+      (key) => CRM_API_NAMES[key] === mod
+    );
+
     return mapped;
   };
-  const resolvedModuleKey = resolveModuleKey(module);
-  const supportedFields = resolvedModuleKey ? CRM_MODULES[resolvedModuleKey] : undefined;
-  // Live metadata is the source of truth. Static scope checks remain for legacy
-  // callers that explicitly invoke this helper without a metadata service.
-  if (!resolvedModuleKey || !supportedFields) return;
-  const errors = [];
-  const addInvalid = (path, field) => errors.push({ path, field });
-  const isSupported = (field) => typeof field === 'string' && supportedFields?.includes(field);
 
-  if (!supportedFields) errors.push({ path: 'module', field: module });
-  fields.forEach((field, index) => { if (!isSupported(field)) addInvalid(`fields[${index}]`, field); });
-  filters.forEach((filter, index) => { if (!isSupported(filter?.field)) addInvalid(`filters[${index}].field`, filter?.field); });
-  const sorts = Array.isArray(sort) ? sort : (sort ? [sort] : []);
-  sorts.forEach((sortItem, index) => { if (!isSupported(sortItem?.field)) addInvalid(`sort[${index}].field`, sortItem?.field); });
-  if (aggregate && !isSupported(aggregate.field)) addInvalid('aggregate.field', aggregate.field);
-  if (group_by && !isSupported(group_by)) addInvalid('group_by', group_by);
+  const resolvedModuleKey = resolveModuleKey(module);
+  const supportedFields = resolvedModuleKey
+    ? CRM_MODULES[resolvedModuleKey]
+    : undefined;
+
+  /*
+   * Live metadata is the source of truth.
+   * Static scope validation is only used for legacy callers.
+   */
+  if (!resolvedModuleKey || !supportedFields) {
+    return true;
+  }
+
+  const errors = [];
+
+  const addInvalid = (path, field) => {
+    errors.push({
+      path,
+      field
+    });
+  };
+
+  const isSupported = (field) =>
+    typeof field === 'string' &&
+    supportedFields.includes(field);
+
+  fields.forEach((field, index) => {
+    if (!isSupported(field)) {
+      addInvalid(`fields[${index}]`, field);
+    }
+  });
+
+  filters.forEach((filter, index) => {
+    if (!isSupported(filter?.field)) {
+      addInvalid(
+        `filters[${index}].field`,
+        filter?.field
+      );
+    }
+  });
+
+  const sorts = Array.isArray(sort)
+    ? sort
+    : (sort ? [sort] : []);
+
+  sorts.forEach((sortItem, index) => {
+    if (!isSupported(sortItem?.field)) {
+      addInvalid(
+        `sort[${index}].field`,
+        sortItem?.field
+      );
+    }
+  });
+
+  if (aggregate && !isSupported(aggregate.field)) {
+    addInvalid(
+      'aggregate.field',
+      aggregate.field
+    );
+  }
+
+  if (group_by && !isSupported(group_by)) {
+    addInvalid(
+      'group_by',
+      group_by
+    );
+  }
 
   if (errors.length > 0) {
-    const allowed = supportedFields ? supportedFields.join(', ') : 'none';
+    const allowed = supportedFields
+      ? supportedFields.join(', ')
+      : 'none';
+
     throw createAppError(
       'INVALID_CRM_FIELD_SCOPE',
       `CRM query field scope validation failed for module '${module}'. Every field must belong to this module. Allowed fields: ${allowed}.`,
       400,
-      { module, allowed_fields: supportedFields || [], invalid_fields: errors }
+      {
+        module,
+        allowed_fields: supportedFields || [],
+        invalid_fields: errors
+      }
     );
   }
+
   return true;
 }
 
