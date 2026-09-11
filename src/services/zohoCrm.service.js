@@ -244,9 +244,203 @@ class ZohoCrmService {
   }
 
   async getAuditLogs(params = {}) {
-    const response = await this.readGet('/settings/audit_log_export', { params, operation: 'audit_logs', scope: 'ZohoCRM.settings.audit_logs.READ' });
-    return { records: Array.isArray(response.data?.audit_log_export) ? response.data.audit_log_export : [], info: response.data?.info || {} };
+  const config = this.configLoader();
+  const token = await this.authService.getAccessToken();
+  const apiBaseUrl = normalizeCrmBaseUrl(
+    this.authService.getApiDomain() || config.apiBaseUrl
+  );
+
+  const today = new Date();
+
+  const start =
+    params.date_range?.start ||
+    `${today.toISOString().slice(0, 10)}T00:00:00+05:30`;
+
+  const end =
+    params.date_range?.end ||
+    `${today.toISOString().slice(0, 10)}T23:59:59+05:30`;
+
+  const modules = Array.isArray(params.modules)
+    ? params.modules
+    : ['Calls', 'Events', 'Tasks'];
+
+  const criteria = {
+    group_operator: 'and',
+    group: [
+      {
+        field: {
+          api_name: 'audited_time'
+        },
+        comparator: 'between',
+        value: [start, end]
+      },
+      {
+        field: {
+          api_name: 'module'
+        },
+        comparator: 'in',
+        value: modules.map((module) => ({
+          api_name: module
+        }))
+      }
+    ]
+  };
+
+  const createResponse = await this.executeRequest(
+    'post',
+    `${apiBaseUrl}/settings/audit_log_export`,
+    {
+      data: {
+        audit_log_export: [
+          {
+            criteria
+          }
+        ]
+      },
+      config: {
+        headers: {
+          Authorization: `Zoho-oauthtoken ${token}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: config.timeoutMs
+      },
+      retrySameRequest: false
+    }
+  );
+
+  const job =
+    createResponse.data?.audit_log_export?.[0];
+
+  const jobId =
+    job?.details?.id ||
+    job?.id;
+
+  if (!jobId) {
+    throw createAppError(
+      'AUDIT_LOG_EXPORT_JOB_UNAVAILABLE',
+      'Zoho did not return an audit-log export job ID.',
+      502
+    );
   }
+
+  let statusResponse;
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    statusResponse = await this.readGet(
+      `/settings/audit_log_export/${encodeURIComponent(jobId)}`,
+      {
+        operation: 'audit_logs_status',
+        scope: 'ZohoCRM.settings.audit_logs.READ'
+      }
+    );
+
+    const status =
+      String(
+        statusResponse.data?.audit_log_export?.[0]?.status || ''
+      ).toLowerCase();
+
+    if (status === 'finished') {
+      break;
+    }
+
+    if (status === 'failed') {
+      throw createAppError(
+        'AUDIT_LOG_EXPORT_FAILED',
+        'Zoho audit-log export failed.',
+        502
+      );
+    }
+
+    await new Promise((resolve) =>
+      setTimeout(resolve, 1000)
+    );
+  }
+
+  const exportJob =
+    statusResponse?.data?.audit_log_export?.[0];
+
+  const downloadUrl =
+    exportJob?.download_links?.[0];
+
+  if (!downloadUrl) {
+    throw createAppError(
+      'AUDIT_LOG_DOWNLOAD_UNAVAILABLE',
+      'Zoho did not provide an audit-log download URL.',
+      502
+    );
+  }
+
+  const downloadResponse = await this.httpClient.get(
+    downloadUrl,
+    {
+      responseType: 'text',
+      timeout: config.timeoutMs
+    }
+  );
+
+  function parseAuditLogCsv(csv) {
+  if (!csv || typeof csv !== 'string') {
+    return [];
+  }
+
+  const lines = csv
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) {
+    return [];
+  }
+
+  const headers = parseCsvLine(lines[0]);
+
+  return lines
+    .slice(1)
+    .map((line) => {
+      const values = parseCsvLine(line);
+
+      const row = {};
+
+      headers.forEach((header, index) => {
+        row[header] = values[index] ?? null;
+      });
+
+      return row;
+    });
+}
+
+function parseCsvLine(line) {
+  const values = [];
+  let value = '';
+  let quoted = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+
+    if (char === '"') {
+      if (quoted && line[i + 1] === '"') {
+        value += '"';
+        i += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+
+    if (char === ',' && !quoted) {
+      values.push(value.trim());
+      value = '';
+      continue;
+    }
+
+    value += char;
+  }
+
+  values.push(value.trim());
+
+  return values;
+}
+}
 
   async getFiles({ id } = {}) {
     throw createAppError('ZOHO_FILES_UNSUPPORTED', 'Zoho Files is not supported by the current Zoho CRM OAuth client. Configure a separate Zoho Files read-only integration before enabling this operation.', 501, { operation: 'files', required_read_scope: 'ZohoFiles.files.READ' });
@@ -672,7 +866,15 @@ function createZohoOperationError(error, operation, scope) {
 function assertReadOnlyRequest(method, url) {
   const normalizedMethod = String(method || '').toLowerCase();
   if (normalizedMethod === 'get') return;
-  if (normalizedMethod === 'post' && (/\/oauth\/v2\/token$/i.test(url) || /\/coql$/i.test(url) || /\/read$/i.test(url))) return;
+  if (
+  normalizedMethod === 'post' &&
+  (
+    /\/oauth\/v2\/token$/i.test(url) ||
+    /\/coql$/i.test(url) ||
+    /\/read$/i.test(url) ||
+    /\/settings\/audit_log_export$/i.test(url)
+  )
+) return;
   throw createAppError('READ_ONLY_OPERATION_BLOCKED', `Blocked non-read Zoho request: ${normalizedMethod.toUpperCase()} ${String(url).replace(/https?:\/\/[^/]+/i, '')}`, 403);
 }
 

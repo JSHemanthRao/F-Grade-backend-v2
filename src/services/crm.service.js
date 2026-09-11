@@ -512,53 +512,73 @@ class CrmService {
     };
   }
 
-  async todayActivityAnalysis(request, executionContext = createExecutionContext()) {
-    const today = toIsoDate(new Date());
-    const moduleSpecs = [
-      { module: 'Meetings', dateField: 'Start_DateTime', fields: ['Event_Title', 'Venue', 'Start_DateTime', 'End_DateTime', 'Owner', 'Participants'], labelField: 'Event_Title' },
-      { module: 'Calls', dateField: 'Created_Time', fields: ['Subject', 'Call_Type', 'Call_Start_Time', 'Status', 'Owner', 'Created_Time'], labelField: 'Subject' },
-      { module: 'Tasks', dateField: 'Due_Date', fields: ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'], labelField: 'Subject' },
-      { module: 'Notes', dateField: 'Created_Time', fields: ['Note_Title', 'Title', 'Owner', 'Created_Time'], labelField: 'Note_Title' }
-    ];
+async todayActivityAnalysis(request, executionContext = createExecutionContext()) {
+  const today = toIsoDate(new Date());
 
-    const customModuleSpecs = await discoverActivityModuleSpecs(this.zohoService);
-    const allModuleSpecs = [...moduleSpecs, ...customModuleSpecs];
+  const start = `${today}T00:00:00+05:30`;
+  const end = `${today}T23:59:59+05:30`;
 
-    const activityRows = [];
-    for (const spec of allModuleSpecs) {
-      const filters = [{ field: spec.dateField, operator: 'between', value: [today, today] }];
-      try {
-        const [countResult, latestResult] = await Promise.all([
-          executeCached(executionContext, `today-count:${spec.module}:${today}`, () => this.count({ ...request, module: spec.module, filters, request_type: 'count', fields: ['id'] })),
-          executeCached(executionContext, `today-latest:${spec.module}:${today}`, () => this.zohoService.query({ module: spec.module, fields: spec.fields, filters, sort: { field: spec.dateField, order: 'desc' }, limit: 1, offset: 0 }))
-        ]);
-        const latestRecord = latestResult.records[0] || {};
-        const latestLabel = latestRecord[spec.labelField] || latestRecord.Subject || latestRecord.Title || latestRecord.Note_Title || 'Unnamed record';
-        activityRows.push({
-          module: spec.module,
-          count: countResult.count,
-          latest_record: String(latestLabel),
-          date_field: spec.dateField
-        });
-      } catch (err) {
-        log('warn', `[CRM todayActivity] module=${spec.module} failed: ${String(err.message || err)}`);
-        activityRows.push({ module: spec.module, count: 0, latest_record: null, date_field: spec.dateField });
-        continue;
-      }
-    }
+  log('info', `[CRM todayActivity] retrieving audit log for ${today}`);
 
-    const totalCount = activityRows.reduce((sum, row) => sum + Number(row.count || 0), 0);
-    return {
-      module: 'CRM',
-      request_type: 'analysis',
-      analysis: 'today_activity',
-      date: today,
-      total_count: totalCount,
-      activity_rows: activityRows,
-      data: activityRows,
-      pagination: { limit: request.limit, offset: request.offset, returned: activityRows.length, more_records: false }
-    };
+  const result = await this.zohoService.getAuditLogs({
+    date_range: {
+      start,
+      end
+    },
+    modules: ['Calls', 'Events', 'Tasks']
+  });
+
+  const logs = Array.isArray(result.records)
+    ? result.records
+    : [];
+
+  const activityLogs = logs.filter((logEntry) => {
+    const moduleName =
+      logEntry.module?.api_name ||
+      logEntry.module?.name ||
+      logEntry.module ||
+      '';
+
+    return ['Calls', 'Events', 'Tasks'].includes(String(moduleName));
+  });
+
+  const summary = {
+    calls: 0,
+    meetings: 0,
+    tasks: 0,
+    total_activities: activityLogs.length
+  };
+
+  for (const logEntry of activityLogs) {
+    const moduleName =
+      logEntry.module?.api_name ||
+      logEntry.module?.name ||
+      logEntry.module ||
+      '';
+
+    if (moduleName === 'Calls') summary.calls += 1;
+    else if (moduleName === 'Events') summary.meetings += 1;
+    else if (moduleName === 'Tasks') summary.tasks += 1;
   }
+
+  return {
+    module: 'CRM',
+    request_type: 'analysis',
+    analysis: 'today_activity',
+    data_source: 'Zoho CRM Audit Log',
+    date: today,
+    total_count: activityLogs.length,
+    summary,
+    activity_rows: activityLogs,
+    data: activityLogs,
+    pagination: {
+      limit: request.limit,
+      offset: request.offset,
+      returned: activityLogs.length,
+      more_records: false
+    }
+  };
+}
 
   async fastSummary(request, executionContext = createExecutionContext()) {
     const today = toIsoDate(new Date());

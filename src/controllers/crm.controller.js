@@ -920,6 +920,31 @@ function buildAssistantAnswer(question, result) {
     return `I found ${result.count} matching ${module.toLowerCase()} records and retrieved ${result.data?.length || 0} for display.`;
   }
 
+  if (result?.analysis === 'lead_conversion') {
+  const metrics = result.metrics || {};
+
+  if (metrics.leads_converted_to_deals === null) {
+    return [
+      `Lead-to-Deal Conversion Rate`,
+      '',
+      `Leads Created: ${metrics.leads_created ?? 0}`,
+      `Leads Converted: ${metrics.leads_converted ?? 0}`,
+      `Leads Converted to Deals: unavailable`,
+      '',
+      `Conversion rate cannot be calculated reliably because the Lead-to-Deal relationship could not be verified.`
+    ].join('\n');
+  }
+
+  return [
+    `Lead-to-Deal Conversion Rate`,
+    '',
+    `Leads Created: ${metrics.leads_created ?? 0}`,
+    `Leads Converted: ${metrics.leads_converted ?? 0}`,
+    `Leads Converted to Deals: ${metrics.leads_converted_to_deals ?? 0}`,
+    `Conversion Rate: ${formatPercent(metrics.conversion_rate)}`
+  ].join('\n');
+}
+
   if (result?.analysis === 'lead_closed_won_conversion') {
     const metrics = result.metrics || {};
     return `Total Leads: ${metrics.total_leads}. Converted Leads: ${metrics.converted_leads}. Closed Won Deals: ${metrics.closed_won_deals}. Lead Conversion Rate: ${metrics.converted_leads} / ${metrics.total_leads} x 100 = ${formatPercent(metrics.lead_conversion_rate)}. Lead-to-Closed-Won Rate: ${metrics.closed_won_deals} / ${metrics.total_leads} x 100 = ${formatPercent(metrics.lead_to_closed_won_rate)}.`;
@@ -937,14 +962,22 @@ function buildAssistantAnswer(question, result) {
     return `Conversion funnel: ${totals.leads} leads, ${totals.contacts} contacts, ${totals.accounts} accounts, ${totals.deals} deals, and ${totals.closed_won_deals} Closed Won deals. Lead-to-Contact: ${formatPercent(rates.lead_to_contact)}. Contact-to-Account: ${formatPercent(rates.contact_to_account)}. Account-to-Deal: ${formatPercent(rates.account_to_deal)}. Deal-to-Closed-Won: ${formatPercent(rates.deal_to_closed_won)}.`;
   }
 
-  if (result?.analysis === 'today_activity') {
-    const rows = Array.isArray(result.activity_rows) ? result.activity_rows : [];
-    if (rows.length === 0) return 'Today\'s audit log: no verified CRM records were found for today.';
-    const header = '| Module | Count | Latest record | Date field |';
-    const separator = '| --- | ---: | --- | --- |';
-    const lines = rows.map((row) => `| ${row.module} | ${row.count} | ${row.latest_record} | ${row.date_field} |`);
-    return [`Today\'s audit log`, header, separator, ...lines, '', `Total verified records: ${result.total_count}`].join('\n');
+if (result?.analysis === 'today_activity') {
+  const summary = result.summary || {};
+
+  if (!result.total_count) {
+    return 'No verified CRM activity was recorded in the Audit Log today.';
   }
+
+  return [
+    `Today's CRM Activity Report`,
+    '',
+    `Calls: ${summary.calls || 0}`,
+    `Meetings: ${summary.meetings || 0}`,
+    `Tasks: ${summary.tasks || 0}`,
+    `Total Activities: ${summary.total_activities || 0}`
+  ].join('\n');
+}
 
   if (result?.request_type === 'aggregate') {
     const rows = Array.isArray(result.data) ? result.data : [];
