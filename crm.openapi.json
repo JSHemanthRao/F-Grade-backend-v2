@@ -158,6 +158,7 @@
             "type": "array",
             "description": "Dynamic CRM records. The columns are determined at runtime from the user's question and live CRM metadata. Different questions may return different columns without changing this API schema.",
             "items": {
+             
               "$ref": "#/components/schemas/DynamicRecord"
             }
           },
