@@ -552,9 +552,9 @@ function parseCsvLine(line) {
     return Array.isArray(response.data?.data) ? response.data.data : [];
   }
 
-  async searchRecords(module, fields, filters, page = 1, perPage = 200, search = {}) {
+  async searchRecords(module, fields, filters, page = 1, perPage = 200, search = {}, analysis) {
     const moduleName = await this.resolveModuleApiName(module);
-    validateModuleFieldScope({ module: moduleName, fields, filters });
+    validateModuleFieldScope({ module: moduleName, fields, filters, analysis });
     let config;
     try { config = this.configLoader(); } catch (_error) { throw createAppError('ZOHO_CONFIGURATION_ERROR', 'Zoho CRM is not configured.', 502); }
     const token = await this.authService.getAccessToken();
@@ -811,8 +811,8 @@ function buildDynamicCoqlQuery({ module, fields, filters, filter_expression: fil
   const clauses = buildFilterClauses(filters || []);
   let query = `select ${fields.join(', ')} from ${module}`;
   query += ` where ${filterExpression ? buildLogicalFilterClause(filterExpression) : (clauses.length > 0 ? buildWhereClause(clauses) : '(id is not null)')}`;
-  if (sort) {
-    const sorts = ensureStableSort(Array.isArray(sort) ? sort : [sort]);
+  const sorts = ensureStableSort(sort ? (Array.isArray(sort) ? sort : [sort]) : []);
+  if (sorts.length > 0) {
     query += ` order by ${sorts.map(({ field, order }) => `${field} ${order}`).join(', ')}`;
   }
   if (havingFilter) query += ` having ${buildWhereClause(buildFilterClauses([havingFilter]))}`;
@@ -821,7 +821,7 @@ function buildDynamicCoqlQuery({ module, fields, filters, filter_expression: fil
 
 function ensureStableSort(sorts) {
   const normalized = sorts.filter((item) => item && item.field);
-  if (normalized.length === 0) return normalized;
+  if (normalized.length === 0) return [{ field: 'id', order: 'desc' }];
   const hasIdSort = normalized.some((item) => String(item.field).toLowerCase() === 'id');
   if (!hasIdSort) normalized.push({ field: 'id', order: 'desc' });
   return normalized;

@@ -841,6 +841,22 @@ async todayActivityAnalysis(request, executionContext = createExecutionContext()
         ...(conversionDateFilter ? [conversionDateFilter] : [])
       ]
     });
+    let dealsCreated = { count: null };
+    let dealsPopulationWarning = null;
+    try {
+      dealsCreated = await this.count({
+        ...request,
+        module: 'Deals',
+        module_api_name: typeof this.zohoService.resolveModuleApiName === 'function'
+          ? await this.zohoService.resolveModuleApiName('Deals')
+          : undefined,
+        filters: request.filters
+      });
+    } catch (error) {
+      if (error.code !== 'ZOHO_COUNT_ERROR') throw error;
+      dealsPopulationWarning = error.message;
+      log('warn', `[DEALS CREATED COUNT] null (${dealsPopulationWarning})`);
+    }
     let convertedToDeals = null;
     let dealsCountWarning = null;
     let comparison = {
@@ -878,14 +894,15 @@ async todayActivityAnalysis(request, executionContext = createExecutionContext()
       summary: {
         leads_created: leadsCreated,
         leads_converted: leadsConverted,
+        deals_created: dealsCreated.count,
         leads_converted_to_deals: leadsConvertedToDeals,
         converted_to_deals: leadsConvertedToDeals,
         conversion_rate: conversionRate
       },
-      metrics: { leads_created: leadsCreated, leads_converted: leadsConverted, leads_converted_to_deals: leadsConvertedToDeals, conversion_rate: conversionRate },
+      metrics: { leads_created: leadsCreated, leads_converted: leadsConverted, deals_created: dealsCreated.count, leads_converted_to_deals: leadsConvertedToDeals, conversion_rate: conversionRate },
       calculations: ['conversion_rate = leads_converted_to_deals / leads_created * 100'],
       comparison,
-      warnings: dealsCountWarning ? [dealsCountWarning] : [],
+      warnings: [dealsCountWarning || dealsPopulationWarning].filter(Boolean),
       data: [],
       pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false }
     };
@@ -920,20 +937,31 @@ async todayActivityAnalysis(request, executionContext = createExecutionContext()
         ['id', 'Converted__s', 'Converted_Date_Time', relationshipField.field_api_name],
         leadFilters,
         page,
-        200
+        200,
+        {},
+        { type: 'lead_conversion' }
       );
       leadRecords.push(...leadResult.records);
       moreRecords = Boolean(leadResult.info?.more_records);
       page += 1;
     }
-    const dealIds = new Set(leadRecords.map((record) => {
-      const lookup = record[relationshipField.field_api_name];
-      return lookup && typeof lookup === 'object' ? lookup.id : lookup;
-    }).filter(Boolean).map(String));
+    const validLeadDealIds = leadRecords
+      .map((record) => {
+        const lookup = record[relationshipField.field_api_name];
+        return lookup && typeof lookup === 'object' ? lookup.id : lookup;
+      })
+      .filter((value) => value !== undefined && value !== null && value !== '')
+      .map(String);
+    const dealIds = new Set(validLeadDealIds);
     const dealRecords = dealIds.size > 0
       ? await this.zohoService.getRecordsByIds('Deals', [...dealIds], ['id', 'Deal_Name', 'Created_Time', 'Lead_Conversion_Time'])
       : [];
-    const matched = dealRecords.filter((deal) => dealIds.has(String(deal.id))).length;
+    const validDealIds = new Set(dealRecords.map((deal) => String(deal.id)).filter(Boolean));
+    const matched = leadRecords.filter((record) => {
+      const lookup = record[relationshipField.field_api_name];
+      const leadDealId = lookup && typeof lookup === 'object' ? lookup.id : lookup;
+      return leadDealId != null && validDealIds.has(String(leadDealId));
+    }).length;
     return {
       count: matched,
       comparison: {

@@ -95,8 +95,8 @@ function buildFilterClauses(filters) {
   });
 }
 
-function buildCoqlQuery({ module, fields, filters, filter_expression: filterExpression, sort, having_filter: havingFilter }) {
-  validateModuleFieldScope({ module, fields, filters, sort });
+function buildCoqlQuery({ module, fields, filters, filter_expression: filterExpression, sort, having_filter: havingFilter, analysis }) {
+  validateModuleFieldScope({ module, fields, filters, sort, analysis });
   const clauses = buildFilterClauses(filters);
   const moduleName = CRM_API_NAMES[module] || module;
   let query = `select ${fields.join(', ')} from ${moduleName}`;

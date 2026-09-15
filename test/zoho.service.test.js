@@ -284,11 +284,12 @@ test('executes lead conversion analysis as two aggregate queries', async () => {
     filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-09-01'] }]
   });
   assert.equal(result.summary.leads_created, 20);
+  assert.equal(result.summary.deals_created, 5);
   assert.equal(result.summary.converted_to_deals, null);
   assert.equal(result.summary.conversion_rate, null);
   assert.equal(result.metrics.leads_converted, 8);
   assert.equal(result.metrics.leads_converted_to_deals, null);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
 });
 
 test('calculates full conversion funnel rates with module-valid count queries', async () => {
@@ -359,6 +360,35 @@ test('matches converted Leads to Deals through a verified direct lookup', async 
   });
 });
 
+test('counts converted lead records, not just unique deal IDs, when multiple leads map to one deal', async () => {
+  const service = new CrmService({
+    getFieldMetadata: async (module) => ({
+      fields: module === 'Deals' ? ['Lead_Conversion_Time'] : ['Converted__s', 'Converted_Date_Time', 'Converted_Deal'],
+      metadata: module === 'Deals' ? [] : [{ api_name: 'Converted_Deal', data_type: 'lookup', lookup: { module: { api_name: 'Deals' } } }]
+    }),
+    count: async (module, filters) => ({ count: module === 'Leads' && filters.some((filter) => filter.field === 'Converted__s') ? 2 : 10 }),
+    searchRecords: async () => ({
+      records: [
+        { id: 'lead-1', Converted__s: true, Converted_Date_Time: '2026-08-10', Converted_Deal: { id: 'deal-1' } },
+        { id: 'lead-2', Converted__s: true, Converted_Date_Time: '2026-08-12', Converted_Deal: { id: 'deal-1' } }
+      ],
+      info: {}
+    }),
+    getRecordsByIds: async () => [{ id: 'deal-1', Deal_Name: 'Shared deal' }]
+  });
+
+  const result = await service.query({
+    module: 'Leads',
+    request_type: 'analysis',
+    analysis: { type: 'lead_conversion' },
+    filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-08-25'] }]
+  });
+
+  assert.equal(result.summary.leads_converted_to_deals, 2);
+  assert.equal(result.summary.conversion_rate, 20);
+  assert.equal(result.comparison.matched_lead_deal_records, 2);
+});
+
 test('gates explicit conversion fields on Zoho metadata', async () => {
   const service = new CrmService({
     getFieldMetadata: async () => ({ fields: ['Created_Time'] }),
@@ -391,6 +421,7 @@ test('returns real Lead counts with null Deal count when Zoho rejects the Deal r
   });
   assert.equal(result.summary.leads_created, 10);
   assert.equal(result.summary.leads_converted, 3);
+  assert.equal(result.summary.deals_created, null);
   assert.equal(result.summary.leads_converted_to_deals, null);
   assert.equal(result.summary.conversion_rate, null);
   assert.equal(result.warnings.length, 1);

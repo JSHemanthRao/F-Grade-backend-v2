@@ -237,6 +237,29 @@ test('supports explicit page numbers with a stable offset calculation', async ()
   assert.equal(calls[1].limit, 20);
 });
 
+test('advances offset by the actual returned count on follow-up pagination', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        returned: input.offset === 0 ? 10 : 10,
+        more_records: true,
+        data: Array.from({ length: 10 }, (_, index) => ({ id: String(input.offset + index + 1) }))
+      };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+
+  await controller.assistant({ body: { conversation_id: 'pagination-returned-count', question: 'Show me deals' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-returned-count', question: 'next 20' } }, response(), (error) => { throw error; });
+
+  assert.equal(calls[1].offset, 10);
+  assert.equal(calls[1].limit, 20);
+});
+
 test('resets pagination when the query shape changes', async () => {
   const calls = [];
   const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, request_type: input.request_type, returned: 20, more_records: true, data: [] }; } });

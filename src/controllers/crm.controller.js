@@ -248,10 +248,11 @@ function planContinuationAwareRequest(plannedRequest, originalQuestion, previous
 
   const priorRequest = previous.plannedRequest || plannedRequest;
   const previousLimit = Number(previous.canonicalState.pagination.limit) || Number(priorRequest.limit) || 20;
+  const previousReturned = Number(previous.canonicalState.pagination.returned) || previousLimit;
   const requestedLimit = extractPageSize(text) || previousLimit;
   const nextOffset = isExplicitPageRequest(text)
     ? Math.max(0, (extractPageNumber(text) - 1) * requestedLimit)
-    : (Number(previous.canonicalState.pagination.offset) || 0) + previousLimit;
+    : (Number(previous.canonicalState.pagination.offset) || 0) + previousReturned;
 
   return {
     ...priorRequest,
@@ -745,7 +746,7 @@ function planQuestion(question) {
       request_type: 'analysis',
       analysis: { type: isLeadToClosedWonQuestion(lower) ? 'lead_closed_won_conversion' : 'lead_conversion' },
       fields: ['id'],
-      filters: [],
+      filters: filters.filter((filter) => filter.field !== 'Stage'),
       limit: 20,
       offset: 0
     };
@@ -895,7 +896,7 @@ function extractRequestedYear(lowerText) {
 function detectRecordSort(lowerText, module) {
   if (/(oldest|first created|earliest)/.test(lowerText)) return { field: 'Created_Time', field_role: 'date', order: 'asc' };
   if (/(modified|updated)/.test(lowerText)) return { field: 'Modified_Time', field_role: 'modified', order: 'desc' };
-  if (/(highest|largest|maximum|top|most expensive)/.test(lowerText) && /(amount|value|revenue|deal|price|cost)/.test(lowerText)) {
+  if (/(highest|largest|maximum|top|most expensive|descending|desc)/.test(lowerText) && /(amount|value|revenue|deal|price|cost)/.test(lowerText)) {
     const label = /price|cost/.test(lowerText) ? 'price' : 'amount';
     return { field: label, field_label: label, field_role: 'numeric', order: 'desc' };
   }
