@@ -263,7 +263,7 @@ function planContinuationAwareRequest(plannedRequest, originalQuestion, previous
 }
 
 function isPaginationContinuation(text) {
-  return /^(?:proceed|continue|next(?:\s+\d+)?|show me the next \d+|next page)\b/i.test(text);
+  return /^(?:proceed|continue|next(?:\s+\d+)?(?:\s+(?:deals?|records?|batch(?:es)?))?|next page|(?:show|give) me (?:the )?(?:next\s+\d+|more)(?:\s+(?:deals?|records?|batch(?:es)?))?|more(?:\s+(?:deals?|records?|batch(?:es)?))?)\b/i.test(text);
 }
 
 function isExplicitPageRequest(text) {

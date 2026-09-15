@@ -196,6 +196,35 @@ test('advances the exact module offset for next-page follow-ups', async () => {
   assert.equal(calls[1].offset, 10);
 });
 
+test('advances conversational pagination when the follow-up repeats the module name', async () => {
+  const calls = [];
+  const pages = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const offset = input.offset || 0;
+      const data = Array.from({ length: 20 }, (_, index) => ({ id: String(offset + index + 1) }));
+      pages.push(data);
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        returned: 20,
+        more_records: true,
+        data
+      };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+
+  await controller.assistant({ body: { conversation_id: 'pagination-module-follow-up', question: 'show me deals' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-module-follow-up', question: 'give me next 20 deals' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-module-follow-up', question: 'give me next 20 deals' } }, response(), (error) => { throw error; });
+
+  assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40]);
+  assert.equal(new Set(pages[0].map((record) => record.id).concat(pages[1].map((record) => record.id))).size, 40);
+  assert.equal(new Set(pages[1].map((record) => record.id).concat(pages[2].map((record) => record.id))).size, 40);
+});
+
 test('keeps canonical filters and sort while advancing proceed pagination', async () => {
   const calls = [];
   const controller = createCrmController({
