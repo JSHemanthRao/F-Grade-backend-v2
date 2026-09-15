@@ -72,9 +72,7 @@ function createCrmController(crmService = new CrmService()) {
           error.statusCode = 400;
           throw error;
         }
-        const conversationId = typeof req.body?.conversation_id === 'string' && req.body.conversation_id.trim()
-  ? req.body.conversation_id.trim()
-  : null;
+          const conversationId = resolveConversationId(req);
 
 const previous = conversationId
   ? conversationContext.get(conversationId)
@@ -235,6 +233,20 @@ function resolveFollowUpQuestion(question, previous) {
     return `${withoutPreviousPeriod} created ${text}`;
   }
   return previous.question;
+}
+
+function resolveConversationId(req) {
+  const candidates = [
+    req.body?.conversation_id,
+    req.body?.conversationId,
+    req.body?.session_id,
+    req.body?.sessionId,
+    req.get?.('x-conversation-id'),
+    req.get?.('x-session-id'),
+    req.get?.('x-ms-conversation-id')
+  ];
+  const value = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+  return value ? value.trim() : null;
 }
 
 function applyPaginationFollowUp(plannedRequest, originalQuestion, previous) {

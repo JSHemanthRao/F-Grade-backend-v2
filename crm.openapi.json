@@ -81,14 +81,18 @@
         "required": [
           "question"
         ],
-        "additionalProperties": false,
         "properties": {
           "question": {
             "type": "string",
             "minLength": 1,
-            "description": "The user's complete original natural-language Zoho CRM request. Pass it exactly as the user provided it. Do not rewrite, summarize, translate, interpret, normalize, or convert it into structured query parameters. Examples: 'show me deals above 50000', 'show me today's meetings', 'compare calls and meetings this week', 'show me the next 20 deals'."
+            "description": "Pass the user's complete original natural-language CRM request exactly as written. Do not rewrite, summarize, interpret, translate, restructure, or construct module, field, filter, sort, limit, offset, or COQL parameters. The backend is responsible for all CRM query planning, metadata resolution, filtering, sorting, aggregation, and pagination."
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Stable conversation/session identifier used only by the backend to preserve conversational state such as pagination and follow-up requests. The same conversation must use the same conversation_id. Do not use conversation_id as a Zoho CRM query parameter and do not calculate offset in Copilot."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "Pagination": {
         "type": "object",

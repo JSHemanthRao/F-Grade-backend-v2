@@ -225,6 +225,22 @@ test('advances conversational pagination when the follow-up repeats the module n
   assert.equal(new Set(pages[1].map((record) => record.id).concat(pages[2].map((record) => record.id))).size, 40);
 });
 
+test('accepts Copilot conversation ID aliases for pagination state', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      return { module: input.module, request_type: input.request_type, returned: 20, data: [{ id: String(input.offset || 0) }] };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+
+  await controller.assistant({ body: { conversationId: 'copilot-alias', question: 'show me deals' }, get: () => null }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversationId: 'copilot-alias', question: 'next batch' }, get: () => null }, response(), (error) => { throw error; });
+
+  assert.deepEqual(calls.map((call) => call.offset), [0, 20]);
+});
+
 test('keeps canonical filters and sort while advancing proceed pagination', async () => {
   const calls = [];
   const controller = createCrmController({
