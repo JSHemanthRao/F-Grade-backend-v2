@@ -152,7 +152,7 @@ class ZohoCrmService {
   async executeQueryRequest(selectQuery, token, config, request, resolvedModule) {
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
     updateDiagnostics(getCurrentCrmDiagnostics(), { final_query: selectQuery });
-    log('info', `[COQL query] operation=record_query module=${resolvedModule} field_count=${Array.isArray(request?.fields) ? request.fields.length : 0}`);
+    log('info', `[COQL query] operation=record_query module=${resolvedModule} select_query=${selectQuery}`);
     try {
       const response = await this.executeRequest('post', `${apiBaseUrl}/coql`, { data: { select_query: selectQuery }, config: {
         headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },

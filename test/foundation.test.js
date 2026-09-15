@@ -219,8 +219,24 @@ test('plans today activity requests as a multi-module analysis', () => {
   const { planQuestion } = require('../src/controllers/crm.controller');
   const request = planQuestion('Give me todays activity with the logs');
   assert.equal(request.request_type, 'analysis');
-  assert.deepEqual(request.analysis, { type: 'today_activity' });
+  assert.deepEqual(request.analysis, { type: 'today_activity', activity_type: 'ACTIVITY_HISTORY' });
+  assert.equal(request.activity_type, 'ACTIVITY_HISTORY');
   assert.equal(request.module, 'CRM');
+});
+
+test('classifies scheduled today activity as SCHEDULED_ACTIVITY and history as ACTIVITY_HISTORY', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const history = planQuestion("What happened today in CRM");
+  const meetings = planQuestion("Show today's meetings");
+  const calls = planQuestion("Show me today's calls");
+  const tasks = planQuestion("Show today's tasks");
+
+  assert.equal(history.module, 'CRM');
+  assert.equal(history.activity_type, 'ACTIVITY_HISTORY');
+  assert.deepEqual(history.analysis, { type: 'today_activity', activity_type: 'ACTIVITY_HISTORY' });
+  assert.equal(meetings.activity_type, 'SCHEDULED_ACTIVITY');
+  assert.equal(calls.activity_type, 'SCHEDULED_ACTIVITY');
+  assert.equal(tasks.activity_type, 'SCHEDULED_ACTIVITY');
 });
 
 test('keeps explicit todays meetings on the Events module path', () => {
@@ -569,13 +585,14 @@ test('Copilot schema treats conversion as an operation, not the invalid Converte
   assert.equal(openApi.info['x-copilot-studio-field-mappings'], undefined);
 });
 
-test('OpenAPI exposes one question-only assistant operation', () => {
+test('OpenAPI exposes one assistant operation with optional conversation state', () => {
   const operation = openApi.paths['/api/crm/assistant'].post;
   const request = openApi.components.schemas.AssistantRequest;
   const response = openApi.components.schemas.CrmResponse;
 
   assert.equal(operation.operationId, 'askCrmAssistant');
-  assert.deepEqual(Object.keys(request.properties), ['question']);
+  assert.deepEqual(Object.keys(request.properties), ['question', 'conversation_id']);
+  assert.deepEqual(request.required, ['question']);
   assert.deepEqual(request.required, ['question']);
   assert.equal(request.additionalProperties, false);
   assert.ok(Object.keys(response.properties).includes('module_api_name'));

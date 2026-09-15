@@ -525,7 +525,7 @@ test('authenticates, calls Zoho COQL, and normalizes the CRM response', async ()
     more_records: false,
     records: [{ id: '7', Deal_Name: 'Acme', Owner: 'Asha' }],
     data: [{ id: '7', Deal_Name: 'Acme', Owner: 'Asha' }],
-    pagination: { limit: 20, offset: 0, more_records: false }
+    pagination: { limit: 20, offset: 0, returned: 1, more_records: false }
   });
 });
 

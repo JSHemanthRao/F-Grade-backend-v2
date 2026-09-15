@@ -25,6 +25,7 @@ function createCanonicalPlan(input = {}) {
     domain: request.domain || 'CRM',
     module: request.module || null,
     module_api_name: request.module_api_name,
+    activity_type: request.activity_type || null,
     intent: requestType,
     request_type: requestType,
     fields,

@@ -171,6 +171,7 @@ class CrmService {
     }
     if (request.request_type === 'analysis') {
       const analysisType = normalizedInput.analysis?.type;
+      const activityType = normalizedInput.activity_type || normalizedInput.analysis?.activity_type || null;
       const analysisHandlers = {
         lead_conversion: () => this.leadConversionAnalysis(request),
         highest_creation_day: () => this.highestCreationDayAnalysis(request, executionContext),
@@ -180,7 +181,7 @@ class CrmService {
         lead_source_conversion_report: () => this.leadSourceConversionReport(request, executionContext),
         owner_performance: () => this.ownerPerformanceReport(request, executionContext),
         sales_performance: () => this.salesPerformanceAnalysis(request, executionContext),
-        today_activity: () => this.todayActivityAnalysis(request, executionContext),
+        today_activity: () => this.todayActivityAnalysis({ ...request, activity_type: activityType }, executionContext),
         closed_won_summary: () => this.closedWonSummary(request, executionContext),
         count_and_records: () => this.countAndRecords(request, normalizedInput.retrieve_all === true, executionContext)
       };
@@ -239,6 +240,7 @@ class CrmService {
       pagination: {
         limit: request.limit,
         offset: request.offset,
+        returned: data.length,
         more_records: Boolean(info.more_records)
       }
     };
@@ -514,15 +516,70 @@ class CrmService {
 
 async todayActivityAnalysis(request, executionContext = createExecutionContext()) {
   const today = toIsoDate(new Date());
+  const activityType = request?.activity_type || request?.analysis?.activity_type || 'ACTIVITY_HISTORY';
 
   const start = `${today}T00:00:00+05:30`;
   const end = `${today}T23:59:59+05:30`;
 
-  log('info', `[CRM todayActivity] retrieving audit log for ${today}`);
+  log('info', `[CRM todayActivity] retrieving ${activityType.toLowerCase()} for ${today}`);
 
   const standardModules = ['Calls', 'Events', 'Tasks'];
   const customModuleSpecs = await discoverActivityModuleSpecs(this.zohoService);
   const allModules = [...new Set([...standardModules, ...customModuleSpecs.map((spec) => spec.module)])];
+
+  if (activityType === 'SCHEDULED_ACTIVITY') {
+    const scheduledActivity = await this.zohoService.query({
+      module: 'Calls',
+      fields: ['id', 'Subject', 'Call_Start_Time'],
+      filters: [{ field: 'Call_Start_Time', operator: 'between', value: [start, end] }],
+      limit: request.limit || 10,
+      offset: request.offset || 0
+    });
+    const meetingActivity = await this.zohoService.query({
+      module: 'Meetings',
+      fields: ['id', 'Event_Title', 'Start_DateTime'],
+      filters: [{ field: 'Start_DateTime', operator: 'between', value: [start, end] }],
+      limit: request.limit || 10,
+      offset: request.offset || 0
+    });
+    const taskActivity = await this.zohoService.query({
+      module: 'Tasks',
+      fields: ['id', 'Subject', 'Due_Date'],
+      filters: [{ field: 'Due_Date', operator: 'between', value: [today, today] }],
+      limit: request.limit || 10,
+      offset: request.offset || 0
+    });
+
+    const rows = [
+      ...(Array.isArray(scheduledActivity?.records) ? scheduledActivity.records : []).map((record) => ({ ...record, module: 'Calls' })),
+      ...(Array.isArray(meetingActivity?.records) ? meetingActivity.records : []).map((record) => ({ ...record, module: 'Meetings' })),
+      ...(Array.isArray(taskActivity?.records) ? taskActivity.records : []).map((record) => ({ ...record, module: 'Tasks' }))
+    ];
+
+    return {
+      module: 'CRM',
+      request_type: 'analysis',
+      analysis: 'today_activity',
+      activity_type: 'SCHEDULED_ACTIVITY',
+      data_source: 'Zoho CRM Schedules',
+      date: today,
+      total_count: rows.length,
+      summary: {
+        calls: rows.filter((row) => row.module === 'Calls').length,
+        meetings: rows.filter((row) => row.module === 'Meetings').length,
+        tasks: rows.filter((row) => row.module === 'Tasks').length,
+        total_activities: rows.length
+      },
+      activity_rows: rows,
+      data: rows,
+      pagination: {
+        limit: request.limit,
+        offset: request.offset,
+        returned: rows.length,
+        more_records: false
+      }
+    };
+  }
 
   let activityLogs = [];
   if (typeof this.zohoService.getAuditLogs === 'function') {
@@ -599,6 +656,7 @@ async todayActivityAnalysis(request, executionContext = createExecutionContext()
     module: 'CRM',
     request_type: 'analysis',
     analysis: 'today_activity',
+    activity_type: 'ACTIVITY_HISTORY',
     data_source: 'Zoho CRM Audit Log',
     date: today,
     total_count: totalActivityCount,

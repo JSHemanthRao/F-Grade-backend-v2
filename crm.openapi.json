@@ -89,7 +89,8 @@
           },
           "conversation_id": {
             "type": "string",
-            "description": "Stable conversation/session identifier used only by the backend to preserve conversational state such as pagination and follow-up requests. The same conversation must use the same conversation_id. Do not use conversation_id as a Zoho CRM query parameter and do not calculate offset in Copilot."
+            "minLength": 1,
+            "description": "Optional stable Copilot conversation identifier. Reuse the same value for follow-up requests so the backend can recover the prior canonical query and advance pagination."
           }
         },
         "additionalProperties": false
@@ -182,6 +183,10 @@
           "request_id": {
             "type": "string",
             "description": "Backend request identifier for troubleshooting."
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Conversation identifier used to recover canonical state for follow-up pagination requests."
           },
           "pagination": {
             "$ref": "#/components/schemas/Pagination"

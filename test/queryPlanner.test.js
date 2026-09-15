@@ -187,7 +187,7 @@ test('preserves follow-up module and intent while changing only the period', asy
 
 test('advances the exact module offset for next-page follow-ups', async () => {
   const calls = [];
-  const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, request_type: input.request_type, data: [] }; } });
+  const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, request_type: input.request_type, data: Array.from({ length: 10 }, (_, index) => ({ id: String((input.offset || 0) + index + 1) })) }; } });
   const response = (body) => ({ status: () => ({ json: (value) => value }), json: (value) => value });
   await controller.assistant({ body: { conversation_id: 'pagination-follow-up', question: 'Show me 10 products' } }, response({}), (error) => { throw error; });
   await controller.assistant({ body: { conversation_id: 'pagination-follow-up', question: 'next 10' } }, response({}), (error) => { throw error; });
@@ -230,7 +230,7 @@ test('accepts Copilot conversation ID aliases for pagination state', async () =>
   const controller = createCrmController({
     query: async (input) => {
       calls.push(input);
-      return { module: input.module, request_type: input.request_type, returned: 20, data: [{ id: String(input.offset || 0) }] };
+      return { module: input.module, request_type: input.request_type, returned: 1, data: [{ id: String(input.offset || 0) }] };
     }
   });
   const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
@@ -238,7 +238,7 @@ test('accepts Copilot conversation ID aliases for pagination state', async () =>
   await controller.assistant({ body: { conversationId: 'copilot-alias', question: 'show me deals' }, get: () => null }, response(), (error) => { throw error; });
   await controller.assistant({ body: { conversationId: 'copilot-alias', question: 'next batch' }, get: () => null }, response(), (error) => { throw error; });
 
-  assert.deepEqual(calls.map((call) => call.offset), [0, 20]);
+  assert.deepEqual(calls.map((call) => call.offset), [0, 1]);
 });
 
 test('keeps canonical filters and sort while advancing proceed pagination', async () => {

@@ -77,9 +77,21 @@ function createCrmController(crmService = new CrmService()) {
 const previous = conversationId
   ? conversationContext.get(conversationId)
   : null;
+        recordCrmEvent('CONVERSATION_STATE', diagnostics, {
+          conversation_id_present: Boolean(conversationId),
+          conversation_id_hash: conversationId ? hashConversationId(conversationId) : null,
+          continuation_detected: isPaginationContinuation(question) || isExplicitPageRequest(question),
+          previous_state_found: Boolean(previous?.canonicalState),
+          previous_offset: previous?.canonicalState?.pagination?.offset ?? null,
+          previous_returned: previous?.canonicalState?.pagination?.returned ?? null
+        });
         const resolvedQuestion = resolveFollowUpQuestion(question, previous);
         const explicitModule = extractExplicitModule(resolvedQuestion.toLowerCase());
         const plannedRequest = planContinuationAwareRequest(planCrmQuestion(resolvedQuestion), question, previous);
+        recordCrmEvent('PAGINATION_STATE', diagnostics, {
+          new_offset: plannedRequest.pagination?.offset ?? plannedRequest.offset ?? 0,
+          new_limit: plannedRequest.pagination?.limit ?? plannedRequest.limit ?? 20
+        });
         updateDiagnostics(diagnostics, {
           resolved_module: plannedRequest.module || explicitModule || 'not_reached',
           module_api_name: plannedRequest.module_api_name || 'not_reached',
@@ -114,7 +126,8 @@ const previous = conversationId
     resolvedQuestion,
     plannedRequest,
     result,
-    diagnostics.request_id
+    diagnostics.request_id,
+    conversationId
   );
 
   const previousState = previous?.canonicalState;
@@ -134,8 +147,12 @@ const previous = conversationId
     error.details = {
       request_id: diagnostics.request_id,
       previous_offset: previousState.pagination.offset,
-      current_offset: canonicalState.pagination.offset
+      current_offset: canonicalState.pagination.offset,
+      previous_record_ids: previousState.record_ids,
+      current_record_ids: canonicalState.record_ids
     };
+
+    recordCrmEvent('PAGINATION_DUPLICATE_PAGE', diagnostics, error.details);
 
     throw error;
   }
@@ -157,7 +174,7 @@ const previous = conversationId
           : buildAssistantAnswer(resolvedQuestion, result);
         const safe = stringifySummary(Object.assign({}, result));
         const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
-        res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, question, answer, diagnostics: publicDiagnostics, ...safe });
+        res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, conversation_id: conversationId, question, answer, diagnostics: publicDiagnostics, ...safe });
         } catch (error) {
         diagnosticsFromError(error, diagnostics);
         error.crmDiagnostics = diagnostics;
@@ -292,27 +309,31 @@ function extractPageNumber(text) {
   return match ? Math.min(Math.max(Number(match[1]), 1), 1000) : 1;
 }
 
-function buildCanonicalConversationState(question, plannedRequest, result, requestId) {
+function buildCanonicalConversationState(question, plannedRequest, result, requestId, conversationId) {
   const pagination = plannedRequest?.pagination || { limit: plannedRequest?.limit, offset: plannedRequest?.offset };
   const recordIds = Array.isArray(result?.data)
     ? result.data.map((record) => String(record?.id || record?.ID || '')).filter(Boolean)
     : [];
   return {
     request_id: requestId,
+    conversation_id: conversationId || null,
     original_question: question,
     domain: plannedRequest?.domain || 'CRM',
     module: plannedRequest?.module || null,
     module_api_name: plannedRequest?.module_api_name || null,
     filters: Array.isArray(plannedRequest?.filters) ? plannedRequest.filters : [],
+    date_range: plannedRequest?.date_range || null,
     sort: normalizeSortForFingerprint(plannedRequest?.sort),
     group_by: plannedRequest?.group_by || null,
     aggregate: plannedRequest?.aggregate || null,
+    comparison: plannedRequest?.comparison || null,
+    analysis: plannedRequest?.analysis || null,
     response_fields: Array.isArray(plannedRequest?.response_fields) ? plannedRequest.response_fields : Array.isArray(plannedRequest?.fields) ? plannedRequest.fields : [],
     pagination: {
       limit: Number(pagination?.limit) || 20,
       offset: Number(pagination?.offset) || 0,
-      returned: Number(result?.returned ?? recordIds.length ?? 0),
-      more_records: Boolean(result?.more_records ?? result?.pagination?.more_records)
+      returned: recordIds.length,
+      more_records: resolveMoreRecords(result)
     },
     record_ids: recordIds
   };
@@ -331,20 +352,38 @@ function isSameQueryShape(previousState, plannedRequest) {
     module: previousState.module,
     module_api_name: previousState.module_api_name,
     filters: previousState.filters,
+    date_range: previousState.date_range,
     sort: previousState.sort,
     group_by: previousState.group_by,
     aggregate: previousState.aggregate,
+    comparison: previousState.comparison,
+    analysis: previousState.analysis,
     response_fields: previousState.response_fields
   }) === stableStringify({
     domain: plannedRequest.domain || 'CRM',
     module: plannedRequest.module || null,
     module_api_name: plannedRequest.module_api_name || null,
     filters: Array.isArray(plannedRequest.filters) ? plannedRequest.filters : [],
+    date_range: plannedRequest.date_range || null,
     sort: normalizeSortForFingerprint(plannedRequest.sort),
     group_by: plannedRequest.group_by || null,
     aggregate: plannedRequest.aggregate || null,
+    comparison: plannedRequest.comparison || null,
+    analysis: plannedRequest.analysis || null,
     response_fields: Array.isArray(plannedRequest.response_fields) ? plannedRequest.response_fields : Array.isArray(plannedRequest.fields) ? plannedRequest.fields : []
   });
+}
+
+function resolveMoreRecords(result) {
+  if (typeof result?.pagination?.more_records === 'boolean') return result.pagination.more_records;
+  if (typeof result?.more_records === 'boolean') return result.more_records;
+  return false;
+}
+
+function hashConversationId(value) {
+  let hash = 0;
+  for (const character of String(value)) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
+  return Math.abs(hash).toString(16);
 }
 
 function isDuplicatePage(previousState, currentState) {
@@ -386,9 +425,25 @@ function isDashboardRequest(question) {
 
 function isTodayActivityQuestion(lowerText) {
   if (/\b(?:meeting|meetings|event|events|call|calls|task|tasks)\b/.test(lowerText)
-    && !/(activity|activities|logs?|audit)/.test(lowerText)) return false;
-  return /(today'?s activity|today activity|activity for today|what happened today|today's meetings|today meetings|today's logs|today logs|audit logs?|audit trail|daily activity|daily logs?)/.test(lowerText)
-    || (/\b(?:today|toda)\b/.test(lowerText) && /(activity|activities|meeting|meetings|event|events|call|calls|task|tasks|log|logs|audit)/.test(lowerText));
+    && !/(activity|activities|logs?|audit|history|what happened)/.test(lowerText)) return false;
+  return /(today'?s activity|today activity|activity for today|what happened today|today's logs|today logs|audit logs?|audit trail|daily activity|daily logs?|history for today|today's crm activity|crm activity today)/.test(lowerText)
+    || (/(?:today|toda)\b/.test(lowerText) && /(activity|activities|history|log|logs|audit)/.test(lowerText));
+}
+
+function detectActivityType(lowerText) {
+  const hasHistoryIntent = /(activity|activities|history|log|logs|audit|what happened|what happened today|today's activity|today activity|daily activity|today's crm activity)/.test(lowerText);
+  const hasScheduledIntent = /\b(?:meeting|meetings|event|events|call|calls|task|tasks)\b/.test(lowerText);
+  if (hasHistoryIntent && !hasScheduledIntent) return 'ACTIVITY_HISTORY';
+  if (hasScheduledIntent && !hasHistoryIntent) return 'SCHEDULED_ACTIVITY';
+  if (hasHistoryIntent && hasScheduledIntent) {
+    const isScheduledExplicit = /\b(?:today'?s meetings|today meetings|today'?s calls|today calls|today'?s tasks|today tasks|meetings?|calls?|tasks?)\b/.test(lowerText);
+    return isScheduledExplicit ? 'SCHEDULED_ACTIVITY' : 'ACTIVITY_HISTORY';
+  }
+  return null;
+}
+
+function scheduledActivityTypeForModule(module) {
+  return ['Calls', 'Meetings', 'Tasks'].includes(module) ? 'SCHEDULED_ACTIVITY' : null;
 }
 
 function buildDashboardSpecification(question, result) {
@@ -533,11 +588,13 @@ function planQuestion(question) {
     return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'files' }, files: {}, fields: ['id'], filters: [], limit: 200, offset: 0 };
   }
   if (isTodayActivityQuestion(lower)) {
+    const activityType = detectActivityType(lower) || 'ACTIVITY_HISTORY';
     return {
       module: 'CRM',
       complexity: 'MULTI-STEP',
       request_type: 'analysis',
-      analysis: { type: 'today_activity' },
+      analysis: { type: 'today_activity', activity_type: activityType },
+      activity_type: activityType,
       fields: ['id'],
       filters: [],
       limit: 200,
@@ -673,6 +730,7 @@ function planQuestion(question) {
       module: 'Deals',
       complexity: 'MULTI-STEP',
       request_type: 'analysis',
+      activity_type: scheduledActivityTypeForModule(module),
       analysis: { type: 'count_and_records' },
       fields: defaultFields('Deals'),
       fields_source: 'planner_default',
@@ -688,6 +746,7 @@ function planQuestion(question) {
       module,
       complexity: 'MULTI-STEP',
       request_type: 'analysis',
+      activity_type: scheduledActivityTypeForModule(module),
       analysis: { type: 'owner_performance' },
       ranking: { dimension: 'Owner', metric: 'Amount', operation: 'sum', limit: requestedLimit },
       filters,
@@ -701,6 +760,7 @@ function planQuestion(question) {
       module,
       complexity: 'MODERATE',
       request_type: 'aggregate',
+      activity_type: scheduledActivityTypeForModule(module),
       aggregate: { operation: 'count', field: 'id' },
       group_by: 'Stage',
       group_by_label: 'stage',
@@ -718,6 +778,7 @@ function planQuestion(question) {
       module,
       complexity: 'MULTI-STEP',
       request_type: 'analysis',
+      activity_type: scheduledActivityTypeForModule(module),
       analysis: { type: 'lead_source_report' },
       fields: ['First_Name', 'Last_Name', 'Company', 'Email', 'Lead_Status', 'Lead_Source', 'Created_Time'],
       filters,
@@ -731,6 +792,7 @@ function planQuestion(question) {
       module,
       complexity: 'COMPLEX',
       request_type: 'aggregate',
+      activity_type: scheduledActivityTypeForModule(module),
       aggregate: { operation: 'sum', field: 'Amount' },
       group_by: 'Owner',
       filters,
@@ -744,6 +806,7 @@ function planQuestion(question) {
       module: 'Deals',
       complexity: 'MODERATE',
       request_type: 'analysis',
+      activity_type: scheduledActivityTypeForModule(module),
       analysis: { type: 'closed_won_summary' },
       fields: ['id', 'Amount', 'Closing_Date', 'Stage'],
       filters,
@@ -756,6 +819,7 @@ function planQuestion(question) {
       module: 'Leads',
       complexity: 'MULTI-STEP',
       request_type: 'analysis',
+      activity_type: scheduledActivityTypeForModule(module),
       analysis: { type: isLeadToClosedWonQuestion(lower) ? 'lead_closed_won_conversion' : 'lead_conversion' },
       fields: ['id'],
       filters: filters.filter((filter) => filter.field !== 'Stage'),
@@ -770,6 +834,7 @@ function planQuestion(question) {
       module,
       complexity: 'MODERATE',
       request_type: 'aggregate',
+      activity_type: scheduledActivityTypeForModule(module),
       aggregate: { operation: 'count', field: 'id' },
       group_by: groupBy.field,
       ...(groupBy.label ? { group_by_label: groupBy.label } : {}),
@@ -786,6 +851,7 @@ function planQuestion(question) {
       module,
       complexity: 'MODERATE',
       request_type: 'aggregate',
+      activity_type: scheduledActivityTypeForModule(module),
       aggregate: { operation: aggregateOperation.operation, field: aggregateOperation.field },
       date_field_role: dateFieldRole,
       filters,
@@ -799,6 +865,7 @@ function planQuestion(question) {
       module,
       complexity: 'SIMPLE',
       request_type: 'count',
+      activity_type: scheduledActivityTypeForModule(module),
       fields: ['id'],
       filters,
       limit: 20,
@@ -810,6 +877,7 @@ function planQuestion(question) {
     return {
       module,
       request_type: 'records',
+      activity_type: scheduledActivityTypeForModule(module),
       fields: fieldLabels.length > 0 ? ['id'] : defaultFields(module),
       ...(fieldLabels.length > 0 ? {} : { fields_source: 'planner_default' }),
       ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
@@ -825,6 +893,7 @@ function planQuestion(question) {
     module,
     complexity: 'SIMPLE',
     request_type: 'records',
+    activity_type: scheduledActivityTypeForModule(module) || null,
     fields: fieldLabels.length > 0 ? ['id'] : defaultFields(module),
     ...(fieldLabels.length > 0 ? {} : { fields_source: 'planner_default' }),
     ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
