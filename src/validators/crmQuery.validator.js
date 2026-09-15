@@ -13,7 +13,11 @@ function isValue(value) {
 function normalizeBetweenValue(value) {
   if (typeof value === 'string') return value.split(',').map((part) => part.trim());
   if (Array.isArray(value)) return value;
-  return null;
+  return null;     
+
+
+
+  
 }
 
 function hasNonEmptyValue(value) {
