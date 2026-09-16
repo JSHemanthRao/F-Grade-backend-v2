@@ -120,6 +120,10 @@ function createCrmController(crmService = new CrmService()) {
           ? null
           : extractExplicitModule(resolvedQuestion.toLowerCase());
         const plannedRequest = planContinuationAwareRequest(planCrmQuestion(resolvedQuestion), question, previous);
+        const isActivityHistoryPlan = plannedRequest.module === 'CRM'
+          && plannedRequest.analysis?.type === 'today_activity'
+          && plannedRequest.activity_type === 'ACTIVITY_HISTORY';
+        const routedExplicitModule = isActivityHistoryPlan ? null : explicitModule;
         if (continuationDetected && previous?.canonicalState) {
           const previousOffset = Number(previous.canonicalState.pagination.offset);
           const newOffset = Number(plannedRequest.pagination?.offset ?? plannedRequest.offset);
@@ -157,7 +161,7 @@ function createCrmController(crmService = new CrmService()) {
           fields: diagnostics.resolved_fields,
           filters: diagnostics.resolved_filters
         });
-        assertExplicitModuleRouting(explicitModule, plannedRequest.module);
+        assertExplicitModuleRouting(routedExplicitModule, plannedRequest.module);
         const result = await crmService.query(plannedRequest, undefined, diagnostics);
         updateDiagnostics(diagnostics, {
           resolved_module: result.module || diagnostics.resolved_module,

@@ -112,6 +112,27 @@ test('plans today deals with a negated Stage filter and created-date filter', ()
   assert.ok(!request.filters.some((filter) => ['__semantic__', 'semantic'].includes(filter.field)));
 });
 
+test('routes today activity history through the CRM audit-log analysis path', () => {
+  const request = planQuestion("today's activity?");
+  assert.equal(request.module, 'CRM');
+  assert.equal(request.activity_type, 'ACTIVITY_HISTORY');
+  assert.deepEqual(request.analysis, { type: 'today_activity', activity_type: 'ACTIVITY_HISTORY' });
+});
+
+test('does not reject activity history as an explicit Tasks module', async () => {
+  let captured;
+  const controller = createCrmController({
+    query: async (input) => {
+      captured = input;
+      return { module: 'CRM', request_type: 'analysis', data: [], pagination: { limit: input.limit, offset: input.offset, returned: 0, more_records: false } };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  await controller.assistant({ body: { conversation_id: 'activity-history-routing', question: "today's activity?" } }, response(), (error) => { throw error; });
+  assert.equal(captured.module, 'CRM');
+  assert.equal(captured.activity_type, 'ACTIVITY_HISTORY');
+});
+
 test('resolves today deal fields only from live metadata before Zoho execution', async () => {
   let captured;
   const diagnostics = createCrmDiagnostics('crm_field_resolution_test');
