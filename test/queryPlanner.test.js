@@ -133,6 +133,21 @@ test('does not reject activity history as an explicit Tasks module', async () =>
   assert.equal(captured.activity_type, 'ACTIVITY_HISTORY');
 });
 
+test('routes today activity including tasks, calls, and meetings as one CRM activity request', async () => {
+  let captured;
+  const controller = createCrmController({
+    query: async (input) => {
+      captured = input;
+      return { module: 'CRM', request_type: 'analysis', analysis: 'today_activity', data: [], pagination: { limit: input.limit, offset: input.offset, returned: 0, more_records: false } };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  await controller.assistant({ body: { question: "Show me today's activity including tasks, calls, and meetings for today 09/16/2026" } }, response(), (error) => { throw error; });
+  assert.equal(captured.module, 'CRM');
+  assert.equal(captured.activity_type, 'SCHEDULED_ACTIVITY');
+  assert.deepEqual(captured.analysis, { type: 'today_activity', activity_type: 'SCHEDULED_ACTIVITY' });
+});
+
 test('resolves today deal fields only from live metadata before Zoho execution', async () => {
   let captured;
   const diagnostics = createCrmDiagnostics('crm_field_resolution_test');
