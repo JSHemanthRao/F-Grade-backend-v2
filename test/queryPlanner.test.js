@@ -187,7 +187,7 @@ test('preserves follow-up module and intent while changing only the period', asy
 
 test('advances the exact module offset for next-page follow-ups', async () => {
   const calls = [];
-  const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, request_type: input.request_type, data: Array.from({ length: 10 }, (_, index) => ({ id: String((input.offset || 0) + index + 1) })) }; } });
+  const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, request_type: input.request_type, more_records: true, data: Array.from({ length: 10 }, (_, index) => ({ id: String((input.offset || 0) + index + 1) })) }; } });
   const response = (body) => ({ status: () => ({ json: (value) => value }), json: (value) => value });
   await controller.assistant({ body: { conversation_id: 'pagination-follow-up', question: 'Show me 10 products' } }, response({}), (error) => { throw error; });
   await controller.assistant({ body: { conversation_id: 'pagination-follow-up', question: 'next 10' } }, response({}), (error) => { throw error; });
@@ -230,7 +230,7 @@ test('accepts Copilot conversation ID aliases for pagination state', async () =>
   const controller = createCrmController({
     query: async (input) => {
       calls.push(input);
-      return { module: input.module, request_type: input.request_type, returned: 1, data: [{ id: String(input.offset || 0) }] };
+      return { module: input.module, request_type: input.request_type, returned: 1, more_records: true, data: [{ id: String(input.offset || 0) }] };
     }
   });
   const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
@@ -305,9 +305,71 @@ test('advances offset by the actual returned count on follow-up pagination', asy
   assert.equal(calls[1].limit, 20);
 });
 
+test('advances from the actual short page length instead of requested limit', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const returned = input.offset === 40 ? 7 : 20;
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        more_records: true,
+        data: Array.from({ length: returned }, (_, index) => ({ id: String(input.offset + index + 1) }))
+      };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  await controller.assistant({ body: { conversation_id: 'pagination-short-page', question: 'show me deals' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-short-page', question: 'next 20' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-short-page', question: 'next 20' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-short-page', question: 'next 20' } }, response(), (error) => { throw error; });
+  assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40, 47]);
+});
+
+test('requires stable conversation state for pagination continuations', async () => {
+  const calls = [];
+  const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, data: [], pagination: { limit: input.limit, offset: input.offset, returned: 0, more_records: true } }; } });
+  const response = () => ({ status: (code) => ({ json: (value) => ({ code, value }) }), json: (value) => value });
+  let error;
+  await controller.assistant({ body: { question: 'give me next 20 deals' }, get: () => null }, response(), (received) => { error = received; });
+  assert.equal(error.code, 'PAGINATION_CONVERSATION_REQUIRED');
+  assert.equal(calls.length, 0);
+});
+
+test('does not repeat a page when the previous page is exhausted', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      return { module: input.module, data: [{ id: 'only-record' }], pagination: { limit: input.limit, offset: input.offset, returned: 1, more_records: false } };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  await controller.assistant({ body: { conversation_id: 'pagination-exhausted', question: 'show me deals' } }, response(), (error) => { throw error; });
+  let error;
+  await controller.assistant({ body: { conversation_id: 'pagination-exhausted', question: 'next 20' } }, response(), (received) => { error = received; });
+  assert.equal(error.code, 'PAGINATION_EXHAUSTED');
+  assert.equal(calls.length, 1);
+});
+
+test('recognizes show me the next page as a continuation', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      return { module: input.module, data: Array.from({ length: 20 }, (_, index) => ({ id: String((input.offset || 0) + index) })), pagination: { limit: input.limit, offset: input.offset, returned: 20, more_records: true } };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  await controller.assistant({ body: { conversation_id: 'pagination-next-page', question: 'show me deals' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-next-page', question: 'show me the next page' } }, response(), (error) => { throw error; });
+  assert.equal(calls[1].offset, 20);
+});
+
 test('resets pagination when the query shape changes', async () => {
   const calls = [];
-  const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, request_type: input.request_type, returned: 20, more_records: true, data: [] }; } });
+  const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, request_type: input.request_type, returned: 20, more_records: true, data: Array.from({ length: 20 }, (_, index) => ({ id: String((input.offset || 0) + index + 1) })) }; } });
   const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
   await controller.assistant({ body: { conversation_id: 'pagination-reset', question: 'Show me deals above 50000' } }, response(), (error) => { throw error; });
   await controller.assistant({ body: { conversation_id: 'pagination-reset', question: 'Show me leads' } }, response(), (error) => { throw error; });

@@ -1,199 +1,205 @@
 {
-  "openapi": "3.0.3",
+  "swagger": "2.0",
   "info": {
     "title": "Zoho CRM Natural Language Assistant",
-    "version": "2.0.0",
-    "description": "Read-only natural-language Zoho CRM assistant. The backend receives the user's original question and dynamically resolves the CRM domain, module, fields, filters, dates, sorting, grouping, aggregation, pagination, relationships, and execution strategy using live Zoho CRM metadata. Meetings are resolved to the Zoho CRM Events API module. CRM requests must never be routed to Zoho Books and modules must never be substituted when no records are found.",
-    "x-copilot-studio-tool-description": "Use this CRM assistant only for read-only, natural-language Zoho CRM questions. Never invent module names, field names, filters, or aggregate metrics. Never emit a Leads field named Converted; conversion questions must remain natural language and be routed to the backend analysis planner instead of a synthetic Converted field."
+    "description": "This is the read-only Zoho CRM natural-language data tool. Use it for questions about live Zoho CRM data. Pass the user's complete CRM question unchanged in the question field. The backend resolves intent, module, fields, dates, filters, sorting, aggregation, relationships, activity type, and pagination. Do not construct module names, field names, filters, offsets, limits, or COQL.",
+    "version": "3.0.0"
   },
-  "servers": [
-    {
-      "url": "https://f-grade-backend-v2.onrender.com",
-      "description": "Production backend"
-    }
+  "host": "f-grade-backend-v2.onrender.com",
+  "basePath": "/",
+  "schemes": [
+    "https"
   ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "securityDefinitions": {
+    "apiKeyAuth": {
+      "type": "apiKey",
+      "name": "x-api-key",
+      "in": "header",
+      "description": "Backend API key."
+    }
+  },
   "paths": {
     "/api/crm/assistant": {
       "post": {
         "operationId": "askCrmAssistant",
-        "summary": "Ask Zoho CRM a natural-language read-only question",
-        "description": "Pass the user's complete natural-language CRM question unchanged. The backend is responsible for interpreting the question, resolving the correct CRM module and live field API names, applying filters, dates, sorting, grouping, aggregation and pagination, selecting the appropriate read-only Zoho CRM API, and returning dynamic CRM records. Do not construct module names, field names, API names, filters, operators, dates, sorting, limits, offsets, or COQL in the request.",
+        "x-ms-summary": "Ask Zoho CRM",
+        "summary": "Ask Zoho CRM",
+        "description": "Pass the user's complete CRM question unchanged. The backend owns CRM interpretation, field resolution, filtering, sorting, analysis, and pagination. For follow-ups such as next 20, next page, continue, or proceed, send the original question and do not calculate an offset.",
         "security": [
           {
             "apiKeyAuth": []
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AssistantRequest"
-              }
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "x-ms-summary": "CRM request",
+            "schema": {
+              "$ref": "#/definitions/AssistantRequest"
             }
           }
-        },
+        ],
         "responses": {
           "200": {
-            "description": "CRM request completed. The response may contain records, an aggregate result, a count, or another read-only result depending on the user's question.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CrmResponse"
-                }
-              }
+            "description": "Successful read-only CRM response.",
+            "schema": {
+              "$ref": "#/definitions/CrmResponse"
             }
           },
           "400": {
-            "description": "Invalid CRM request"
+            "description": "Invalid CRM request.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
           },
           "401": {
-            "description": "Unauthorized"
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
           },
           "403": {
-            "description": "Forbidden"
+            "description": "Access denied.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
           },
           "409": {
-            "description": "Pagination or continuation conflict"
+            "description": "Pagination or continuation conflict.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
           },
           "429": {
-            "description": "Zoho or backend rate limit"
+            "description": "Rate limit exceeded.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
           },
           "500": {
-            "description": "CRM backend error"
+            "description": "Backend error.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
           }
         }
       }
     }
   },
-  "components": {
-    "securitySchemes": {
-      "apiKeyAuth": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "x-api-key",
-        "description": "Backend API key. Required when BACKEND_API_KEY is configured."
+  "definitions": {
+    "AssistantRequest": {
+      "type": "object",
+      "required": [
+        "question"
+      ],
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "x-ms-summary": "Question",
+          "description": "The user's complete original natural-language Zoho CRM request. Pass it unchanged. Do not rewrite, summarize, translate, interpret, or convert it into structured CRM parameters."
+        },
+        "conversation_id": {
+          "type": "string",
+          "x-ms-summary": "Conversation ID",
+          "description": "Optional stable conversation/session identifier used by the backend to preserve conversational state such as pagination. Do not calculate or modify pagination values from this field."
+        }
       }
     },
-    "schemas": {
-      "AssistantRequest": {
-        "type": "object",
-        "required": [
-          "question"
-        ],
-        "properties": {
-          "question": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Pass the user's complete original natural-language CRM request exactly as written. Do not rewrite, summarize, interpret, translate, restructure, or construct module, field, filter, sort, limit, offset, or COQL parameters. The backend is responsible for all CRM query planning, metadata resolution, filtering, sorting, aggregation, and pagination."
-          },
-          "conversation_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Optional stable Copilot conversation identifier. Reuse the same value for follow-up requests so the backend can recover the prior canonical query and advance pagination."
+    "CrmResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "description": "Whether the backend successfully completed the CRM request."
+        },
+        "status": {
+          "type": "string",
+          "description": "Normalized backend status such as success or error."
+        },
+        "answer": {
+          "type": "string",
+          "description": "Natural-language answer based only on the actual backend CRM result. Never invent CRM values."
+        },
+        "records": {
+          "type": "array",
+          "description": "CRM records returned by the backend.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
           }
         },
-        "additionalProperties": false
-      },
-      "Pagination": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Number of records requested for the current page."
-          },
-          "offset": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Number of matching records skipped before the current page."
-          },
-          "returned": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Number of records actually returned in the current response."
-          },
-          "more_records": {
-            "type": "boolean",
-            "description": "Whether additional matching records are available."
-          }
+        "count": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of records returned in the current response."
+        },
+        "module": {
+          "type": "string",
+          "description": "Canonical CRM module resolved by the backend."
+        },
+        "module_api_name": {
+          "type": "string",
+          "description": "Exact Zoho CRM API module name used by the backend."
+        },
+        "request_type": {
+          "type": "string",
+          "description": "Normalized read-only CRM operation executed by the backend."
+        },
+        "request_id": {
+          "type": "string",
+          "description": "Unique backend request identifier used for troubleshooting and tracing."
+        },
+        "pagination": {
+          "$ref": "#/definitions/Pagination"
+        },
+        "error": {
+          "$ref": "#/definitions/ErrorResponse"
         }
-      },
-      "DynamicRecord": {
-        "type": "object",
-        "description": "A dynamically shaped Zoho CRM record. The available columns depend on the user's question, the resolved CRM module, and live Zoho CRM field metadata.",
-        "additionalProperties": true
-      },
-      "ErrorDetail": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "code": {
-            "type": "string",
-            "description": "Machine-readable backend error code."
-          },
-          "message": {
-            "type": "string",
-            "description": "Safe human-readable error message."
-          }
+      }
+    },
+    "Pagination": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of records requested for the current page."
+        },
+        "offset": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of matching records skipped before the current page."
+        },
+        "returned": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Actual number of records returned in the current page."
+        },
+        "more_records": {
+          "type": "boolean",
+          "description": "Whether additional matching records are available."
         }
-      },
-      "CrmResponse": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "success": {
-            "type": "boolean",
-            "description": "Whether the request completed successfully."
-          },
-          "status": {
-            "type": "string",
-            "description": "Normalized status such as success or error."
-          },
-          "answer": {
-            "type": "string",
-            "description": "Natural-language answer generated from the actual CRM result. Never invent values."
-          },
-          "records": {
-            "type": "array",
-            "description": "Dynamic CRM records. The columns are determined at runtime from the user's question and live CRM metadata. Different questions may return different columns without changing this API schema.",
-            "items": {
-             
-              "$ref": "#/components/schemas/DynamicRecord"
-            }
-          },
-          "count": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Number of records returned in the current response."
-          },
-          "module": {
-            "type": "string",
-            "description": "Canonical CRM display module resolved by the backend."
-          },
-          "module_api_name": {
-            "type": "string",
-            "description": "Exact Zoho CRM API module name for the resolved request."
-          },
-          "request_type": {
-            "type": "string",
-            "description": "Normalized read-only request type, such as records, count, aggregate, comparison, or analysis."
-          },
-          "request_id": {
-            "type": "string",
-            "description": "Backend request identifier for troubleshooting."
-          },
-          "conversation_id": {
-            "type": "string",
-            "description": "Conversation identifier used to recover canonical state for follow-up pagination requests."
-          },
-          "pagination": {
-            "$ref": "#/components/schemas/Pagination"
-          },
-          "error": {
-            "$ref": "#/components/schemas/ErrorDetail"
-          }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Machine-readable error code."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable error message."
         }
       }
     }

@@ -21,6 +21,15 @@ function createRequestId() {
 function createCrmDiagnostics(requestId = createRequestId()) {
   return {
     request_id: requestId,
+    conversation_id_present: false,
+    conversation_id: null,
+    continuation_detected: false,
+    previous_state_found: false,
+    previous_offset: null,
+    previous_returned: null,
+    new_offset: null,
+    crm_service_offset: null,
+    coql_offset: null,
     question: 'not_reached',
     resolved_module: 'not_reached',
     module_api_name: 'not_reached',

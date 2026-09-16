@@ -72,25 +72,74 @@ function createCrmController(crmService = new CrmService()) {
           error.statusCode = 400;
           throw error;
         }
-          const conversationId = resolveConversationId(req);
-
-const previous = conversationId
-  ? conversationContext.get(conversationId)
-  : null;
+        const conversationId = resolveConversationId(req);
+        const previous = conversationId
+          ? conversationContext.get(conversationId)
+          : null;
+        const continuationDetected = isPaginationContinuation(question) || isExplicitPageRequest(question);
+        if (continuationDetected && !conversationId) {
+          throw createAppError(
+            'PAGINATION_CONVERSATION_REQUIRED',
+            'A stable conversation_id is required to continue pagination.',
+            409
+          );
+        }
+        if (continuationDetected && !previous?.canonicalState) {
+          throw createAppError(
+            'PAGINATION_STATE_NOT_FOUND',
+            'No previous CRM page is available for this conversation.',
+            409
+          );
+        }
+        if (continuationDetected && previous?.canonicalState?.pagination?.more_records === false) {
+          throw createAppError(
+            'PAGINATION_EXHAUSTED',
+            'No more CRM records are available for this conversation.',
+            409
+          );
+        }
+        updateDiagnostics(diagnostics, {
+          conversation_id_present: Boolean(conversationId),
+          conversation_id: conversationId,
+          continuation_detected: continuationDetected,
+          previous_state_found: Boolean(previous?.canonicalState),
+          previous_offset: previous?.canonicalState?.pagination?.offset ?? null,
+          previous_returned: previous?.canonicalState?.pagination?.returned ?? null
+        });
         recordCrmEvent('CONVERSATION_STATE', diagnostics, {
           conversation_id_present: Boolean(conversationId),
+          conversation_id: conversationId,
           conversation_id_hash: conversationId ? hashConversationId(conversationId) : null,
-          continuation_detected: isPaginationContinuation(question) || isExplicitPageRequest(question),
+          continuation_detected: continuationDetected,
           previous_state_found: Boolean(previous?.canonicalState),
           previous_offset: previous?.canonicalState?.pagination?.offset ?? null,
           previous_returned: previous?.canonicalState?.pagination?.returned ?? null
         });
         const resolvedQuestion = resolveFollowUpQuestion(question, previous);
-        const explicitModule = extractExplicitModule(resolvedQuestion.toLowerCase());
+        const explicitModule = continuationDetected && previous?.canonicalState && !hasExplicitModuleIntent(question)
+          ? null
+          : extractExplicitModule(resolvedQuestion.toLowerCase());
         const plannedRequest = planContinuationAwareRequest(planCrmQuestion(resolvedQuestion), question, previous);
+        if (continuationDetected && previous?.canonicalState) {
+          const previousOffset = Number(previous.canonicalState.pagination.offset);
+          const newOffset = Number(plannedRequest.pagination?.offset ?? plannedRequest.offset);
+          if (!Number.isInteger(previousOffset) || !Number.isInteger(newOffset) || newOffset <= previousOffset) {
+            throw createAppError(
+              'PAGINATION_OFFSET_INVALID',
+              'The next CRM page did not advance beyond the previous page.',
+              409,
+              { previous_offset: previousOffset, new_offset: newOffset }
+            );
+          }
+        }
         recordCrmEvent('PAGINATION_STATE', diagnostics, {
           new_offset: plannedRequest.pagination?.offset ?? plannedRequest.offset ?? 0,
-          new_limit: plannedRequest.pagination?.limit ?? plannedRequest.limit ?? 20
+          new_limit: plannedRequest.pagination?.limit ?? plannedRequest.limit ?? 20,
+          module: plannedRequest.module || null,
+          canonical_plan_hash: hashCanonicalPlan(plannedRequest)
+        });
+        updateDiagnostics(diagnostics, {
+          new_offset: plannedRequest.pagination?.offset ?? plannedRequest.offset ?? 0
         });
         updateDiagnostics(diagnostics, {
           resolved_module: plannedRequest.module || explicitModule || 'not_reached',
@@ -158,9 +207,22 @@ const previous = conversationId
   }
 
   conversationContext.set(conversationId, {
+    conversation_id: conversationId,
+    canonical_plan: plannedRequest,
+    last_offset: canonicalState.pagination.offset,
+    last_returned: canonicalState.pagination.returned,
+    last_limit: canonicalState.pagination.limit,
+    more_records: canonicalState.pagination.more_records,
+    updated_at: new Date().toISOString(),
     question: resolvedQuestion,
     plannedRequest,
     canonicalState
+  });
+  recordCrmEvent('CONVERSATION_STATE_SAVED', diagnostics, {
+    conversation_id: conversationId,
+    storage: 'in_memory_controller_map',
+    state_offset: canonicalState.pagination.offset,
+    state_returned: canonicalState.pagination.returned
   });
 
   if (conversationContext.size > 1000) {
@@ -277,7 +339,8 @@ function planContinuationAwareRequest(plannedRequest, originalQuestion, previous
 
   const priorRequest = previous.plannedRequest || plannedRequest;
   const previousLimit = Number(previous.canonicalState.pagination.limit) || Number(priorRequest.limit) || 20;
-  const previousReturned = Number(previous.canonicalState.pagination.returned) || previousLimit;
+  const previousReturned = Number(previous.canonicalState.pagination.returned);
+  if (!Number.isInteger(previousReturned) || previousReturned < 0) return plannedRequest;
   const requestedLimit = extractPageSize(text) || previousLimit;
   const nextOffset = isExplicitPageRequest(text)
     ? Math.max(0, (extractPageNumber(text) - 1) * requestedLimit)
@@ -292,7 +355,7 @@ function planContinuationAwareRequest(plannedRequest, originalQuestion, previous
 }
 
 function isPaginationContinuation(text) {
-  return /^(?:proceed|continue|next(?:\s+\d+)?(?:\s+(?:deals?|records?|batch(?:es)?))?|next page|(?:show|give) me (?:the )?(?:next\s+\d+|more)(?:\s+(?:deals?|records?|batch(?:es)?))?|more(?:\s+(?:deals?|records?|batch(?:es)?))?)\b/i.test(text);
+  return /^(?:proceed|continue|next(?:\s+\d+)?(?:\s+(?:deals?|records?|batch(?:es)?))?|next page|(?:show|give) me (?:the )?(?:next(?:\s+\d+)?\s+(?:page|deals?|records?|batch(?:es)?)|more)(?:\s+(?:deals?|records?|batch(?:es)?))?|more(?:\s+(?:deals?|records?|batch(?:es)?))?)\b/i.test(text);
 }
 
 function isExplicitPageRequest(text) {
@@ -332,7 +395,7 @@ function buildCanonicalConversationState(question, plannedRequest, result, reque
     pagination: {
       limit: Number(pagination?.limit) || 20,
       offset: Number(pagination?.offset) || 0,
-      returned: recordIds.length,
+      returned: Array.isArray(result?.data) ? result.data.length : 0,
       more_records: resolveMoreRecords(result)
     },
     record_ids: recordIds
@@ -384,6 +447,10 @@ function hashConversationId(value) {
   let hash = 0;
   for (const character of String(value)) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
   return Math.abs(hash).toString(16);
+}
+
+function hashCanonicalPlan(value) {
+  return hashConversationId(stableStringify(value));
 }
 
 function isDuplicatePage(previousState, currentState) {

@@ -77,6 +77,14 @@ class CrmService {
     const statsAtStart = { ...(this.zohoService.executionStats || {}) };
     log('info', `[CRM EXECUTION START] executionId=${executionId}`);
     log('info', `[CRM request received] ${JSON.stringify({ module: input?.module, request_type: input?.request_type || 'records', query_type: input?.request_type || 'records', field_count: Array.isArray(input?.fields) ? input.fields.length : 0, filter_count: Array.isArray(input?.filters) ? input.filters.length : 0, date_range: input?.date_range || null })}`);
+    updateDiagnostics(diagnostics, {
+      crm_service_offset: Number.isInteger(input?.offset) ? input.offset : null
+    });
+    recordCrmEvent('CRM_SERVICE_INPUT', diagnostics, {
+      module: input?.module || null,
+      limit: input?.limit ?? null,
+      offset: input?.offset ?? null
+    });
     let normalizedInput = await this.resolveSemanticFields(input);
     updateDiagnostics(diagnostics, {
       resolved_module: normalizedInput?.module || diagnostics?.resolved_module,
