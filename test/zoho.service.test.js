@@ -932,11 +932,12 @@ test('uses the Zoho Search word parameter for text search requests', async () =>
 test('supports organization, audit, files, and bounded bulk read operations', async () => {
   const requests = [];
   const zoho = new ZohoCrmService({
-    get: async (url) => {
+    get: async (url, options) => {
       requests.push({ method: 'get', url });
       if (url.endsWith('/settings/modules')) return { data: { modules: [{ api_name: 'Leads', module_name: 'Leads', plural_label: 'Leads', viewable: true, api_supported: true }] } };
       if (url.endsWith('/org')) return { data: { org: { id: 'org-1' } } };
-      if (url.endsWith('/settings/audit_log_export')) return { data: { audit_log_export: [{ id: 'audit-1' }] } };
+      if (url.endsWith('/settings/audit_log_export/audit-1')) return { data: { audit_log_export: [{ status: 'FINISHED', download_links: ['https://example.test/audit.csv'] }] } };
+      if (url === 'https://example.test/audit.csv') return { data: 'module,audited_time,action\nDeals,2026-09-16T10:00:00+05:30,update\n', ...(options?.responseType === 'text' ? {} : {}) };
       if (url.endsWith('/files')) return { data: { id: 'file-1' } };
       if (/\/read\/job-1$/.test(url)) return { data: { data: [{ id: 'job-1', state: 'COMPLETED', result: { download_url: '/crm/bulk/v8/read/job-1/result' } }] } };
       if (/\/read\/job-1\/result$/.test(url)) return { data: { data: [{ id: '1' }] } };
@@ -944,6 +945,7 @@ test('supports organization, audit, files, and bounded bulk read operations', as
     },
     post: async (url) => {
       requests.push({ method: 'post', url });
+      if (url.endsWith('/settings/audit_log_export')) return { data: { audit_log_export: [{ id: 'audit-1' }] } };
       return { data: { details: { id: 'job-1', state: 'IN_PROGRESS' } } };
     }
   }, () => ({ apiBaseUrl: 'https://www.zohoapis.com/crm/v8', timeoutMs: 1000 }), {
@@ -953,7 +955,7 @@ test('supports organization, audit, files, and bounded bulk read operations', as
   });
 
   assert.deepEqual(await zoho.getOrganization(), { id: 'org-1' });
-  assert.equal((await zoho.getAuditLogs()).records.length, 1);
+  assert.deepEqual((await zoho.getAuditLogs()).records, [{ module: 'Deals', audited_time: '2026-09-16T10:00:00+05:30', action: 'update' }]);
   await assert.rejects(
     () => zoho.getFiles({ id: 'file-1' }),
     (error) => error.code === 'ZOHO_FILES_UNSUPPORTED' && error.statusCode === 501

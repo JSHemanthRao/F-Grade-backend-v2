@@ -330,47 +330,35 @@ class ZohoCrmService {
   }
 
   let statusResponse;
-
-  try {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      statusResponse = await this.readGet(
-        `/settings/audit_log_export/${encodeURIComponent(jobId)}`,
-        {
-          operation: 'audit_logs_status',
-          scope: 'ZohoCRM.settings.audit_logs.READ'
-        }
-      );
-
-      const status =
-        String(
-          statusResponse.data?.audit_log_export?.[0]?.status || ''
-        ).toLowerCase();
-
-      if (status === 'finished') {
-        break;
+  let exportStatus = '';
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    statusResponse = await this.readGet(
+      `/settings/audit_log_export/${encodeURIComponent(jobId)}`,
+      {
+        operation: 'audit_logs_status',
+        scope: 'ZohoCRM.settings.audit_logs.READ'
       }
+    );
 
-      if (status === 'failed') {
-        throw createAppError(
-          'AUDIT_LOG_EXPORT_FAILED',
-          'Zoho audit-log export failed.',
-          502
-        );
-      }
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, 1000)
+    exportStatus = String(statusResponse.data?.audit_log_export?.[0]?.status || '').toLowerCase();
+    if (exportStatus === 'finished') break;
+    if (exportStatus === 'failed') {
+      throw createAppError(
+        'AUDIT_LOG_EXPORT_FAILED',
+        'Zoho audit-log export failed.',
+        502
       );
     }
-  } catch (_error) {
-    return {
-      records: [{
-        module: { api_name: modules[0] || 'Calls', name: modules[0] || 'Calls' },
-        audited_time: new Date().toISOString(),
-        action: 'export'
-      }],
-      info: { count: 1, more_records: false }
-    };
+
+    if (attempt < 19) await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  if (exportStatus !== 'finished') {
+    throw createAppError(
+      'AUDIT_LOG_EXPORT_TIMEOUT',
+      'Zoho audit-log export did not finish within the polling limit.',
+      504
+    );
   }
 
   const exportJob =
@@ -380,14 +368,11 @@ class ZohoCrmService {
     exportJob?.download_links?.[0];
 
   if (!downloadUrl) {
-    return {
-      records: [{
-        module: { api_name: modules[0] || 'Calls', name: modules[0] || 'Calls' },
-        audited_time: new Date().toISOString(),
-        action: 'export'
-      }],
-      info: { count: 1, more_records: false }
-    };
+    throw createAppError(
+      'AUDIT_LOG_DOWNLOAD_UNAVAILABLE',
+      'Zoho did not provide an audit-log download link.',
+      502
+    );
   }
 
   const downloadResponse = await this.httpClient.get(
@@ -460,6 +445,12 @@ function parseCsvLine(line) {
 
   return values;
 }
+
+  const records = parseAuditLogCsv(downloadResponse.data);
+  return {
+    records,
+    info: { count: records.length, more_records: false }
+  };
 }
 
   async getFiles({ id } = {}) {
