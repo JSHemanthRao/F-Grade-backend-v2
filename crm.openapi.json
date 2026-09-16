@@ -98,7 +98,8 @@
     "AssistantRequest": {
       "type": "object",
       "required": [
-        "question"
+        "question",
+        "conversation_id"
       ],
       "properties": {
         "question": {
@@ -110,7 +111,8 @@
         "conversation_id": {
           "type": "string",
           "x-ms-summary": "Conversation ID",
-          "description": "Optional stable conversation/session identifier used by the backend to preserve conversational state such as pagination. Do not calculate or modify pagination values from this field."
+          "minLength": 1,
+          "description": "Required stable conversation/session identifier. Pass the same identifier on every request in this Copilot conversation so the backend can preserve CRM query state and pagination. Use the Copilot conversation identifier; do not invent a new value per request, calculate offsets, or modify pagination values from this field."
         }
       }
     },
