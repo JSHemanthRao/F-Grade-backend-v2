@@ -2,23 +2,30 @@ const { CrmService } = require('../services/crm.service');
 const { createAppError } = require('../utils/errors');
 const { CRM_API_NAMES, CRM_MODULES } = require('../constants/crmModules');
 const { resolveRelativePeriod, relativePeriodFromText } = require('../utils/relativeDate');
-const { createCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, updateDiagnostics, diagnosticsFromError, publicCrmDiagnostics } = require('../utils/crmDiagnostics');
+const { createCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, diagnosticsFromError, publicCrmDiagnostics } = require('../utils/crmDiagnostics');
 const { env } = require('../config/env');
 const { createCrmQueryPlanner } = require('../planners/crmQueryPlanner');
-const {
-  advancePagination,
-  createPaginationState,
-  createQueryIdentity,
-  isExplicitPageRequest,
-  isPaginationContinuation
-} = require('../query/pagination');
+const { CrmAssistantService } = require('../services/crmAssistant.service');
+const { PaginationManager } = require('../pagination/paginationManager');
 
 const MAX_QUESTION_LENGTH = 2000;
 
 const planCrmQuestion = createCrmQueryPlanner(planQuestion);
 
 function createCrmController(crmService = new CrmService()) {
-  const conversationContext = new Map();
+  const assistantService = new CrmAssistantService({
+    crmService,
+    planner: planCrmQuestion,
+    paginationManager: new PaginationManager(),
+    resolveFollowUpQuestion,
+    extractExplicitModule,
+    hasExplicitModuleIntent,
+    assertExplicitModuleRouting,
+    buildAnswer: buildAssistantAnswer,
+    isDashboardRequest,
+    buildDashboardSpecification,
+    stringifySummary
+  });
   return {
     test: async (req, res, next) => {
       try {
@@ -65,191 +72,17 @@ function createCrmController(crmService = new CrmService()) {
       return runWithCrmDiagnostics(diagnostics, async () => {
        try {
         const question = req.body?.question;
-        updateDiagnostics(diagnostics, { question: typeof question === 'string' ? question : 'not_reached', stage: 'question_parsed' });
-        recordCrmEvent('QUESTION_PARSED', diagnostics, { question: diagnostics.question });
+        const conversationId = resolveConversationId(req);
         if (typeof question !== 'string' || question.trim().length === 0) {
-          const error = new Error('One of question, prompt, or message is required.');
-          error.code = 'QUESTION_REQUIRED';
-          error.statusCode = 400;
-          throw error;
+          throw createAppError('QUESTION_REQUIRED', 'One of question, prompt, or message is required.', 400);
         }
         if (question.length > MAX_QUESTION_LENGTH) {
-          const error = new Error(`Question must not exceed ${MAX_QUESTION_LENGTH} characters.`);
-          error.code = 'QUESTION_TOO_LONG';
-          error.statusCode = 400;
-          throw error;
+          throw createAppError('QUESTION_TOO_LONG', `Question must not exceed ${MAX_QUESTION_LENGTH} characters.`, 400);
         }
-        const conversationId = resolveConversationId(req);
-        const previous = conversationId
-          ? conversationContext.get(conversationId)
-          : null;
-        const continuationDetected = isPaginationContinuation(question) || isExplicitPageRequest(question);
-        if (continuationDetected && !conversationId) {
-          throw createAppError(
-            'PAGINATION_CONVERSATION_REQUIRED',
-            'A stable conversation_id is required to continue pagination.',
-            409
-          );
-        }
-        if (continuationDetected && !previous?.canonicalState) {
-          throw createAppError(
-            'PAGINATION_STATE_NOT_FOUND',
-            'No previous CRM page is available for this conversation.',
-            409
-          );
-        }
-        if (continuationDetected && previous?.canonicalState?.pagination?.more_records === false) {
-          throw createAppError(
-            'PAGINATION_EXHAUSTED',
-            'No more CRM records are available for this conversation.',
-            409
-          );
-        }
-        updateDiagnostics(diagnostics, {
-          conversation_id_present: Boolean(conversationId),
-          conversation_id: conversationId,
-          continuation_detected: continuationDetected,
-          previous_state_found: Boolean(previous?.canonicalState),
-          previous_module: previous?.canonicalState?.module || null,
-          previous_offset: previous?.canonicalState?.pagination?.offset ?? null,
-          previous_returned: previous?.canonicalState?.pagination?.returned ?? null
-        });
-        recordCrmEvent('CONVERSATION_STATE', diagnostics, {
-          conversation_id_present: Boolean(conversationId),
-          conversation_id: conversationId,
-          conversation_id_hash: conversationId ? hashConversationId(conversationId) : null,
-          continuation_detected: continuationDetected,
-          previous_state_found: Boolean(previous?.canonicalState),
-          previous_module: previous?.canonicalState?.module || null,
-          previous_offset: previous?.canonicalState?.pagination?.offset ?? null,
-          previous_returned: previous?.canonicalState?.pagination?.returned ?? null
-        });
-        const resolvedQuestion = resolveFollowUpQuestion(question, previous);
-        const explicitModule = continuationDetected && previous?.canonicalState && !hasExplicitModuleIntent(question)
-          ? null
-          : extractExplicitModule(resolvedQuestion.toLowerCase());
-        const plannedRequest = planContinuationAwareRequest(planCrmQuestion(resolvedQuestion), question, previous);
-        const isTodayActivityPlan = plannedRequest.module === 'CRM'
-          && plannedRequest.analysis?.type === 'today_activity';
-        const routedExplicitModule = isTodayActivityPlan ? null : explicitModule;
-        if (continuationDetected && previous?.canonicalState) {
-          const previousOffset = Number(previous.canonicalState.pagination.offset);
-          const newOffset = Number(plannedRequest.pagination?.offset ?? plannedRequest.offset);
-          if (!Number.isInteger(previousOffset) || !Number.isInteger(newOffset) || newOffset <= previousOffset) {
-            throw createAppError(
-              'PAGINATION_OFFSET_INVALID',
-              'The next CRM page did not advance beyond the previous page.',
-              409,
-              { previous_offset: previousOffset, new_offset: newOffset }
-            );
-          }
-        }
-        recordCrmEvent('PAGINATION_STATE', diagnostics, {
-          new_offset: plannedRequest.pagination?.offset ?? plannedRequest.offset ?? 0,
-          new_limit: plannedRequest.pagination?.limit ?? plannedRequest.limit ?? 20,
-          module: plannedRequest.module || null,
-          query_identity: createQueryIdentity(plannedRequest)
-        });
-        updateDiagnostics(diagnostics, {
-          new_offset: plannedRequest.pagination?.offset ?? plannedRequest.offset ?? 0,
-          current_module: plannedRequest.module || null,
-          query_identity: createQueryIdentity(plannedRequest)
-        });
-        updateDiagnostics(diagnostics, {
-          resolved_module: plannedRequest.module || explicitModule || 'not_reached',
-          module_api_name: plannedRequest.module_api_name || 'not_reached',
-          resolved_fields: Array.isArray(plannedRequest.fields) ? plannedRequest.fields : [],
-          resolved_filters: Array.isArray(plannedRequest.filters) ? plannedRequest.filters : [],
-          intent: plannedRequest.intent || plannedRequest.request_type || 'records',
-          pagination: plannedRequest.pagination || { limit: plannedRequest.limit, offset: plannedRequest.offset },
-          request_type: plannedRequest.request_type || 'records',
-          stage: 'query_planned'
-        });
-        recordCrmEvent('QUERY_PLANNED', diagnostics, {
-          module: diagnostics.resolved_module,
-          module_api_name: diagnostics.module_api_name,
-          fields: diagnostics.resolved_fields,
-          filters: diagnostics.resolved_filters
-        });
-        assertExplicitModuleRouting(routedExplicitModule, plannedRequest.module);
-        const result = await crmService.query(plannedRequest, undefined, diagnostics);
-        updateDiagnostics(diagnostics, {
-          resolved_module: result.module || diagnostics.resolved_module,
-          module_api_name: result.module_api_name || diagnostics.module_api_name,
-          resolved_fields: Array.isArray(result.fields) ? result.fields : diagnostics.resolved_fields,
-          resolved_filters: Array.isArray(result.filters) ? result.filters : diagnostics.resolved_filters,
-          request_type: result.request_type || diagnostics.request_type,
-          zoho_error_code: null,
-          zoho_error_message: null,
-          stage: 'response_normalized'
-        });
-        recordCrmEvent('RESPONSE_NORMALIZED', diagnostics, { module: diagnostics.resolved_module, request_type: diagnostics.request_type });
-        if (conversationId) {
-  const canonicalState = buildCanonicalConversationState(
-    resolvedQuestion,
-    plannedRequest,
-    result,
-    diagnostics.request_id,
-    conversationId
-  );
-
-  const previousState = previous?.canonicalState;
-
-  if (
-    previousState &&
-    isSameQueryShape(previousState, plannedRequest) &&
-    isDuplicatePage(previousState, canonicalState) &&
-    canonicalState.pagination.offset > previousState.pagination.offset
-  ) {
-    const error = new Error(
-      'The requested next page returned the same records as the previous page.'
-    );
-
-    error.code = 'PAGINATION_DUPLICATE_PAGE';
-    error.statusCode = 409;
-    error.details = {
-      request_id: diagnostics.request_id,
-      previous_offset: previousState.pagination.offset,
-      current_offset: canonicalState.pagination.offset,
-      previous_record_ids: previousState.record_ids,
-      current_record_ids: canonicalState.record_ids
-    };
-
-    recordCrmEvent('PAGINATION_DUPLICATE_PAGE', diagnostics, error.details);
-
-    throw error;
-  }
-
-  conversationContext.set(conversationId, {
-    conversation_id: conversationId,
-    canonical_plan: plannedRequest,
-    pagination: canonicalState.pagination,
-    query_identity: canonicalState.query_identity,
-    updated_at: new Date().toISOString(),
-    question: resolvedQuestion,
-    plannedRequest,
-    canonicalState
-  });
-  recordCrmEvent('CONVERSATION_STATE_SAVED', diagnostics, {
-    conversation_id: conversationId,
-    storage: 'in_memory_controller_map',
-    state_offset: canonicalState.pagination.offset,
-    state_returned: canonicalState.pagination.returned,
-    query_identity: canonicalState.query_identity
-  });
-
-  if (conversationContext.size > 1000) {
-    conversationContext.delete(
-      conversationContext.keys().next().value
-    );
-  }
-}
-        const answer = isDashboardRequest(resolvedQuestion)
-          ? JSON.stringify(buildDashboardSpecification(resolvedQuestion, result), null, 2)
-          : buildAssistantAnswer(resolvedQuestion, result);
-        const safe = stringifySummary(Object.assign({}, result));
+        const executed = await assistantService.execute({ question, conversationId, diagnostics });
         const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
-        res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, conversation_id: conversationId, question, answer, diagnostics: publicDiagnostics, ...safe });
+        res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, conversation_id: conversationId, question, answer: executed.answer, diagnostics: publicDiagnostics, ...executed.result });
+        return;
         } catch (error) {
         diagnosticsFromError(error, diagnostics);
         error.crmDiagnostics = diagnostics;
@@ -339,115 +172,6 @@ function resolveConversationId(req) {
   ];
   const value = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
   return value ? value.trim() : null;
-}
-
-function applyPaginationFollowUp(plannedRequest, originalQuestion, previous) {
-  return planContinuationAwareRequest(plannedRequest, originalQuestion, previous);
-}
-
-function planContinuationAwareRequest(plannedRequest, originalQuestion, previous) {
-  const text = String(originalQuestion || '').trim();
-  if (!previous?.canonicalState) return plannedRequest;
-  if (!isPaginationContinuation(text) && !isExplicitPageRequest(text)) return plannedRequest;
-
-  const priorRequest = previous.plannedRequest || plannedRequest;
-  const { limit: requestedLimit, offset: nextOffset } = advancePagination(
-    previous.canonicalState,
-    text,
-    priorRequest
-  );
-
-  return {
-    ...priorRequest,
-    limit: requestedLimit,
-    offset: nextOffset,
-    pagination: { ...(priorRequest.pagination || plannedRequest.pagination || {}), limit: requestedLimit, offset: nextOffset }
-  };
-}
-
-function buildCanonicalConversationState(question, plannedRequest, result, requestId, conversationId) {
-  const pagination = createPaginationState(plannedRequest, result);
-  const recordIds = Array.isArray(result?.data)
-    ? result.data.map((record) => String(record?.id || record?.ID || '')).filter(Boolean)
-    : [];
-  return {
-    request_id: requestId,
-    conversation_id: conversationId || null,
-    original_question: question,
-    domain: plannedRequest?.domain || 'CRM',
-    module: plannedRequest?.module || null,
-    module_api_name: plannedRequest?.module_api_name || null,
-    filters: Array.isArray(plannedRequest?.filters) ? plannedRequest.filters : [],
-    date_range: plannedRequest?.date_range || null,
-    sort: normalizeSortForFingerprint(plannedRequest?.sort),
-    group_by: plannedRequest?.group_by || null,
-    aggregate: plannedRequest?.aggregate || null,
-    comparison: plannedRequest?.comparison || null,
-    analysis: plannedRequest?.analysis || null,
-    response_fields: Array.isArray(plannedRequest?.response_fields) ? plannedRequest.response_fields : Array.isArray(plannedRequest?.fields) ? plannedRequest.fields : [],
-    pagination,
-    query_identity: createQueryIdentity(plannedRequest),
-    record_ids: recordIds
-  };
-}
-
-function normalizeSortForFingerprint(sort) {
-  if (!sort) return [];
-  const sorts = Array.isArray(sort) ? sort : [sort];
-  return sorts.map((item) => ({ field: item.field, order: item.order || item.direction || 'asc' }));
-}
-
-function isSameQueryShape(previousState, plannedRequest) {
-  if (!previousState || !plannedRequest) return false;
-  if (previousState.query_identity) return previousState.query_identity === createQueryIdentity(plannedRequest);
-  return stableStringify({
-    domain: previousState.domain,
-    module: previousState.module,
-    module_api_name: previousState.module_api_name,
-    filters: previousState.filters,
-    date_range: previousState.date_range,
-    sort: previousState.sort,
-    group_by: previousState.group_by,
-    aggregate: previousState.aggregate,
-    comparison: previousState.comparison,
-    analysis: previousState.analysis,
-    response_fields: previousState.response_fields
-  }) === stableStringify({
-    domain: plannedRequest.domain || 'CRM',
-    module: plannedRequest.module || null,
-    module_api_name: plannedRequest.module_api_name || null,
-    filters: Array.isArray(plannedRequest.filters) ? plannedRequest.filters : [],
-    date_range: plannedRequest.date_range || null,
-    sort: normalizeSortForFingerprint(plannedRequest.sort),
-    group_by: plannedRequest.group_by || null,
-    aggregate: plannedRequest.aggregate || null,
-    comparison: plannedRequest.comparison || null,
-    analysis: plannedRequest.analysis || null,
-    response_fields: Array.isArray(plannedRequest.response_fields) ? plannedRequest.response_fields : Array.isArray(plannedRequest.fields) ? plannedRequest.fields : []
-  });
-}
-
-function hashConversationId(value) {
-  let hash = 0;
-  for (const character of String(value)) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
-  return Math.abs(hash).toString(16);
-}
-
-function isDuplicatePage(previousState, currentState) {
-  return previousState.pagination.offset !== currentState.pagination.offset
-    && previousState.pagination.limit === currentState.pagination.limit
-    && stableStringify(previousState.record_ids) === stableStringify(currentState.record_ids)
-    && previousState.record_ids.length > 0;
-}
-
-function stableStringify(value) {
-  return JSON.stringify(value, (_key, innerValue) => {
-    if (!innerValue || typeof innerValue !== 'object' || Array.isArray(innerValue)) return innerValue;
-    return Object.keys(innerValue).sort().reduce((acc, key) => {
-      acc[key] = innerValue[key];
-      return acc;
-    }, {});
-  });
 }
 
 function hasExplicitModuleIntent(text) {
@@ -745,7 +469,7 @@ function planQuestion(question) {
   const ownerName = extractOwnerName(text);
   if (ownerName) filters.push({ field: 'Owner', operator: 'equals', value: ownerName });
 
-  const fieldComparison = extractFieldComparison(lower);
+  const fieldComparison = extractFieldComparison(lower, module);
   if (fieldComparison && !filters.some((filter) => filter.field === fieldComparison.field)) filters.push(fieldComparison);
   const amountThreshold = extractAmountThreshold(lower);
   if (amountThreshold && !fieldComparison) filters.push({ field: 'Amount', operator: 'greater_than', value: amountThreshold.value });
@@ -1345,16 +1069,18 @@ function extractAmountThreshold(lowerText) {
   return null;
 }
 
-function extractFieldComparison(lowerText) {
+function extractFieldComparison(lowerText, module) {
   const fieldPattern = '(amount|deal\\s+value|value|probability|price|unit\\s+price|cost|qty_in_stock)';
-  const between = lowerText.match(new RegExp(`\\b${fieldPattern}\\s+(?:is\\s+)?between\\s+₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)\\s+and\\s+₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
+  const numberPattern = '(?:[0-9]+(?:\\.\\d+)?\\s+lakhs?|[0-9][0-9,]*(?:\\.\\d+)?)';
+  const between = lowerText.match(new RegExp(`(?:\\b${fieldPattern}\\s+)?(?:is\\s+)?between\\s+₹?\\s*(${numberPattern})\\s+and\\s+₹?\\s*(${numberPattern})`, 'i'));
   if (between) {
     const fieldAliases = { amount: 'amount', 'deal value': 'amount', value: 'amount', probability: 'probability', price: 'price', 'unit price': 'price', cost: 'cost', qty_in_stock: 'qty_in_stock' };
-    const semanticField = fieldAliases[between[1].replace(/\\s+/g, ' ').toLowerCase()];
-    return semanticField ? { field: semanticField, operator: 'between', value: [Number(between[2].replace(/,/g, '')), Number(between[3].replace(/,/g, ''))] } : null;
+    const explicitField = between[1] ? fieldAliases[between[1].replace(/\s+/g, ' ').toLowerCase()] : null;
+    const semanticField = explicitField || (module === 'Deals' ? 'amount' : module === 'Products' ? 'price' : null);
+    return semanticField ? { field: semanticField, operator: 'between', value: [parseNaturalNumber(between[2]), parseNaturalNumber(between[3])] } : null;
   }
-  const symbols = lowerText.match(new RegExp(`${fieldPattern}\\s*(>=|<=|!=|=|>|<)\\s*₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
-  const words = lowerText.match(new RegExp(`\\b${fieldPattern}\\s+(greater than|more than|at least|less than|at most|equal to|not equal to)\\s*₹?\\s*([0-9][0-9,]*(?:\\.\\d+)?)`, 'i'));
+  const symbols = lowerText.match(new RegExp(`${fieldPattern}\\s*(>=|<=|!=|=|>|<)\\s*₹?\\s*(${numberPattern})`, 'i'));
+  const words = lowerText.match(new RegExp(`\\b${fieldPattern}\\s+(greater than|more than|at least|less than|at most|equal to|not equal to)\\s*₹?\\s*(${numberPattern})`, 'i'));
   const match = symbols || words;
   if (!match) return null;
   const operatorMap = { '>': 'greater_than', '>=': 'greater_equal', '<': 'less_than', '<=': 'less_equal', '=': 'equals', '!=': 'not_equals', 'greater than': 'greater_than', 'more than': 'greater_than', 'at least': 'greater_equal', 'less than': 'less_than', 'at most': 'less_equal', 'equal to': 'equals', 'not equal to': 'not_equals' };
@@ -1369,10 +1095,24 @@ function extractFieldComparison(lowerText) {
     qty_in_stock: 'qty_in_stock'
   };
   const field = fieldAliases[match[1].replace(/\s+/g, ' ').toLowerCase()];
-  return field ? { field, operator: operatorMap[match[2].toLowerCase()], value: Number(match[3].replace(/,/g, '')) } : null;
+  return field ? { field, operator: operatorMap[match[2].toLowerCase()], value: parseNaturalNumber(match[3]) } : null;
+}
+
+function parseNaturalNumber(value) {
+  const normalized = String(value).trim().toLowerCase().replace(/,/g, '');
+  const lakhMatch = normalized.match(/^([0-9]+(?:\.\d+)?)\s+lakhs?$/);
+  return lakhMatch ? Number(lakhMatch[1]) * 100000 : Number(normalized);
 }
 
 function extractSemanticFilter(lowerText) {
+  const unary = lowerText.match(/(?:where|with)\s+([a-z][a-z0-9 _-]*?)\s+(is\s+not\s+(?:empty|null)|is\s+(?:empty|null))(?=\s+(?:and|created|updated|sorted|show|list|limit|where)\b|[?.!,]|$)/i);
+  if (unary) {
+    return {
+      field: '__field__',
+      field_label: unary[1].trim(),
+      operator: /is\s+not/i.test(unary[2]) ? 'is_not_null' : 'is_null'
+    };
+  }
   const match = lowerText.match(/(?:where|with)\s+([a-z][a-z0-9 _-]*?)\s+(is\s+not\s+equal\s+to|not\s+equal\s+to|is\s+not|is|equals?|contains|starts\s+with|=)\s+([^?.!,]+?)(?=\s+(?:and|created|updated|sorted|ordered|show|list|limit|where)\b|[?.!,]|$)/i);
   if (!match) return null;
   const operatorText = match[2].toLowerCase().replace(/\s+/g, ' ').trim();

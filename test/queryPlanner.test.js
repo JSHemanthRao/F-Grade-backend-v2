@@ -101,6 +101,63 @@ test('validates BETWEEN, IS NULL, and IS NOT NULL filters', () => {
   assert.equal(validateCrmQuery({ module: 'Leads', filters: [{ field: 'Email', operator: 'is_not_null' }] }).filters[0].operator, 'is_not_null');
 });
 
+test('normalizes relative creation dates without adding a null filter', () => {
+  for (const module of ['Leads', 'Deals', 'Contacts', 'Accounts', 'Tasks', 'Calls', 'Meetings', 'Products']) {
+    const request = planQuestion(`show me ${module.toLowerCase()} created this month`);
+    assert.equal(request.filters.length, 1);
+    assert.equal(request.filters[0].operator, 'between');
+    assert.equal(request.filters[0].exclusive_end, true);
+    assert.equal(request.filters.some((filter) => filter.operator === 'is_not_null'), false);
+  }
+});
+
+test('recognizes empty and not-empty requests as unary filters', () => {
+  const notEmpty = planQuestion('show me leads where created time is not empty');
+  const empty = planQuestion('show me leads where created time is empty');
+  assert.deepEqual(notEmpty.filters[0], { field: '__field__', field_label: 'created time', operator: 'is_not_null' });
+  assert.deepEqual(empty.filters[0], { field: '__field__', field_label: 'created time', operator: 'is_null' });
+  assert.doesNotThrow(() => validateCrmQuery({ module: 'Leads', fields: ['id'], filters: [{ field: 'Created_Time', operator: 'is_not_empty' }] }));
+  assert.throws(() => validateCrmQuery({ module: 'Leads', fields: ['id'], filters: [{ field: 'Created_Time', operator: 'is_not_null', value: 'unexpected' }] }), /must not include a value/);
+});
+
+test('normalizes implicit lakh amount ranges and preserves descending sort', () => {
+  const request = planQuestion('show me deals between 50000 and 2 lakh sorted from highest to lowest');
+  assert.deepEqual(request.filters, [{ field: 'amount', operator: 'between', value: [50000, 200000] }]);
+  assert.deepEqual({ field: request.sort_field, order: request.sort_order }, { field: 'amount', order: 'desc' });
+  assert.equal(buildCoqlQuery({
+    module: 'Deals',
+    fields: ['id', 'Amount'],
+    filters: [{ field: 'Amount', operator: 'greater_equal', value: 50000 }, { field: 'Amount', operator: 'less_equal', value: 200000 }],
+    sort: { field: 'Amount', order: 'desc' }
+  }), "select id, Amount from Deals where ((Amount >= 50000) and (Amount <= 200000)) order by Amount desc");
+});
+
+test('materializes unary filters without reintroducing a value', async () => {
+  let captured;
+  const service = new CrmService({
+    resolveModuleApiName: async () => 'Leads',
+    getFieldMetadata: async () => ({
+      fields: ['id', 'Created_Time'],
+      metadata: [
+        { api_name: 'id', data_type: 'text' },
+        { api_name: 'Created_Time', display_label: 'Created Time', data_type: 'datetime', filterable: true, sortable: true }
+      ]
+    }),
+    resolveOwnerFilters: async (filters) => filters,
+    query: async (request) => {
+      captured = request;
+      return { records: [], info: { more_records: false }, module_api_name: 'Leads' };
+    }
+  });
+  await service.query({ module: 'Leads', fields: ['id'], filters: [{ field: 'Created_Time', operator: 'is_not_null' }], limit: 20, offset: 0 });
+  assert.equal(Object.prototype.hasOwnProperty.call(captured.filters[0], 'value'), false);
+});
+
+test('builds valid unary and date-range COQL', () => {
+  assert.equal(buildCoqlQuery({ module: 'Leads', fields: ['id'], filters: [{ field: 'Created_Time', operator: 'is_not_null' }] }), 'select id from Leads where (Created_Time is not null)');
+  assert.equal(buildCoqlQuery({ module: 'Leads', fields: ['id'], filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-09-01', '2026-10-01'], exclusive_end: true }] }), "select id from Leads where (Created_Time >= '2026-09-01T00:00:00+05:30' and Created_Time < '2026-10-01T00:00:00+05:30')");
+});
+
 test('plans today deals with a negated Stage filter and created-date filter', () => {
   const request = planQuestion("show me today's deals where the stage is not Closed Lost, sorted by amount from highest to lowest");
   assert.equal(request.module, 'Deals');

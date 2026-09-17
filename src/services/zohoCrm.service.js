@@ -10,6 +10,7 @@ const { CRM_API_NAMES } = require('../constants/crmModules');
 const { validateModuleFieldScope } = require('../validators/crmQuery.validator');
 const { getCurrentCrmDiagnostics, recordCrmEvent, updateDiagnostics } = require('../utils/crmDiagnostics');
 const { resolveModuleReference, assertResolvedModule, buildModuleRegistry, normalizeModuleReference } = require('../resolvers/moduleResolver');
+const { buildCoqlPagination } = require('../coql/coqlPagination');
 
 class ZohoCrmService {
   constructor(httpClient = axios, configLoader = getZohoConfig, authService) {
@@ -145,7 +146,7 @@ class ZohoCrmService {
     if (finalFields.length === 0) {
       throw createAppError('ZOHO_FIELD_UNAVAILABLE', `Zoho CRM metadata for '${resolvedModule}' does not expose any of the requested fields.`, 502);
     }
-    const selectQuery = `${buildDynamicCoqlQuery({ ...request, module: resolvedModule, fields: finalFields })} limit ${request.offset}, ${request.limit}`;
+    const selectQuery = `${buildDynamicCoqlQuery({ ...request, module: resolvedModule, fields: finalFields })}${buildCoqlPagination(request.limit, request.offset)}`;
     updateDiagnostics(getCurrentCrmDiagnostics(), { coql_offset: request.offset });
     log('info', `[COQL REQUEST] ${JSON.stringify({ module: resolvedModule, limit: request.limit, offset: request.offset, select_query: selectQuery })}`);
     return this.executeQueryRequest(selectQuery, token, config, request, resolvedModule);

@@ -11,7 +11,9 @@ const CRM_OPERATORS = Object.freeze([
   'not_in',
   'between',
   'is_null',
-  'is_not_null'
+  'is_not_null',
+  'is_empty',
+  'is_not_empty'
 ]);
 
 module.exports = { CRM_OPERATORS };

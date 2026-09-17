@@ -3,7 +3,7 @@ const { CRM_OPERATORS } = require('../constants/crmOperators');
 const { createAppError } = require('../utils/errors');
 
 const OPERATOR_SET = new Set(CRM_OPERATORS);
-const NULL_OPERATORS = new Set(['is_null', 'is_not_null']);
+const NULL_OPERATORS = new Set(['is_null', 'is_not_null', 'is_empty', 'is_not_empty']);
 const VALUE_OPERATORS = new Set(CRM_OPERATORS.filter((operator) => !NULL_OPERATORS.has(operator)));
 
 function isValue(value) {

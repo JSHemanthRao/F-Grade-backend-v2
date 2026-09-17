@@ -1274,7 +1274,11 @@ async function materializeMetadataRequest(zohoService, input) {
   const metadataByResolvedName = new Map(fields.filter((field) => field?.api_name).map((field) => [field.api_name, field]));
   for (const filter of resolvedFilters) {
     const metadataField = metadataByResolvedName.get(filter.field);
-    filter.value = normalizeTypedFilterValue(input, filter, metadataField);
+    if (isUnaryFilterOperator(filter.operator)) {
+      delete filter.value;
+    } else {
+      filter.value = normalizeTypedFilterValue(input, filter, metadataField);
+    }
     validateFilterTypeCompatibility(input, filter, metadataField);
     if (metadataField?.filterable === false || metadataField?.searchable === false && ['contains', 'starts_with'].includes(filter.operator)) {
       throw createAppError('INVALID_QUERY', `CRM field '${filter.field}' cannot be used for this filter.`, 400, { module: input.module, module_api_name: moduleApiName, field: filter.field, operator: filter.operator, reason: 'Field metadata does not permit this filter.' });
@@ -1355,6 +1359,10 @@ function normalizeTypedFilterValue(input, filter, metadataField) {
   };
   const normalize = (value) => numeric ? normalizeNumber(value) : boolean ? normalizeBoolean(value) : value;
   return Array.isArray(filter.value) ? filter.value.map(normalize) : normalize(filter.value);
+}
+
+function isUnaryFilterOperator(operator) {
+  return ['is_null', 'is_not_null', 'is_empty', 'is_not_empty'].includes(operator);
 }
 
 function validateFilterTypeCompatibility(input, filter, metadataField) {

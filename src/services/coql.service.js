@@ -78,8 +78,8 @@ function formatDateComparisonValue(field, value, endOfDay = false, exclusiveEnd 
 function buildFilterClauses(filters) {
   return filters.flatMap((filter) => {
     const { field, operator, value } = filter;
-    if (operator === 'is_null') return [`${field} is null`];
-    if (operator === 'is_not_null') return [`${field} is not null`];
+    if (operator === 'is_null' || operator === 'is_empty') return [`${field} is null`];
+    if (operator === 'is_not_null' || operator === 'is_not_empty') return [`${field} is not null`];
     if (operator === 'equals') return [`${field} = ${formatValue(field, value)}`];
     if (operator === 'not_equals') return [`${field} != ${formatValue(field, value)}`];
     if (operator === 'contains') return [`${field} like ${formatValue(field, `%${value}%`)}`];
