@@ -601,12 +601,13 @@ function planQuestion(question) {
 
   const groupBy = extractGroupBy(lower);
   if (groupBy && !/(dashboard|report)/.test(lower)) {
+    const groupedAggregate = detectAggregateOperation(lower) || { operation: 'count', field: 'id' };
     return {
       module,
       complexity: 'MODERATE',
       request_type: 'aggregate',
       activity_type: scheduledActivityTypeForModule(module),
-      aggregate: { operation: 'count', field: 'id' },
+      aggregate: groupedAggregate,
       group_by: groupBy.field,
       ...(groupBy.label ? { group_by_label: groupBy.label } : {}),
       date_field_role: dateFieldRole,
@@ -1046,12 +1047,14 @@ function defaultSortField(module) {
 }
 
 function extractOwnerName(text) {
+  const hasGroupingOrOrderingClause = /\b(?:group(?:ed)?|sort(?:ed)?|order(?:ed)?)\s+by\b/i.test(text);
   const patterns = [
     /(?:owned by|owner is|assigned to|belongs to)\s+([A-Za-z][A-Za-z .'-]*?)(?=\s+(?:above|below|greater than|less than|more than|for|\.|$))/i,
     /(?:by)\s+([A-Za-z][A-Za-z .'-]*?)(?=\s+(?:above|below|greater than|less than|more than|for|\.|$))/i
   ];
 
-  for (const pattern of patterns) {
+  for (const [index, pattern] of patterns.entries()) {
+    if (index === 1 && hasGroupingOrOrderingClause) continue;
     const match = text.match(pattern);
     if (match && match[1]) {
       const value = match[1].trim();

@@ -65,6 +65,21 @@ test('plans exclusions as NOT IN and supports multi-field sorting', () => {
   assert.deepEqual(request.sort, [{ field: 'amount', order: 'desc' }, { field: 'created', order: 'desc' }]);
 });
 
+test('plans grouped total deal amount as a SUM grouped by Stage', () => {
+  const request = planQuestion('show me total deal amount grouped by stage');
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.request_type, 'aggregate');
+  assert.deepEqual(request.aggregate, { operation: 'sum', field: 'amount' });
+  assert.equal(request.group_by, 'Stage');
+});
+
+test('does not interpret grouped-by wording as an owner filter', () => {
+  const request = planQuestion('show me total deal amount grouped by stage and calculate total Amount');
+  assert.deepEqual(request.aggregate, { operation: 'sum', field: 'amount' });
+  assert.equal(request.group_by, 'Stage');
+  assert.deepEqual(request.filters, []);
+});
+
 test('builds advanced COQL with NOT IN, multi-sort, and HAVING', () => {
   const query = buildCoqlQuery({
     module: 'Deals',
