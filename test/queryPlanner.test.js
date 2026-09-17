@@ -232,6 +232,88 @@ test('advances the exact module offset for next-page follow-ups', async () => {
   assert.equal(calls[1].offset, 10);
 });
 
+test('paginates every supported record module through the same continuation path', async () => {
+  const modules = ['Deals', 'Leads', 'Contacts', 'Accounts', 'Calls', 'Meetings', 'Tasks', 'Products', 'Quotes', 'SalesOrders', 'PurchaseOrders', 'Invoices'];
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push({ ...input, filters: input.filters?.map((filter) => ({ ...filter })), sort: input.sort });
+      const offset = input.offset || 0;
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        filters: input.filters,
+        data: Array.from({ length: 2 }, (_, index) => ({ id: `${input.module}-${offset + index + 1}` })),
+        pagination: { limit: input.limit, offset, returned: 2, more_records: true }
+      };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+
+  for (const [index, module] of modules.entries()) {
+    const conversationId = `pagination-matrix-${index}`;
+    await controller.assistant({ body: { conversation_id: conversationId, question: `show me ${module}` } }, response(), (error) => { throw error; });
+    await controller.assistant({ body: { conversation_id: conversationId, question: `give me next 20 ${module}` } }, response(), (error) => { throw error; });
+    await controller.assistant({ body: { conversation_id: conversationId, question: 'next page' } }, response(), (error) => { throw error; });
+  }
+
+  for (let index = 0; index < modules.length; index += 1) {
+    const moduleCalls = calls.slice(index * 3, index * 3 + 3);
+    assert.equal(moduleCalls[0].module, moduleCalls[1].module);
+    assert.equal(moduleCalls[1].module, moduleCalls[2].module);
+    assert.ok(moduleCalls[0].module);
+    assert.deepEqual(moduleCalls.map((call) => call.offset), [0, 2, 4]);
+  }
+});
+
+test('preserves non-Deals filters and sorts through generic pagination', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        data: Array.from({ length: 3 }, (_, index) => ({ id: String((input.offset || 0) + index + 1) })),
+        pagination: { limit: input.limit, offset: input.offset, returned: 3, more_records: true }
+      };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+
+  await controller.assistant({ body: { conversation_id: 'pagination-leads-filtered', question: 'show me leads created this month sorted by created newest' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-leads-filtered', question: 'next 50 leads' } }, response(), (error) => { throw error; });
+
+  assert.equal(calls[0].module, 'Leads');
+  assert.equal(calls[1].module, 'Leads');
+  assert.equal(calls[1].offset, 3);
+  assert.equal(calls[1].limit, 50);
+  assert.deepEqual(calls[1].filters, calls[0].filters);
+  assert.deepEqual(calls[1].sort, calls[0].sort);
+});
+
+test('keeps pagination state isolated across conversations and modules', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      return {
+        module: input.module,
+        data: Array.from({ length: 4 }, (_, index) => ({ id: `${input.module}-${(input.offset || 0) + index}` })),
+        pagination: { limit: input.limit, offset: input.offset, returned: 4, more_records: true }
+      };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+
+  await controller.assistant({ body: { conversation_id: 'conversation-a', question: 'show me deals' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'conversation-b', question: 'show me leads' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'conversation-a', question: 'next 20' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'conversation-b', question: 'next 20' } }, response(), (error) => { throw error; });
+
+  assert.deepEqual(calls.map((call) => [call.module, call.offset]), [['Deals', 0], ['Leads', 0], ['Deals', 4], ['Leads', 4]]);
+});
+
 test('advances conversational pagination when the follow-up repeats the module name', async () => {
   const calls = [];
   const pages = [];

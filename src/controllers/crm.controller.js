@@ -5,6 +5,13 @@ const { resolveRelativePeriod, relativePeriodFromText } = require('../utils/rela
 const { createCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, updateDiagnostics, diagnosticsFromError, publicCrmDiagnostics } = require('../utils/crmDiagnostics');
 const { env } = require('../config/env');
 const { createCrmQueryPlanner } = require('../planners/crmQueryPlanner');
+const {
+  advancePagination,
+  createPaginationState,
+  createQueryIdentity,
+  isExplicitPageRequest,
+  isPaginationContinuation
+} = require('../query/pagination');
 
 const MAX_QUESTION_LENGTH = 2000;
 
@@ -103,6 +110,7 @@ function createCrmController(crmService = new CrmService()) {
           conversation_id: conversationId,
           continuation_detected: continuationDetected,
           previous_state_found: Boolean(previous?.canonicalState),
+          previous_module: previous?.canonicalState?.module || null,
           previous_offset: previous?.canonicalState?.pagination?.offset ?? null,
           previous_returned: previous?.canonicalState?.pagination?.returned ?? null
         });
@@ -112,6 +120,7 @@ function createCrmController(crmService = new CrmService()) {
           conversation_id_hash: conversationId ? hashConversationId(conversationId) : null,
           continuation_detected: continuationDetected,
           previous_state_found: Boolean(previous?.canonicalState),
+          previous_module: previous?.canonicalState?.module || null,
           previous_offset: previous?.canonicalState?.pagination?.offset ?? null,
           previous_returned: previous?.canonicalState?.pagination?.returned ?? null
         });
@@ -139,10 +148,12 @@ function createCrmController(crmService = new CrmService()) {
           new_offset: plannedRequest.pagination?.offset ?? plannedRequest.offset ?? 0,
           new_limit: plannedRequest.pagination?.limit ?? plannedRequest.limit ?? 20,
           module: plannedRequest.module || null,
-          canonical_plan_hash: hashCanonicalPlan(plannedRequest)
+          query_identity: createQueryIdentity(plannedRequest)
         });
         updateDiagnostics(diagnostics, {
-          new_offset: plannedRequest.pagination?.offset ?? plannedRequest.offset ?? 0
+          new_offset: plannedRequest.pagination?.offset ?? plannedRequest.offset ?? 0,
+          current_module: plannedRequest.module || null,
+          query_identity: createQueryIdentity(plannedRequest)
         });
         updateDiagnostics(diagnostics, {
           resolved_module: plannedRequest.module || explicitModule || 'not_reached',
@@ -212,10 +223,8 @@ function createCrmController(crmService = new CrmService()) {
   conversationContext.set(conversationId, {
     conversation_id: conversationId,
     canonical_plan: plannedRequest,
-    last_offset: canonicalState.pagination.offset,
-    last_returned: canonicalState.pagination.returned,
-    last_limit: canonicalState.pagination.limit,
-    more_records: canonicalState.pagination.more_records,
+    pagination: canonicalState.pagination,
+    query_identity: canonicalState.query_identity,
     updated_at: new Date().toISOString(),
     question: resolvedQuestion,
     plannedRequest,
@@ -225,7 +234,8 @@ function createCrmController(crmService = new CrmService()) {
     conversation_id: conversationId,
     storage: 'in_memory_controller_map',
     state_offset: canonicalState.pagination.offset,
-    state_returned: canonicalState.pagination.returned
+    state_returned: canonicalState.pagination.returned,
+    query_identity: canonicalState.query_identity
   });
 
   if (conversationContext.size > 1000) {
@@ -341,13 +351,11 @@ function planContinuationAwareRequest(plannedRequest, originalQuestion, previous
   if (!isPaginationContinuation(text) && !isExplicitPageRequest(text)) return plannedRequest;
 
   const priorRequest = previous.plannedRequest || plannedRequest;
-  const previousLimit = Number(previous.canonicalState.pagination.limit) || Number(priorRequest.limit) || 20;
-  const previousReturned = Number(previous.canonicalState.pagination.returned);
-  if (!Number.isInteger(previousReturned) || previousReturned < 0) return plannedRequest;
-  const requestedLimit = extractPageSize(text) || previousLimit;
-  const nextOffset = isExplicitPageRequest(text)
-    ? Math.max(0, (extractPageNumber(text) - 1) * requestedLimit)
-    : (Number(previous.canonicalState.pagination.offset) || 0) + previousReturned;
+  const { limit: requestedLimit, offset: nextOffset } = advancePagination(
+    previous.canonicalState,
+    text,
+    priorRequest
+  );
 
   return {
     ...priorRequest,
@@ -357,26 +365,8 @@ function planContinuationAwareRequest(plannedRequest, originalQuestion, previous
   };
 }
 
-function isPaginationContinuation(text) {
-  return /^(?:proceed|continue|next(?:\s+\d+)?(?:\s+(?:deals?|records?|batch(?:es)?))?|next page|(?:show|give) me (?:the )?(?:next(?:\s+\d+)?\s+(?:page|deals?|records?|batch(?:es)?)|more)(?:\s+(?:deals?|records?|batch(?:es)?))?|more(?:\s+(?:deals?|records?|batch(?:es)?))?)\b/i.test(text);
-}
-
-function isExplicitPageRequest(text) {
-  return /\bpage\s+\d+\b/i.test(text);
-}
-
-function extractPageSize(text) {
-  const match = String(text || '').match(/(?:next|show me the next|show me|show|give me)\s+(\d+)\b/i);
-  return match ? Math.min(Math.max(Number(match[1]), 1), 200) : null;
-}
-
-function extractPageNumber(text) {
-  const match = String(text || '').match(/\bpage\s+(\d+)\b/i);
-  return match ? Math.min(Math.max(Number(match[1]), 1), 1000) : 1;
-}
-
 function buildCanonicalConversationState(question, plannedRequest, result, requestId, conversationId) {
-  const pagination = plannedRequest?.pagination || { limit: plannedRequest?.limit, offset: plannedRequest?.offset };
+  const pagination = createPaginationState(plannedRequest, result);
   const recordIds = Array.isArray(result?.data)
     ? result.data.map((record) => String(record?.id || record?.ID || '')).filter(Boolean)
     : [];
@@ -395,12 +385,8 @@ function buildCanonicalConversationState(question, plannedRequest, result, reque
     comparison: plannedRequest?.comparison || null,
     analysis: plannedRequest?.analysis || null,
     response_fields: Array.isArray(plannedRequest?.response_fields) ? plannedRequest.response_fields : Array.isArray(plannedRequest?.fields) ? plannedRequest.fields : [],
-    pagination: {
-      limit: Number(pagination?.limit) || 20,
-      offset: Number(pagination?.offset) || 0,
-      returned: Array.isArray(result?.data) ? result.data.length : 0,
-      more_records: resolveMoreRecords(result)
-    },
+    pagination,
+    query_identity: createQueryIdentity(plannedRequest),
     record_ids: recordIds
   };
 }
@@ -413,6 +399,7 @@ function normalizeSortForFingerprint(sort) {
 
 function isSameQueryShape(previousState, plannedRequest) {
   if (!previousState || !plannedRequest) return false;
+  if (previousState.query_identity) return previousState.query_identity === createQueryIdentity(plannedRequest);
   return stableStringify({
     domain: previousState.domain,
     module: previousState.module,
@@ -440,20 +427,10 @@ function isSameQueryShape(previousState, plannedRequest) {
   });
 }
 
-function resolveMoreRecords(result) {
-  if (typeof result?.pagination?.more_records === 'boolean') return result.pagination.more_records;
-  if (typeof result?.more_records === 'boolean') return result.more_records;
-  return false;
-}
-
 function hashConversationId(value) {
   let hash = 0;
   for (const character of String(value)) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
   return Math.abs(hash).toString(16);
-}
-
-function hashCanonicalPlan(value) {
-  return hashConversationId(stableStringify(value));
 }
 
 function isDuplicatePage(previousState, currentState) {
