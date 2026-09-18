@@ -247,11 +247,11 @@ test('uses the Zoho Module Record Count API with datetime criteria', async () =>
     getApiDomain: () => null,
     clearToken: () => {}
   });
-  const result = await zoho.count('Leads', [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-08-25'] }]);
+  const result = await zoho.count('Leads', [{ field: 'Created_Time', operator: 'between', value: ['2026-08-01', '2026-08-25'], value_type: 'datetime' }]);
   assert.equal(result.count, 188);
   const countRequest = requests.find((request) => request.url.endsWith('/Leads/actions/count'));
   assert.ok(countRequest);
-  assert.match(countRequest.options.params.criteria, /Created_Time:between:2026-08-01T00:00:00\+05:30,2026-08-25T23:59:59\+05:30/);
+  assert.match(countRequest.options.params.criteria, /Created_Time:between:2026-08-01T00:00:00\+05:30,2026-08-25T00:00:00\+05:30/);
 });
 
 test('resolves owner names before CRM criteria generation', async () => {
@@ -535,7 +535,7 @@ test('keeps DATE between filters date-only and inclusive', () => {
     fields: ['Deal_Name', 'Amount', 'Stage', 'Closing_Date'],
     filters: [
       { field: 'Stage', operator: 'equals', value: 'Closed Won' },
-      { field: 'Closing_Date', operator: 'between', value: ['2026-07-01', '2026-07-31'] }
+      { field: 'Closing_Date', operator: 'between', value: ['2026-07-01', '2026-07-31'], value_type: 'date' }
     ],
     sort: { field: 'Amount', order: 'desc' }
   });
@@ -546,7 +546,7 @@ test('uses explicit exclusive DateTime boundaries for Created_Time calendar year
   const query = buildCoqlQuery({
     module: 'Leads',
     fields: ['id', 'Created_Time'],
-    filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-01-01', '2027-01-01'], exclusive_end: true }]
+    filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-01-01', '2027-01-01'], exclusive_end: true, value_type: 'datetime' }]
   });
   assert.equal(query, "select id, Created_Time from Leads where (Created_Time >= '2026-01-01T00:00:00+05:30' and Created_Time < '2027-01-01T00:00:00+05:30')");
 });
@@ -627,7 +627,7 @@ test('does not quote numeric COQL values and rejects invalid date values', () =>
   assert.throws(() => buildCoqlQuery({
     module: 'Deals',
     fields: ['Closing_Date'],
-    filters: [{ field: 'Closing_Date', operator: 'between', value: ['07/01/2026', '2026-07-31'] }]
+    filters: [{ field: 'Closing_Date', operator: 'between', value: ['07/01/2026', '2026-07-31'], value_type: 'date' }]
   }), /YYYY-MM-DD/);
 });
 

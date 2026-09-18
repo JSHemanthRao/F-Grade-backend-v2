@@ -19,6 +19,11 @@ function createCanonicalPlan(input = {}) {
   const sort = normalizeSort(request.sort, request.sort_field, request.sort_order);
   const fields = uniqueStrings(request.fields);
   const fieldLabels = uniqueStrings(request.field_labels);
+  const explicitlyRequestedFields = uniqueStrings(request.requested_fields);
+  const requestedFields = explicitlyRequestedFields.length > 0 ? explicitlyRequestedFields : (fieldLabels.length > 0 ? fieldLabels : fields);
+  const primaryEntity = request.primary_entity && typeof request.primary_entity === 'object'
+    ? { ...request.primary_entity }
+    : { module: request.module || null, module_api_name: request.module_api_name || null };
   const filters = Array.isArray(request.filters) ? request.filters.map((filter) => ({ ...filter })) : [];
   const groupBy = uniqueStrings(request.group_by);
 
@@ -26,10 +31,12 @@ function createCanonicalPlan(input = {}) {
     domain: request.domain || 'CRM',
     module: request.module || null,
     module_api_name: request.module_api_name,
+    primary_entity: primaryEntity,
     activity_type: request.activity_type || null,
     intent: requestType,
     request_type: requestType,
     fields,
+    requested_fields: requestedFields,
     // Field labels are semantic input, not an empty transport field. Keeping
     // the property absent when no labels were parsed prevents stale connector
     // metadata from being mistaken for an explicit field-resolution request.

@@ -441,7 +441,7 @@ test('plans monthly Closed Won deal summaries with a Closing_Date filter', () =>
   assert.equal(request.request_type, 'analysis');
   assert.equal(request.analysis.type, 'closed_won_summary');
   assert.deepEqual(request.filters, [
-    { field: 'Created_Time', operator: 'between', value: [request.filters[0].value[0], request.filters[0].value[1]], exclusive_end: true },
+    { field: 'Created_Time', operator: 'between', value: [request.filters[0].value[0], request.filters[0].value[1]], exclusive_end: true, date_range: request.filters[0].date_range },
     { field: 'Stage', operator: 'equals', value: 'Closed Won' }
   ]);
 });

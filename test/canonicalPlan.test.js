@@ -27,6 +27,8 @@ test('canonical plans have one stable shape for record requests', () => {
 test('canonical plans preserve semantic field labels for relationship resolution', () => {
   const plan = createCanonicalPlan({ module: 'Deals', fields: ['id'], field_labels: ['deal name', 'account industry'] });
   assert.deepEqual(plan.field_labels, ['deal name', 'account industry']);
+  assert.deepEqual(plan.primary_entity, { module: 'Deals', module_api_name: null });
+  assert.deepEqual(plan.requested_fields, ['deal name', 'account industry']);
 });
 
 test('the planner rejects record mutations before execution', () => {

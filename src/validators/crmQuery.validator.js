@@ -218,7 +218,9 @@ function validateCrmQuery(body) {
     aggregations: body.aggregations || [],
     comparison: body.comparison,
     date_range: body.date_range,
-    analysis: body.analysis
+    analysis: body.analysis,
+    metadata_driven: metadataDriven,
+    metadata_validated: body.metadata_validated === true || metadataDriven
   };
 }
 

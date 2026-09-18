@@ -170,7 +170,7 @@ test('materializes unary filters without reintroducing a value', async () => {
 
 test('builds valid unary and date-range COQL', () => {
   assert.equal(buildCoqlQuery({ module: 'Leads', fields: ['id'], filters: [{ field: 'Created_Time', operator: 'is_not_null' }] }), 'select id from Leads where (Created_Time is not null)');
-  assert.equal(buildCoqlQuery({ module: 'Leads', fields: ['id'], filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-09-01', '2026-10-01'], exclusive_end: true }] }), "select id from Leads where (Created_Time >= '2026-09-01T00:00:00+05:30' and Created_Time < '2026-10-01T00:00:00+05:30')");
+  assert.equal(buildCoqlQuery({ module: 'Leads', fields: ['id'], filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-09-01', '2026-10-01'], exclusive_end: true, value_type: 'datetime' }] }), "select id from Leads where (Created_Time >= '2026-09-01T00:00:00+05:30' and Created_Time < '2026-10-01T00:00:00+05:30')");
 });
 
 test('plans today deals with a negated Stage filter and created-date filter', () => {
@@ -248,9 +248,11 @@ test('resolves today deal fields only from live metadata before Zoho execution',
   assert.equal(captured.sort.field, 'total_value__c');
   assert.equal(captured.sort.order, 'desc');
   assert.deepEqual(captured.filters, [
-    { field: 'deal_created_at__c', operator: 'between', value: captured.filters[0].value, exclusive_end: true },
+    { field: 'deal_created_at__c', operator: 'between', value: captured.filters[0].value, exclusive_end: true, date_range: captured.filters[0].date_range, value_type: 'datetime' },
     { field: 'deal_stage__c', operator: 'not_equals', value: 'closed lost' }
   ]);
+  assert.equal(captured.filters[0].date_range.field_type, 'datetime');
+  assert.match(captured.filters[0].value[0], /^\d{4}-\d{2}-\d{2}T00:00:00[+-]\d{2}:\d{2}$/);
   assert.ok(captured.filters.every((filter) => !['semantic', 'the closing_date', 'closing_date', 'closing date', 'the stage', 'the amount'].includes(filter.field)));
   assert.deepEqual(diagnostics.resolved_fields, [
     { user_term: 'id', field_label: 'Record ID', api_name: 'id', data_type: 'text' },
@@ -272,7 +274,7 @@ test('executes normalized count and SUM comparisons with zero-safe percentage ch
     ] }),
     resolveOwnerFilters: async (filters) => filters,
     count: async () => ({ count: ++countCalls === 2 ? 12 : 0 }),
-    aggregate: async (query) => ({ rows: [{ value: query.includes("'2026-10-01'") ? 100 : 50 }] })
+    aggregate: async () => ({ rows: [{ value: 50 }] })
   };
   const service = new CrmService(zoho);
   const countResult = await service.query(planQuestion('Compare leads created today vs yesterday'));

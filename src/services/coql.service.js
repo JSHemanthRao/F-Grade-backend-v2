@@ -1,78 +1,50 @@
 const { CRM_API_NAMES } = require('../constants/crmModules');
 const { validateModuleFieldScope } = require('../validators/crmQuery.validator');
-const { env } = require('../config/env');
+const { formatDateBoundary } = require('../query/dateResolver');
 
-const DATE_FIELDS = new Set(['Closing_Date', 'Due_Date', 'Valid_Till', 'Start_Date', 'End_Date', 'Renewal_Date']);
-const DATETIME_FIELDS = new Set(['Created_Time', 'Modified_Time', 'Converted_Date_Time', 'Lead_Conversion_Time', 'Start_DateTime', 'End_DateTime', 'Call_Start_Time']);
-
-function buildModuleCriteria(filters) {
-  return filters.map(({ field, operator, value, exclusive_end: exclusiveEnd }) => {
+function buildModuleCriteria(filters = []) {
+  return filters.map(({ field, operator, value, exclusive_end: exclusiveEnd, value_type: valueType }) => {
     if (operator === 'is_null' || operator === 'is_not_null') return `(${field}:${operator})`;
-    if (operator === 'between' && exclusiveEnd && DATETIME_FIELDS.has(field)) return `(${field}:greater_equal:${formatSearchDate(field, value[0], false)})and(${field}:less_than:${formatSearchDate(field, value[1], false)})`;
-    if (operator === 'between') return `(${field}:between:${formatSearchDate(field, value[0], false)},${formatSearchDate(field, value[1], true)})`;
-    if (operator === 'in') return `(${field}:in:[${value.map((item) => formatSearchValue(field, item)).join(',')}])`;
-    return `(${field}:${operator}:${formatSearchValue(field, value)})`;
+    if (operator === 'between' && exclusiveEnd) return `(${field}:greater_equal:${formatSearchDate(value[0], valueType)})and(${field}:less_than:${formatSearchDate(value[1], valueType)})`;
+    if (operator === 'between') return `(${field}:between:${formatSearchDate(value[0], valueType)},${formatSearchDate(value[1], valueType)})`;
+    if (operator === 'in') return `(${field}:in:[${value.map((item) => formatSearchValue(item, valueType)).join(',')}])`;
+    return `(${field}:${operator}:${formatSearchValue(value, valueType)})`;
   }).join('and');
 }
 
-function buildCriteria(filters) {
-  return filters.map(({ field, operator, value, exclusive_end: exclusiveEnd }) => {
-    if (operator === 'between' && exclusiveEnd && DATETIME_FIELDS.has(field)) return `(${field}:greater_equal:${formatSearchDate(field, value[0], false)})and(${field}:less_than:${formatSearchDate(field, value[1], false)})`;
-    if (operator === 'between') return `(${field}:between:${formatSearchDate(field, value[0], false)},${formatSearchDate(field, value[1], true)})`;
+function buildCriteria(filters = []) {
+  return filters.map(({ field, operator, value, exclusive_end: exclusiveEnd, value_type: valueType }) => {
+    if (operator === 'between' && exclusiveEnd) return `(${field}:greater_equal:${formatSearchDate(value[0], valueType)})and(${field}:less_than:${formatSearchDate(value[1], valueType)})`;
+    if (operator === 'between') return `(${field}:between:${formatSearchDate(value[0], valueType)},${formatSearchDate(value[1], valueType)})`;
     if (operator === 'is_null' || operator === 'is_not_null') return `(${field}:${operator}:true)`;
-    return `(${field}:${operator}:${formatSearchValue(field, value)})`;
+    return `(${field}:${operator}:${formatSearchValue(value, valueType)})`;
   }).join('and');
 }
 
-function formatSearchDate(field, value, endOfDay = false) {
-  if (DATETIME_FIELDS.has(field) && /^\d{4}-\d{2}-\d{2}$/.test(String(value))) return `${value}T${endOfDay ? '23:59:59' : '00:00:00'}${timeZoneOffset(value)}`;
-  return String(value);
+function formatSearchDate(value, valueType) {
+  return valueType === 'date' || valueType === 'datetime' ? formatDateBoundary(value, valueType) : String(value);
 }
 
-function timeZoneOffset(value) {
-  const date = new Date(`${value}T12:00:00Z`);
-  const part = new Intl.DateTimeFormat('en-US', { timeZone: env.crmTimezone, timeZoneName: 'longOffset' }).formatToParts(date).find((item) => item.type === 'timeZoneName')?.value || 'GMT';
-  if (part === 'GMT' || part === 'UTC') return '+00:00';
-  const match = part.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
-  return match ? `${match[1]}${match[2].padStart(2, '0')}:${match[3] || '00'}` : '+00:00';
-}
-
-function formatSearchValue(field, value) {
-  if (DATE_FIELDS.has(field)) return formatSearchDate(field, value);
+function formatSearchValue(value, valueType) {
+  if (valueType === 'date' || valueType === 'datetime') return formatSearchDate(value, valueType);
   return String(value).replace(/([\\,:()])/g, '\\$1');
 }
 
-function normalizeDateValue(field, value) {
-  if (!DATE_FIELDS.has(field) && !DATETIME_FIELDS.has(field)) return value;
-  // Accept plain YYYY-MM-DD or ISO datetimes and normalize to YYYY-MM-DD
-  if (typeof value === 'string') {
-    const m = value.match(/^(\d{4}-\d{2}-\d{2})(?:[T ].*)?$/);
-    if (m) return m[1];
-  }
-  throw new Error(`Date value for ${field} must use YYYY-MM-DD.`);
-}
-
-function formatValue(field, value) {
-  const normalized = normalizeDateValue(field, value);
+function formatValue(filter, value) {
+  const normalized = filter.value_type === 'date' || filter.value_type === 'datetime'
+    ? formatDateBoundary(value, filter.value_type)
+    : value;
   if (typeof normalized === 'number' || typeof normalized === 'boolean') return String(normalized);
   return `'${String(normalized).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 }
 
-function formatComparisonValue(field, value) {
+function formatComparisonValue(filter, value) {
   if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value)) return value;
-  return formatValue(field, value);
+  return formatValue(filter, value);
 }
 
-function formatDateComparisonValue(field, value, endOfDay = false, exclusiveEnd = false) {
-  if (!DATE_FIELDS.has(field) && !DATETIME_FIELDS.has(field)) return formatComparisonValue(field, value);
-  const normalized = normalizeDateValue(field, value);
-  if (DATETIME_FIELDS.has(field) && endOfDay && !exclusiveEnd) {
-    const end = new Date(`${normalized}T00:00:00Z`);
-    end.setUTCDate(end.getUTCDate() + 1);
-    const nextDay = end.toISOString().slice(0, 10);
-    return `'${nextDay}T00:00:00${timeZoneOffset(nextDay)}'`;
-  }
-  return `'${formatSearchDate(field, normalized)}'`;
+function formatDateComparisonValue(filter, value) {
+  return formatComparisonValue(filter, value);
 }
 
 function buildFilterClauses(filters) {
@@ -80,23 +52,23 @@ function buildFilterClauses(filters) {
     const { field, operator, value } = filter;
     if (operator === 'is_null' || operator === 'is_empty') return [`${field} is null`];
     if (operator === 'is_not_null' || operator === 'is_not_empty') return [`${field} is not null`];
-    if (operator === 'equals') return [`${field} = ${formatValue(field, value)}`];
-    if (operator === 'not_equals') return [`${field} != ${formatValue(field, value)}`];
-    if (operator === 'contains') return [`${field} like ${formatValue(field, `%${value}%`)}`];
-    if (operator === 'starts_with') return [`${field} like ${formatValue(field, `${value}%`)}`];
-    if (operator === 'greater_than') return [`${field} > ${formatComparisonValue(field, value)}`];
-    if (operator === 'less_than') return [`${field} < ${formatComparisonValue(field, value)}`];
-    if (operator === 'greater_equal') return [`${field} >= ${formatComparisonValue(field, value)}`];
-    if (operator === 'less_equal') return [`${field} <= ${formatComparisonValue(field, value)}`];
-    if (operator === 'in') return [`${field} in (${value.map((item) => formatValue(field, item)).join(', ')})`];
-    if (operator === 'not_in') return [`${field} not in (${value.map((item) => formatValue(field, item)).join(', ')})`];
-    if (operator === 'between') return [`${field} >= ${formatDateComparisonValue(field, value[0])} and ${field} ${DATETIME_FIELDS.has(field) ? '<' : '<='} ${formatDateComparisonValue(field, value[1], true, filter.exclusive_end === true)}`];
+    if (operator === 'equals') return [`${field} = ${formatValue(filter, value)}`];
+    if (operator === 'not_equals') return [`${field} != ${formatValue(filter, value)}`];
+    if (operator === 'contains') return [`${field} like ${formatValue(filter, `%${value}%`)}`];
+    if (operator === 'starts_with') return [`${field} like ${formatValue(filter, `${value}%`)}`];
+    if (operator === 'greater_than') return [`${field} > ${formatComparisonValue(filter, value)}`];
+    if (operator === 'less_than') return [`${field} < ${formatComparisonValue(filter, value)}`];
+    if (operator === 'greater_equal') return [`${field} >= ${formatComparisonValue(filter, value)}`];
+    if (operator === 'less_equal') return [`${field} <= ${formatComparisonValue(filter, value)}`];
+    if (operator === 'in') return [`${field} in (${value.map((item) => formatValue(filter, item)).join(', ')})`];
+    if (operator === 'not_in') return [`${field} not in (${value.map((item) => formatValue(filter, item)).join(', ')})`];
+    if (operator === 'between') return [`${field} >= ${formatDateComparisonValue(filter, value[0])} and ${field} ${filter.exclusive_end === true ? '<' : '<='} ${formatDateComparisonValue(filter, value[1])}`];
     return [];
   });
 }
 
-function buildCoqlQuery({ module, fields, filters, filter_expression: filterExpression, sort, having_filter: havingFilter, analysis }) {
-  validateModuleFieldScope({ module, fields, filters, sort, analysis });
+function buildCoqlQuery({ module, fields, filters, filter_expression: filterExpression, sort, having_filter: havingFilter, analysis, metadata_validated: metadataValidated, metadata_driven: metadataDriven }) {
+  if (!metadataValidated && !metadataDriven) validateModuleFieldScope({ module, fields, filters, sort, analysis });
   const clauses = buildFilterClauses(filters);
   const moduleName = CRM_API_NAMES[module] || module;
   let query = `select ${fields.join(', ')} from ${moduleName}`;

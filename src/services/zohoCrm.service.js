@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { getZohoConfig } = require('../config/zoho.config');
 const { ZohoAuthService } = require('./zohoAuth.service');
-const { buildFilterClauses, buildWhereClause, buildLogicalFilterClause, buildModuleCriteria } = require('./coql.service');
+const { buildModuleCriteria } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
 const { env } = require('../config/env');
@@ -11,6 +11,7 @@ const { validateModuleFieldScope } = require('../validators/crmQuery.validator')
 const { getCurrentCrmDiagnostics, recordCrmEvent, updateDiagnostics } = require('../utils/crmDiagnostics');
 const { resolveModuleReference, assertResolvedModule, buildModuleRegistry, normalizeModuleReference } = require('../resolvers/moduleResolver');
 const { buildCoqlPagination } = require('../coql/coqlPagination');
+const { buildExecutableCoqlPlan } = require('../coql/coqlBuilder');
 
 class ZohoCrmService {
   constructor(httpClient = axios, configLoader = getZohoConfig, authService) {
@@ -146,7 +147,8 @@ class ZohoCrmService {
     if (finalFields.length === 0) {
       throw createAppError('ZOHO_FIELD_UNAVAILABLE', `Zoho CRM metadata for '${resolvedModule}' does not expose any of the requested fields.`, 502);
     }
-    const selectQuery = `${buildDynamicCoqlQuery({ ...request, module: resolvedModule, fields: finalFields })}${buildCoqlPagination(request.limit, request.offset)}`;
+    const executablePlan = buildExecutableCoqlPlan({ ...request, module: resolvedModule, fields: finalFields });
+    const selectQuery = `${executablePlan.select_query}${buildCoqlPagination(request.limit, request.offset)}`;
     updateDiagnostics(getCurrentCrmDiagnostics(), { coql_offset: request.offset });
     log('info', `[COQL REQUEST] ${JSON.stringify({ module: resolvedModule, limit: request.limit, offset: request.offset, select_query: selectQuery })}`);
     return this.executeQueryRequest(selectQuery, token, config, request, resolvedModule);
@@ -799,26 +801,6 @@ function parseCsvLine(line) {
       }))
       .filter((relationship) => relationship.field_api_name && relationship.target_module_api_name);
   }
-}
-
-function buildDynamicCoqlQuery({ module, fields, filters, filter_expression: filterExpression, sort, having_filter: havingFilter }) {
-  const clauses = buildFilterClauses(filters || []);
-  let query = `select ${fields.join(', ')} from ${module}`;
-  query += ` where ${filterExpression ? buildLogicalFilterClause(filterExpression) : (clauses.length > 0 ? buildWhereClause(clauses) : '(id is not null)')}`;
-  const sorts = ensureStableSort(sort ? (Array.isArray(sort) ? sort : [sort]) : []);
-  if (sorts.length > 0) {
-    query += ` order by ${sorts.map(({ field, order }) => `${field} ${order}`).join(', ')}`;
-  }
-  if (havingFilter) query += ` having ${buildWhereClause(buildFilterClauses([havingFilter]))}`;
-  return query;
-}
-
-function ensureStableSort(sorts) {
-  const normalized = sorts.filter((item) => item && item.field);
-  if (normalized.length === 0) return [{ field: 'id', order: 'desc' }];
-  const hasIdSort = normalized.some((item) => String(item.field).toLowerCase() === 'id');
-  if (!hasIdSort) normalized.push({ field: 'id', order: 'desc' });
-  return normalized;
 }
 
 function mapZohoStatus(status, upstreamCode) {

@@ -1165,8 +1165,19 @@ function extractSearchTerm(text) {
 }
 
 function detectDateFilter(lowerText, module) {
-  const currentDate = new Date();
   const dateField = dateFieldForQuestion(lowerText, module);
+  const semanticPeriod = relativePeriodFromText(lowerText);
+  if (semanticPeriod) {
+    const range = resolveRelativePeriod(semanticPeriod);
+    return {
+      field: dateField,
+      operator: 'between',
+      value: [range.start, range.end],
+      exclusive_end: true,
+      date_range: { semantic: range.period, timezone: range.timeZone, start: range.start, end: range.end }
+    };
+  }
+  const currentDate = new Date();
 
   if (/(today)/.test(lowerText)) {
     return calendarFilter(dateField, dayRange(currentDate));
@@ -1308,8 +1319,6 @@ function dateFieldRoleForQuestion(lowerText, module) {
 }
 
 function calendarFilter(field, value) {
-  const datetimeFields = new Set(['Created_Time', 'Modified_Time', 'Call_Start_Time', 'Start_DateTime', 'End_DateTime']);
-  if (!datetimeFields.has(field)) return { field, operator: 'between', value };
   const exclusiveEnd = new Date(`${value[1]}T00:00:00Z`);
   exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
   return { field, operator: 'between', value: [value[0], exclusiveEnd.toISOString().slice(0, 10)], exclusive_end: true };

@@ -53,21 +53,19 @@ function createPaginationState(plan, result) {
 }
 
 function createQueryIdentity(plan) {
+  const resolvedDateRange = plan?.date_range || plan?.filters?.find((filter) => filter?.date_range)?.date_range || null;
   return stableStringify({
     domain: plan?.domain || 'CRM',
-    intent: plan?.intent || plan?.request_type || 'records',
     module: plan?.module || null,
     module_api_name: plan?.module_api_name || null,
-    fields: plan?.fields || [],
     relationships: plan?.relationships || [],
-    response_fields: plan?.response_fields || [],
     filters: plan?.filters || [],
     filter_expression: plan?.filter_expression || null,
     sort: plan?.sort || null,
     group_by: plan?.group_by || [],
-    aggregate: plan?.aggregate || null,
+    aggregate: plan?.aggregate?.operation === 'count' ? null : plan?.aggregate || null,
     comparison: plan?.comparison || null,
-    date_range: plan?.date_range || null,
+    date_range: resolvedDateRange,
     analysis: plan?.analysis || null
   });
 }

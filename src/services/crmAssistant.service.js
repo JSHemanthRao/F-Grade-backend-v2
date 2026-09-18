@@ -36,6 +36,7 @@ class CrmAssistantService {
     updateDiagnostics(diagnostics, { question, conversation_id_present: Boolean(conversationId), conversation_id: conversationId });
     const previous = this.paginationManager.get(conversationId);
     const continuationDetected = this.paginationManager.isContinuation(question);
+    const detailsFollowUp = !continuationDetected && isDetailsFollowUp(question, previous);
     if (continuationDetected && !conversationId) throw createAppError('PAGINATION_CONVERSATION_REQUIRED', 'A stable conversation_id is required to continue pagination.', 409);
     if (continuationDetected && !previous) throw createAppError('PAGINATION_STATE_NOT_FOUND', 'No previous CRM page is available for this conversation.', 409);
     if (continuationDetected && previous.more_records === false) throw createAppError('PAGINATION_EXHAUSTED', 'No more CRM records are available for this conversation.', 409);
@@ -43,6 +44,8 @@ class CrmAssistantService {
     const resolvedQuestion = this.resolveFollowUpQuestion(question, previous);
     const plannedRequest = continuationDetected
       ? this.paginationManager.planContinuation(question, previous)
+      : detailsFollowUp
+        ? convertToDetailPlan(previous.canonical_plan)
       : this.planner(resolvedQuestion);
     updateDiagnostics(diagnostics, {
       continuation_detected: continuationDetected,
@@ -66,12 +69,14 @@ class CrmAssistantService {
     this.assertExplicitModuleRouting(explicitModule, plannedRequest.module);
 
     const result = await this.crmService.query(plannedRequest, undefined, diagnostics);
-    const state = this.paginationManager.save(conversationId, plannedRequest, result, diagnostics?.request_id, resolvedQuestion);
-    const queryIdentity = createQueryIdentity(plannedRequest);
+    const statePlan = mergeResolvedPlan(plannedRequest, result);
+    const state = this.paginationManager.save(conversationId, statePlan, result, diagnostics?.request_id, resolvedQuestion);
+    const queryIdentity = createQueryIdentity(statePlan);
     if (diagnostics) {
       diagnostics.previous_module = previous?.canonical_plan?.module || null;
       diagnostics.current_module = plannedRequest.module || result.module || null;
       diagnostics.query_identity = queryIdentity;
+      diagnostics.query_fingerprint = queryIdentity;
       diagnostics.continuation_detected = continuationDetected;
       diagnostics.previous_offset = previous?.pagination?.offset ?? null;
       diagnostics.previous_returned = previous?.pagination?.returned ?? null;
@@ -99,6 +104,48 @@ class CrmAssistantService {
       pagination: state?.pagination || null
     };
   }
+}
+
+function isDetailsFollowUp(question, previous) {
+  if (!previous?.canonical_plan) return false;
+  const text = String(question || '').trim();
+  return /^(?:give|show|list|get)\b/i.test(text)
+    && /\b(?:details?|records?|results?|them|their)\b/i.test(text)
+    && !/\b(?:today|yesterday|tomorrow|this|last|next|before|after|since|until|between)\b/i.test(text);
+}
+
+function convertToDetailPlan(previousPlan) {
+  return {
+    ...previousPlan,
+    intent: 'records',
+    request_type: 'records',
+    fields: ['id'],
+    fields_source: 'planner_default',
+    field_labels: undefined,
+    aggregate: null,
+    group_by: [],
+    having_filter: undefined,
+    pagination: { ...(previousPlan.pagination || {}), offset: 0 },
+    offset: 0
+  };
+}
+
+function mergeResolvedPlan(plan, result) {
+  const resultDateRange = result?.date_range || result?.filters?.find((filter) => filter?.date_range)?.date_range;
+  return {
+    ...plan,
+    module: result?.module || plan.module,
+    module_api_name: result?.module_api_name || plan.module_api_name,
+    fields: result?.fields || plan.fields,
+    response_fields: result?.fields || plan.response_fields,
+    filters: result?.filters || plan.filters,
+    relationships: result?.relationships || plan.relationships || [],
+    sort: result?.sort || plan.sort || null,
+    group_by: result?.group_by || plan.group_by || [],
+    aggregate: result?.aggregate || plan.aggregate || null,
+    analysis: result?.analysis || plan.analysis || null,
+    date_range: resultDateRange || plan.date_range || null
+  };
 }
 
 module.exports = { CrmAssistantService };

@@ -10,8 +10,8 @@ const { env } = require('../config/env');
 const { resolveRelativePeriod } = require('../utils/relativeDate');
 const { getCurrentCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, updateDiagnostics } = require('../utils/crmDiagnostics');
 const { createCanonicalPlan } = require('../query/canonicalPlan');
-const { buildExecutionFields, capExecutionFields } = require('../query/fieldSelection');
-const { resolveRequestedFields } = require('../relationships/relationshipResolver');
+const { materializeMetadataRequest: materializeMetadataRequestFromLiveMetadata, collectExpressionFields: collectMetadataExpressionFields, isForbiddenInternalFieldName: isForbiddenMetadataFieldName } = require('../metadata/fieldResolver');
+const { selectRetrievalStrategy } = require('../query/retrievalStrategy');
 
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
@@ -57,6 +57,11 @@ class CrmService {
         ...input,
         module: resolvedModule.semantic_name,
         module_api_name: resolvedModule.api_name,
+        primary_entity: {
+          ...(input.primary_entity || {}),
+          module: resolvedModule.semantic_name,
+          module_api_name: resolvedModule.api_name
+        },
         module_resolution: {
           reference: moduleReference,
           semantic_name: resolvedModule.semantic_name,
@@ -110,13 +115,20 @@ class CrmService {
       };
       updateDiagnostics(diagnostics, { module_api_name: normalizedInput.module_api_name, stage: 'module_metadata_response' });
       recordCrmEvent('MODULE_METADATA_RESPONSE', diagnostics, { module: normalizedInput.module, module_api_name: normalizedInput.module_api_name });
-      normalizedInput = await materializeMetadataRequest(this.zohoService, normalizedInput);
+      normalizedInput = await materializeMetadataRequestFromLiveMetadata(this.zohoService, normalizedInput);
+      const normalizedDateRange = normalizedInput.date_range;
       updateDiagnostics(diagnostics, {
         resolved_fields: normalizedInput._resolved_field_diagnostics || diagnostics?.resolved_fields,
         available_metadata_fields: normalizedInput._available_metadata_fields || diagnostics?.available_metadata_fields,
         resolved_filters: Array.isArray(normalizedInput.filters) ? normalizedInput.filters : diagnostics?.resolved_filters,
         resolved_sort: normalizedInput.sort || (normalizedInput.sort_field ? { field: normalizedInput.sort_field, order: normalizedInput.sort_order } : null),
-        date_field: normalizedInput.date_field || normalizedInput.filters?.find((filter) => filter.field_role === 'date')?.field || null,
+        date_field: normalizedDateRange?.field || normalizedInput.date_field || normalizedInput.filters?.find((filter) => filter.field_role === 'date')?.field || null,
+        date_field_type: normalizedDateRange?.field_type || null,
+        semantic_date: normalizedDateRange?.semantic || null,
+        timezone: normalizedDateRange?.timezone || null,
+        date_start: normalizedDateRange?.start || null,
+        date_end: normalizedDateRange?.end || null,
+        date_end_operator: normalizedDateRange?.end_operator || null,
         stage: 'fields_resolved'
       });
       recordCrmEvent('FIELDS_RESOLVED', diagnostics, { module: normalizedInput.module, module_api_name: normalizedInput.module_api_name, fields: diagnostics?.resolved_fields });
@@ -132,6 +144,7 @@ class CrmService {
       request.module_api_name = await this.zohoService.resolveModuleApiName(request.module);
     }
     await validateMetadataFields(this.zohoService, request);
+    const retrievalStrategy = selectRetrievalStrategy(request);
     updateDiagnostics(diagnostics, {
       resolved_module: request.module,
       module_api_name: request.module_api_name || diagnostics?.module_api_name,
@@ -140,9 +153,10 @@ class CrmService {
       sort_field: request.sort?.field || request.sort_field || null,
       sort_order: request.sort?.order || request.sort_order || null,
       request_type: request.request_type,
+      retrieval_strategy: retrievalStrategy,
       stage: 'filters_resolved'
     });
-    recordCrmEvent('FILTERS_RESOLVED', diagnostics, { module: request.module, module_api_name: request.module_api_name, filters: request.filters });
+    recordCrmEvent('FILTERS_RESOLVED', diagnostics, { module: request.module, module_api_name: request.module_api_name, retrieval_strategy: retrievalStrategy, filters: request.filters });
     if (typeof this.zohoService.resolveOwnerFilters === 'function') {
       request.filters = await this.zohoService.resolveOwnerFilters(request.filters);
     }
@@ -241,6 +255,7 @@ class CrmService {
       request_type: request.request_type,
       fields: request.response_fields || request.fields,
       filters: request.filters,
+      ...(request.date_range ? { date_range: request.date_range } : {}),
       count: Number.isInteger(info.count) ? info.count : data.length,
       returned: data.length,
       more_records: Boolean(info.more_records),
@@ -268,9 +283,10 @@ class CrmService {
     const previous = dateRange.previous;
     if (!current || !previous) throw createAppError('INVALID_CRM_COMPARISON', 'Comparison requests require current and previous date ranges.', 400);
     const dateField = comparison.date_field || 'Created_Time';
+    const dateFieldType = comparison.date_field_type || dateRange.current?.field_type || dateRange.previous?.field_type;
     const operation = comparison.operation || request.aggregate?.operation || 'count';
     const aggregate = { operation, field: comparison.field || request.aggregate?.field || 'id' };
-    const filtersFor = (period) => [...(request.filters || []), { field: dateField, operator: 'between', value: [period.start, period.end], exclusive_end: true }];
+    const filtersFor = (period) => [...(request.filters || []), { field: dateField, operator: 'between', value: [period.start, period.end], exclusive_end: true, ...(dateFieldType ? { value_type: dateFieldType } : {}) }];
     const readValue = async (period) => {
       if (operation === 'count') return (await this.count({ ...request, request_type: 'count', filters: filtersFor(period) })).count;
       const result = await this.aggregate({ ...request, request_type: 'aggregate', filters: filtersFor(period) }, aggregate);
@@ -334,7 +350,7 @@ class CrmService {
   async count(request) {
     const moduleApiName = request.module_api_name || request.module;
     const result = await this.zohoService.count(moduleApiName, request.filters);
-    return { module: request.module, module_api_name: moduleApiName, request_type: request.request_type, fields: request.fields, filters: request.filters, count: result.count, returned: 0, more_records: false, records: [], data: [], summary: { operation: 'count', value: result.count }, pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false } };
+    return { module: request.module, module_api_name: moduleApiName, request_type: request.request_type, fields: request.fields, filters: request.filters, ...(request.date_range ? { date_range: request.date_range } : {}), count: result.count, returned: 0, more_records: false, records: [], data: [], summary: { operation: 'count', value: result.count }, pagination: { limit: request.limit, offset: request.offset, returned: 0, more_records: false } };
   }
 
   async search(request, search = {}) {
@@ -1138,7 +1154,7 @@ async function validateMetadataFields(zohoService, request) {
   const fields = [
     ...(Array.isArray(request.fields) ? request.fields : []),
     ...(Array.isArray(request.filters) ? request.filters.map((filter) => filter.field) : []),
-    ...collectExpressionFields(request.filter_expression),
+    ...collectMetadataExpressionFields(request.filter_expression),
     request.aggregate?.field,
     request.group_by,
     request.having_filter?.field,
@@ -1148,330 +1164,10 @@ async function validateMetadataFields(zohoService, request) {
   if (missing.length > 0) throw createAppError('FIELD_NOT_AVAILABLE', `Zoho CRM metadata for '${moduleApiName}' does not expose the requested field(s).`, 400, { module: request.module, module_api_name: moduleApiName, field: missing[0], fields: missing });
 }
 
-async function materializeMetadataRequest(zohoService, input) {
-  if (input.module === 'CRM' || typeof zohoService.getFieldMetadata !== 'function') return input;
-  const moduleApiName = input.module_api_name || input.module;
-  const metadata = await zohoService.getFieldMetadata(moduleApiName);
-  const fields = Array.isArray(metadata?.metadata) ? metadata.metadata : [];
-  const apiNames = new Set((metadata?.fields || []).filter(Boolean));
-  if (apiNames.size === 0) throw createAppError('ZOHO_METADATA_EMPTY', `Zoho field metadata for '${moduleApiName}' was unavailable.`, 502, { module_api_name: moduleApiName });
-
-  const aliases = new Map();
-  const metadataByApiName = new Map();
-  const resolvedFieldDiagnostics = [];
-  for (const field of fields) {
-    if (field.api_name) metadataByApiName.set(field.api_name, field);
-    for (const value of [field.api_name, field.display_label, field.field_label, field.label]) {
-      if (value) aliases.set(normalizeMetadataLabel(value), field.api_name);
-    }
-  }
-
-  let relationshipPlan = { fields: [], relationships: [] };
-  if (Array.isArray(input.field_labels) && input.field_labels.length > 0) {
-    relationshipPlan = await resolveRequestedFields({
-      module: input.module,
-      fieldLabels: input.field_labels,
-      metadata: fields,
-      getFieldMetadata: (targetModule) => zohoService.getFieldMetadata(targetModule)
-    });
-  }
-  const resolveField = (field, role, label, dateRole) => {
-    if (!field) return field;
-    if (isForbiddenInternalFieldName(field)) {
-      throw createAppError(
-        'FIELD_NOT_AVAILABLE',
-        `CRM field '${field}' is not a valid Zoho API field name for module '${input.module}'.`,
-        400,
-        { module: input.module, module_api_name: moduleApiName, field, reason: 'Internal metadata field name or placeholder was provided.' }
-      );
-    }
-    let apiName = apiNames.has(field) ? field : null;
-    const alias = aliases.get(normalizeMetadataLabel(field));
-    if (!apiName && alias) apiName = alias;
-    const semantic = !apiName ? findMetadataField(fields, aliases, label || field, role) : null;
-    if (!apiName && semantic) apiName = semantic;
-    if (role === 'date' && fields.length > 0 && (field === '__date__' || field === 'date' || dateRole || input.date_field_role)) {
-      apiName = apiName || chooseMetadataDateField(fields, dateRole || input.date_field_role);
-    }
-    if (apiName) {
-      const metadataField = metadataByApiName.get(apiName) || { api_name: apiName, data_type: null };
-      if (!metadataField) {
-        throw createAppError('FIELD_NOT_AVAILABLE', `CRM field '${field}' could not be resolved to a live Zoho API field for module '${input.module}'.`, 400, { module: input.module, module_api_name: moduleApiName, field, field_label: label || null, reason: 'Resolved name was not present in live field metadata.' });
-      }
-      if (!resolvedFieldDiagnostics.some((entry) => entry.api_name === metadataField.api_name)) {
-        resolvedFieldDiagnostics.push({
-          user_term: label || field,
-          field_label: metadataField.display_label || metadataField.field_label || metadataField.label || label || field,
-          api_name: metadataField.api_name,
-          data_type: metadataField.data_type || null,
-          ...metadataCapabilityDetails(metadataField)
-        });
-      }
-      return metadataField.api_name;
-    }
-    throw createAppError(
-      'FIELD_NOT_AVAILABLE',
-      `CRM field '${field}' could not be resolved to a live Zoho API field for module '${input.module}'.`,
-      400,
-      {
-        module: input.module,
-        module_api_name: moduleApiName,
-        field,
-        user_term: label || field,
-        candidate_fields: fields.filter((candidate) => candidate?.api_name).map((candidate) => ({ api_name: candidate.api_name, field_label: candidate.display_label || candidate.field_label || candidate.label || candidate.api_name })).slice(0, 50),
-        reason: 'No match in live Zoho field metadata.'
-      }
-    );
-  };
-
-  const plannerDefaults = input.fields_source === 'planner_default' || !Array.isArray(input.fields) || input.fields.length === 0;
-  const resolvedFields = input.request_type === 'search'
-    ? selectMetadataSearchFields(fields, apiNames)
-    : plannerDefaults
-    ? selectMetadataDefaults(fields, apiNames)
-    : input.field_labels?.length ? relationshipPlan.fields : input.fields.map((field) => resolveField(field));
-  const resolvedFilters = (input.filters || []).map((filter) => ({
-    ...filter,
-    field: resolveField(filter.field, filter.field === 'Created_Time' || filter.field === '__date__' ? 'date' : filter.field_role || semanticRoleForField(filter.field, filter.field_label), filter.field_label, filter.field_role)
-  }));
-  const resolveExpression = (expression) => {
-    if (!expression) return expression;
-    if (expression.field) return {
-      ...expression,
-      field: resolveField(expression.field, expression.field_role || semanticRoleForField(expression.field, expression.field_label), expression.field_label)
-    };
-    return { ...expression, conditions: (expression.conditions || []).map(resolveExpression) };
-  };
-  const resolvedFilterExpression = resolveExpression(input.filter_expression);
-  const rawSort = input.sort || (input.sort_field ? { field: input.sort_field, order: input.sort_order } : undefined);
-  const resolvedSort = Array.isArray(rawSort)
-    ? rawSort.map((sort) => ({ ...sort, field: resolveField(sort.field, sort.field === 'Created_Time' ? 'date' : sort.field_role || semanticRoleForField(sort.field, sort.field_label), sort.field_label, input.date_field_role) }))
-    : rawSort;
-  if (resolvedSort && !Array.isArray(resolvedSort)) resolvedSort.field = resolveField(resolvedSort.field, resolvedSort.field === 'Created_Time' ? 'date' : resolvedSort.field_role || semanticRoleForField(resolvedSort.field, resolvedSort.field_label), resolvedSort.field_label, input.date_field_role);
-  const aggregate = input.aggregate ? { ...input.aggregate, field: resolveField(input.aggregate.field, input.aggregate.operation === 'count' ? undefined : 'numeric') } : input.aggregate;
-  const groupBy = input.group_by ? resolveField(input.group_by, undefined, input.group_by_label) : input.group_by;
-  const havingFilter = input.having_filter ? {
-    ...input.having_filter,
-    field: resolveField(input.having_filter.field, input.having_filter.field_role || semanticRoleForField(input.having_filter.field, input.having_filter.field_label), input.having_filter.field_label)
-  } : input.having_filter;
-  const responseFields = resolvedFields.length > 0 ? resolvedFields : selectMetadataDefaults(fields, apiNames);
-  const diagnosticFields = [...(responseFields.includes('id') ? ['id'] : []), ...responseFields.filter((field) => field !== 'id'), ...resolvedFilters.map((filter) => filter.field), ...(Array.isArray(resolvedSort) ? resolvedSort.map((sort) => sort.field) : [resolvedSort?.field]), aggregate?.field, groupBy, havingFilter?.field].filter(Boolean);
-  const existingDiagnostics = new Map(resolvedFieldDiagnostics.map((entry) => [entry.api_name, entry]));
-  resolvedFieldDiagnostics.length = 0;
-  for (const apiName of [...new Set(diagnosticFields)]) {
-    if (existingDiagnostics.has(apiName)) {
-      resolvedFieldDiagnostics.push(existingDiagnostics.get(apiName));
-      continue;
-    }
-    const metadataField = metadataByApiName.get(apiName) || { api_name: apiName, data_type: null };
-    resolvedFieldDiagnostics.push({
-      user_term: input.field_labels?.[resolvedFieldDiagnostics.length] || apiName,
-      field_label: metadataField.display_label || metadataField.field_label || metadataField.label || apiName,
-      api_name: metadataField.api_name,
-      data_type: metadataField.data_type || null,
-      ...metadataCapabilityDetails(metadataField)
-    });
-  }
-  const usedFields = [
-    ...resolvedFields,
-    ...resolvedFilters.map((filter) => filter.field),
-    ...collectExpressionFields(resolvedFilterExpression),
-    ...(Array.isArray(resolvedSort) ? resolvedSort.map((sort) => sort.field) : [resolvedSort?.field]),
-    aggregate?.field,
-    groupBy,
-    havingFilter?.field
-  ].filter(Boolean);
-  const executionFields = capExecutionFields(buildExecutionFields(responseFields, resolvedFilters, resolvedSort, groupBy, aggregate, havingFilter));
-  const metadataByResolvedName = new Map(fields.filter((field) => field?.api_name).map((field) => [field.api_name, field]));
-  for (const filter of resolvedFilters) {
-    const metadataField = metadataByResolvedName.get(filter.field);
-    if (isUnaryFilterOperator(filter.operator)) {
-      delete filter.value;
-    } else {
-      filter.value = normalizeTypedFilterValue(input, filter, metadataField);
-    }
-    validateFilterTypeCompatibility(input, filter, metadataField);
-    if (metadataField?.filterable === false || metadataField?.searchable === false && ['contains', 'starts_with'].includes(filter.operator)) {
-      throw createAppError('INVALID_QUERY', `CRM field '${filter.field}' cannot be used for this filter.`, 400, { module: input.module, module_api_name: moduleApiName, field: filter.field, operator: filter.operator, reason: 'Field metadata does not permit this filter.' });
-    }
-  }
-  if (resolvedSort) {
-    const sorts = Array.isArray(resolvedSort) ? resolvedSort : [resolvedSort];
-    for (const sort of sorts) {
-      const metadataField = metadataByResolvedName.get(sort.field);
-      if (metadataField?.sortable === false) throw createAppError('INVALID_QUERY', `CRM field '${sort.field}' cannot be sorted.`, 400, { module: input.module, module_api_name: moduleApiName, field: sort.field, reason: 'Field metadata marks the field as non-sortable.' });
-    }
-  }
-  if (groupBy) {
-    const metadataField = metadataByResolvedName.get(groupBy);
-    if (metadataField?.groupable === false) throw createAppError('INVALID_QUERY', `CRM field '${groupBy}' cannot be grouped.`, 400, { module: input.module, module_api_name: moduleApiName, field: groupBy, reason: 'Field metadata marks the field as non-groupable.' });
-  }
-  if (aggregate && aggregate.operation !== 'count') {
-    const metadataField = metadataByResolvedName.get(aggregate.field);
-    if (metadataField?.aggregatable === false) throw createAppError('FIELD_OPERATION_NOT_SUPPORTED', `CRM field '${aggregate.field}' cannot be aggregated.`, 400, { module: input.module, module_api_name: moduleApiName, field: aggregate.field, operation: aggregate.operation });
-  }
-  const missingField = usedFields.find((field) => !apiNames.has(field) && !String(field).includes('.'));
-  if (fields.length > 0 && missingField) {
-    if (!input._metadata_refreshed && typeof zohoService.getFieldMetadata === 'function') {
-      await zohoService.getFieldMetadata(moduleApiName, { forceRefresh: true });
-      return materializeMetadataRequest(zohoService, { ...input, _metadata_refreshed: true });
-    }
-    throw createAppError(
-      'FIELD_NOT_AVAILABLE',
-      `CRM field '${missingField}' is not available on module '${input.module}'.`,
-      400,
-      { module: input.module, module_api_name: moduleApiName, field: missingField }
-    );
-  }
-
-  const resolvedComparison = input.comparison && fields.length > 0 && resolvedFilters.length === 0 && input.date_field_role
-    ? { ...input.comparison, date_field: chooseMetadataDateField(fields, input.date_field_role) }
-    : input.comparison;
-  return { ...input, fields: executionFields, requested_fields: input.field_labels || input.fields || [], execution_fields: executionFields, response_fields: responseFields, filters: resolvedFilters, filter_expression: resolvedFilterExpression, sort: resolvedSort, aggregate, group_by: groupBy, having_filter: havingFilter, comparison: resolvedComparison, relationships: [...(input.relationships || []), ...relationshipPlan.relationships], sort_field: undefined, sort_order: undefined, _resolved_field_diagnostics: resolvedFieldDiagnostics, _available_metadata_fields: [...apiNames] };
-}
-
-function selectMetadataDefaults(metadata, apiNames) {
-  const { selectMetadataDefaultFields } = require('../query/fieldSelection');
-  return selectMetadataDefaultFields(metadata, apiNames);
-}
-
 function projectResponseRecord(record, responseFields) {
   if (!Array.isArray(responseFields) || responseFields.length === 0) return record;
   const fields = responseFields.includes('id') || !Object.prototype.hasOwnProperty.call(record, 'id') ? responseFields : ['id', ...responseFields];
   return Object.fromEntries(fields.filter((field) => Object.prototype.hasOwnProperty.call(record, field)).map((field) => [field, record[field]]));
-}
-
-function metadataCapabilityDetails(field) {
-  const details = {};
-  for (const capability of ['filterable', 'sortable', 'groupable', 'aggregatable']) {
-    if (Object.prototype.hasOwnProperty.call(field || {}, capability)) details[capability] = field[capability] === true;
-  }
-  return details;
-}
-
-function normalizeTypedFilterValue(input, filter, metadataField) {
-  if (!metadataField || !Object.prototype.hasOwnProperty.call(filter, 'value')) return filter.value;
-  const type = String(metadataField.data_type || '').toLowerCase();
-  const numeric = ['currency', 'double', 'decimal', 'integer', 'long', 'number', 'bigint'].includes(type);
-  const boolean = ['boolean', 'checkbox'].includes(type);
-  const normalizeNumber = (value) => {
-    if (typeof value === 'number') return value;
-    const text = String(value).trim().replace(/[,$₹\s]/g, '').toLowerCase();
-    const match = text.match(/^(-?\d+(?:\.\d+)?)([km])?$/);
-    if (!match) throw createAppError('INVALID_FILTER_VALUE', `Value '${value}' is not valid for numeric field '${filter.field}'.`, 400, { module: input.module, field: filter.field, data_type: metadataField.data_type, value });
-    const multiplier = match[2] === 'k' ? 1000 : match[2] === 'm' ? 1000000 : 1;
-    return Number(match[1]) * multiplier;
-  };
-  const normalizeBoolean = (value) => {
-    if (typeof value === 'boolean') return value;
-    if (/^(true|yes)$/i.test(String(value).trim())) return true;
-    if (/^(false|no)$/i.test(String(value).trim())) return false;
-    throw createAppError('INVALID_FILTER_VALUE', `Value '${value}' is not valid for boolean field '${filter.field}'.`, 400, { module: input.module, field: filter.field, data_type: metadataField.data_type, value });
-  };
-  const normalize = (value) => numeric ? normalizeNumber(value) : boolean ? normalizeBoolean(value) : value;
-  return Array.isArray(filter.value) ? filter.value.map(normalize) : normalize(filter.value);
-}
-
-function isUnaryFilterOperator(operator) {
-  return ['is_null', 'is_not_null', 'is_empty', 'is_not_empty'].includes(operator);
-}
-
-function validateFilterTypeCompatibility(input, filter, metadataField) {
-  if (!metadataField?.data_type) return;
-  const type = String(metadataField.data_type).toLowerCase();
-  const numeric = ['currency', 'double', 'decimal', 'integer', 'long', 'number', 'bigint'].includes(type);
-  const date = ['date', 'datetime'].includes(type);
-  const text = ['text', 'string', 'email', 'phone', 'picklist', 'multiselectpicklist'].includes(type);
-  const numericOperators = ['greater_than', 'less_than', 'greater_equal', 'less_equal'];
-  const stringOperators = ['contains', 'starts_with'];
-  const invalid = numericOperators.includes(filter.operator) && !numeric
-    || filter.operator === 'between' && !numeric && !date
-    || stringOperators.includes(filter.operator) && !text;
-  if (invalid) {
-    throw createAppError('FIELD_OPERATION_NOT_SUPPORTED', `CRM field '${filter.field}' does not support operator '${filter.operator}'.`, 400, {
-      module: input.module,
-      module_api_name: input.module_api_name,
-      field: filter.field,
-      data_type: metadataField.data_type,
-      operator: filter.operator
-    });
-  }
-}
-
-function collectExpressionFields(expression) {
-  if (!expression) return [];
-  if (expression.field) return [expression.field];
-  return (expression.conditions || []).flatMap(collectExpressionFields);
-}
-
-function selectMetadataSearchFields(metadata, apiNames) {
-  const searchable = metadata
-    .filter((field) => field && field.api_name && field.visible !== false && field.searchable !== false)
-    .filter((field) => ['text', 'string', 'email', 'phone', 'picklist'].includes(String(field.data_type || '').toLowerCase()))
-    .map((field) => field.api_name);
-  return [...new Set(['id', ...searchable])].slice(0, 50).length > 1
-    ? [...new Set(['id', ...searchable])].slice(0, 50)
-    : [...new Set(['id', ...apiNames])].slice(0, 20);
-}
-
-function findMetadataField(metadata, aliases, requested, role) {
-  const normalized = normalizeMetadataLabel(requested);
-  if (!normalized) return null;
-  const exact = aliases.get(normalized);
-  if (exact) return exact;
-  const candidates = metadata.filter((field) => field?.api_name && field.visible !== false && field.virtual_field !== true);
-  const scored = candidates.map((field) => {
-    const text = normalizeMetadataLabel([field.api_name, field.display_label, field.field_label, field.label].filter(Boolean).join(' '));
-    const type = String(field.data_type || '').toLowerCase();
-    let score = 0;
-    if (text.includes(normalized) || normalized.includes(text)) score += 20;
-    if (role === 'owner' && (text.includes('owner') || field.data_type === 'lookup' && text.includes('user'))) score += 100;
-    if (role === 'numeric' && ['currency', 'double', 'decimal', 'integer', 'long', 'number'].includes(type)) score += 60;
-    if (role === 'stage' && (text.includes('stage') || text.includes('status')) && (type === 'picklist' || type === 'text')) score += 90;
-    if (role === 'source' && text.includes('source')) score += 90;
-    if (role === 'modified' && /(modified|updated)/.test(text) && ['date', 'datetime'].includes(type)) score += 100;
-    return { apiName: field.api_name, score };
-  }).sort((left, right) => right.score - left.score);
-  return scored[0]?.score > 0 ? scored[0].apiName : null;
-}
-
-function chooseMetadataDateField(metadata, role) {
-  const fields = metadata.filter((field) => field && field.api_name && ['date', 'datetime'].includes(String(field.data_type || '').toLowerCase()));
-  const normalizedRole = String(role || 'created').toLowerCase();
-  const ranked = fields.map((field) => {
-    const label = normalizeMetadataLabel([field.api_name, field.display_label, field.field_label, field.label].filter(Boolean).join(' '));
-    let score = 0;
-    if (normalizedRole === 'due' && /(due|deadline)/.test(label)) score += 100;
-    if (normalizedRole === 'activity' && /(start|scheduled|call|meeting|event)/.test(label)) score += 100;
-    if (normalizedRole === 'created' && /(created|creation)/.test(label)) score += 100;
-    if (normalizedRole === 'closing' && /(closing|close|due|valid)/.test(label)) score += 100;
-    if (normalizedRole === 'modified' && /(modified|updated)/.test(label)) score += 100;
-    if (field.api_name === 'Created_Time') score += normalizedRole === 'created' ? 50 : 0;
-    return { apiName: field.api_name, score };
-  }).sort((left, right) => right.score - left.score);
-  return ranked[0]?.apiName || null;
-}
-
-function normalizeMetadataLabel(value) {
-  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-function semanticRoleForField(field, label) {
-  const value = normalizeMetadataLabel(label || field);
-  if (/(owner|assignee|assigneduser)/.test(value)) return 'owner';
-  if (/(amount|value|revenue|price|cost|quantity|total)/.test(value)) return 'numeric';
-  if (/(stage|status)/.test(value)) return 'stage';
-  if (/source/.test(value)) return 'source';
-  if (/(modified|updated)/.test(value)) return 'modified';
-  return undefined;
-}
-
-function isForbiddenInternalFieldName(value) {
-  if (value == null) return false;
-  const normalized = String(value).trim();
-  if (!normalized) return false;
-  const forbidden = new Set(['semantic', '__semantic__', 'label', 'display_name', 'display_label', 'field_label', 'description', 'field_description', 'type', 'metadata']);
-  return forbidden.has(normalized.toLowerCase()) || /^semantic$/i.test(normalized) || /^__semantic__$/i.test(normalized);
 }
 
 function rejectForbiddenInternalFieldNames(input) {
@@ -1485,7 +1181,7 @@ function rejectForbiddenInternalFieldNames(input) {
   if (input.sort_field) candidates.push(input.sort_field);
   if (input.comparison?.field) candidates.push(input.comparison.field);
   if (input.comparison?.date_field) candidates.push(input.comparison.date_field);
-  const forbidden = [...new Set(candidates.filter((value) => isForbiddenInternalFieldName(value)))];
+  const forbidden = [...new Set(candidates.filter((value) => isForbiddenMetadataFieldName(value)))];
   if (forbidden.length > 0) {
     throw createAppError(
       'FIELD_NOT_AVAILABLE',
