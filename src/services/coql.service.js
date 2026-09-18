@@ -70,7 +70,7 @@ function formatDateComparisonValue(field, value, endOfDay = false, exclusiveEnd 
     const end = new Date(`${normalized}T00:00:00Z`);
     end.setUTCDate(end.getUTCDate() + 1);
     const nextDay = end.toISOString().slice(0, 10);
-    return `'${nextDay}T00:00:00+05:30'`;
+    return `'${nextDay}T00:00:00${timeZoneOffset(nextDay)}'`;
   }
   return `'${formatSearchDate(field, normalized)}'`;
 }

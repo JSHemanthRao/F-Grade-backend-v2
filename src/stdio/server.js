@@ -25,7 +25,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       properties: {
         question: {
           type: 'string',
-          description: 'The natural-language CRM or Zoho Books read-only question to send to the backend.',
+          description: 'The natural-language Zoho CRM read-only question to send to the backend.',
           minLength: 1,
           maxLength: 2000
         }

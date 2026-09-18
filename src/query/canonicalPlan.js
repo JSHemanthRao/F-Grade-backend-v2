@@ -30,7 +30,10 @@ function createCanonicalPlan(input = {}) {
     intent: requestType,
     request_type: requestType,
     fields,
-    field_labels: fieldLabels,
+    // Field labels are semantic input, not an empty transport field. Keeping
+    // the property absent when no labels were parsed prevents stale connector
+    // metadata from being mistaken for an explicit field-resolution request.
+    ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
     filters,
     filter_expression: request.filter_expression,
     sort,
