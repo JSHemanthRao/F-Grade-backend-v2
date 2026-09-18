@@ -1,5 +1,5 @@
 const { createAppError } = require('../utils/errors');
-const { createQueryIdentity } = require('../query/pagination');
+const { createQueryIdentity, isPaginationAffirmation, isPaginationDecline } = require('../query/pagination');
 const { PaginationManager } = require('../pagination/paginationManager');
 const { updateDiagnostics } = require('../utils/crmDiagnostics');
 
@@ -35,11 +35,12 @@ class CrmAssistantService {
   async execute({ question, conversationId, diagnostics }) {
     updateDiagnostics(diagnostics, { question, conversation_id_present: Boolean(conversationId), conversation_id: conversationId });
     const previous = this.paginationManager.get(conversationId);
-    const continuationDetected = this.paginationManager.isContinuation(question);
+    const continuationDetected = this.paginationManager.isContinuation(question) || Boolean(previous && isPaginationAffirmation(question));
+    if (previous && isPaginationDecline(question)) return paginationTerminalResponse(previous, conversationId, question, 'Pagination stopped.');
     const detailsFollowUp = !continuationDetected && isDetailsFollowUp(question, previous);
     if (continuationDetected && !conversationId) throw createAppError('PAGINATION_CONVERSATION_REQUIRED', 'A stable conversation_id is required to continue pagination.', 409);
     if (continuationDetected && !previous) throw createAppError('PAGINATION_STATE_NOT_FOUND', 'No previous CRM page is available for this conversation.', 409);
-    if (continuationDetected && previous.more_records === false) throw createAppError('PAGINATION_EXHAUSTED', 'No more CRM records are available for this conversation.', 409);
+    if (continuationDetected && previous.more_records === false) return paginationTerminalResponse(previous, conversationId, question, 'No more CRM records are available.');
 
     const resolvedQuestion = this.resolveFollowUpQuestion(question, previous);
     const plannedRequest = continuationDetected
@@ -104,6 +105,28 @@ class CrmAssistantService {
       pagination: state?.pagination || null
     };
   }
+}
+
+function paginationTerminalResponse(previous, conversationId, question, answer) {
+  const pagination = { ...(previous.pagination || {}), more_records: false, returned: 0 };
+  return {
+    result: {
+      module: previous.canonical_plan?.module || null,
+      module_api_name: previous.canonical_plan?.module_api_name || null,
+      request_type: previous.canonical_plan?.request_type || 'records',
+      fields: previous.canonical_plan?.response_fields || previous.canonical_plan?.fields || [],
+      filters: previous.canonical_plan?.filters || [],
+      data: [],
+      records: [],
+      count: 0,
+      more_records: false,
+      pagination
+    },
+    answer,
+    conversation_id: conversationId,
+    question,
+    pagination
+  };
 }
 
 function isDetailsFollowUp(question, previous) {

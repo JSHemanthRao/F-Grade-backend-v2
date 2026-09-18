@@ -2,7 +2,15 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 200;
 
 function isPaginationContinuation(text) {
-  return /^(?:(?:proceed|continue)|next(?:\s+(?:\d+\s+)?(?:page|records?|batch(?:es)?|set)|\s+\d+)?|(?:show|give)\s+me\s+(?:the\s+)?(?:next(?:\s+(?:\d+\s+)?(?:page|records?|batch(?:es)?|set)|\s+\d+)?|more(?:\s+(?:records?|results?))?)|more(?:\s+(?:records?|results?))?)\b/i.test(String(text || '').trim());
+  return /^(?:(?:yes|yeah|yep|please)[,!\s]+)?(?:(?:proceed|continue)|(?:fetch\s+)?next(?:\s+(?:\d+\s+)?(?:page|records?|batch(?:es)?|set)|\s+\d+)?|(?:show|give|fetch)\s+me\s+(?:the\s+)?(?:next(?:\s+(?:\d+\s+)?(?:page|records?|batch(?:es)?|set)|\s+\d+)?|more(?:\s+(?:records?|results?))?)|more(?:\s+(?:records?|results?))?)\b/i.test(String(text || '').trim());
+}
+
+function isPaginationAffirmation(text) {
+  return /^(?:yes|yeah|yep|yes please|please do)[!.\s]*$/i.test(String(text || '').trim());
+}
+
+function isPaginationDecline(text) {
+  return /^(?:no|nope|no thanks|not now)[!.\s]*$/i.test(String(text || '').trim());
 }
 
 function isExplicitPageRequest(text) {
@@ -101,5 +109,7 @@ module.exports = {
   extractPageNumber,
   extractPageSize,
   isExplicitPageRequest,
-  isPaginationContinuation
+  isPaginationContinuation,
+  isPaginationAffirmation,
+  isPaginationDecline
 };

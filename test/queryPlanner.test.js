@@ -424,7 +424,8 @@ test('preserves detailed top-N relationship record plans through pagination', as
       };
     }
   });
-  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  let body;
+  const response = () => ({ status: () => ({ json: (value) => { body = value; return value; } }), json: (value) => { body = value; return value; } });
   const question = 'Show me the top 20 deals created this month with Amount greater than ₹50,000, including Deal Name, Amount, Stage, Account Name, Account Industry, Contact Name, and Owner Name, sorted from highest to lowest Amount.';
 
   await controller.assistant({ body: { conversation_id: 'top-n-relationship-pagination', question } }, response(), (error) => { throw error; });
@@ -601,7 +602,7 @@ test('requires stable conversation state for pagination continuations', async ()
   assert.equal(calls.length, 0);
 });
 
-test('does not repeat a page when the previous page is exhausted', async () => {
+test('returns an empty page rather than repeating records when pagination is exhausted', async () => {
   const calls = [];
   const controller = createCrmController({
     query: async (input) => {
@@ -609,11 +610,12 @@ test('does not repeat a page when the previous page is exhausted', async () => {
       return { module: input.module, data: [{ id: 'only-record' }], pagination: { limit: input.limit, offset: input.offset, returned: 1, more_records: false } };
     }
   });
-  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  let body;
+  const response = () => ({ status: () => ({ json: (value) => { body = value; return value; } }), json: (value) => { body = value; return value; } });
   await controller.assistant({ body: { conversation_id: 'pagination-exhausted', question: 'show me deals' } }, response(), (error) => { throw error; });
-  let error;
-  await controller.assistant({ body: { conversation_id: 'pagination-exhausted', question: 'next 20' } }, response(), (received) => { error = received; });
-  assert.equal(error.code, 'PAGINATION_EXHAUSTED');
+  await controller.assistant({ body: { conversation_id: 'pagination-exhausted', question: 'next 20' } }, response(), (received) => { throw received; });
+  assert.equal(body.data.length, 0);
+  assert.equal(body.more_records, false);
   assert.equal(calls.length, 1);
 });
 
@@ -631,10 +633,56 @@ test('recognizes show me the next page as a continuation', async () => {
   assert.equal(calls[1].offset, 20);
 });
 
+test('treats affirmative fetch-next language as a pagination continuation', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const offset = input.offset || 0;
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        data: Array.from({ length: 20 }, (_, index) => ({ id: String(offset + index + 1) })),
+        pagination: { limit: input.limit, offset, returned: 20, more_records: true }
+      };
+    }
+  });
+  let body;
+  const response = () => ({ status: () => ({ json: (value) => { body = value; return value; } }), json: (value) => { body = value; return value; } });
+
+  await controller.assistant({ body: { conversation_id: 'pagination-affirmative-fetch', question: 'give me deals' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-affirmative-fetch', question: 'yes fetch next 20' } }, response(), (error) => { throw error; });
+
+  assert.deepEqual(calls.map((call) => call.offset), [0, 20]);
+  assert.equal(calls[1].limit, 20);
+});
+
+test('uses a plain affirmative to continue and a plain negative to stop pagination for any module', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const offset = input.offset || 0;
+      return { module: input.module, request_type: input.request_type, data: Array.from({ length: 10 }, (_, index) => ({ id: String(offset + index + 1) })), pagination: { limit: input.limit, offset, returned: 10, more_records: true } };
+    }
+  });
+  let body;
+  const response = () => ({ status: () => ({ json: (value) => { body = value; return value; } }), json: (value) => { body = value; return value; } });
+
+  await controller.assistant({ body: { conversation_id: 'pagination-yes-no', question: 'show me 10 contacts' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-yes-no', question: 'Yes' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-yes-no', question: 'No' } }, response(), (error) => { throw error; });
+
+  assert.deepEqual(calls.map((call) => [call.module, call.offset, call.limit]), [['Contacts', 0, 10], ['Contacts', 10, 10]]);
+  assert.equal(body.data.length, 0);
+  assert.equal(body.more_records, false);
+});
+
 test('resets pagination when the query shape changes', async () => {
   const calls = [];
   const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, request_type: input.request_type, returned: 20, more_records: true, data: Array.from({ length: 20 }, (_, index) => ({ id: String((input.offset || 0) + index + 1) })) }; } });
-  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  let body;
+  const response = () => ({ status: () => ({ json: (value) => { body = value; return value; } }), json: (value) => { body = value; return value; } });
   await controller.assistant({ body: { conversation_id: 'pagination-reset', question: 'Show me deals above 50000' } }, response(), (error) => { throw error; });
   await controller.assistant({ body: { conversation_id: 'pagination-reset', question: 'Show me leads' } }, response(), (error) => { throw error; });
   await controller.assistant({ body: { conversation_id: 'pagination-reset', question: 'next 20' } }, response(), (error) => { throw error; });

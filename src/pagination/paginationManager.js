@@ -21,7 +21,7 @@ class PaginationManager {
   }
 
   planContinuation(question, previous) {
-    if (!previous?.canonical_plan || !this.isContinuation(question)) return null;
+    if (!previous?.canonical_plan) return null;
     const pagination = advancePagination(previous, question, previous.canonical_plan);
     return {
       ...previous.canonical_plan,
