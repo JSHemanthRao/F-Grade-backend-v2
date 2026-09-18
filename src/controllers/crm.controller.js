@@ -161,6 +161,11 @@ function stringifySummary(obj) {
 function resolveFollowUpQuestion(question, previous) {
   const text = String(question || '').trim();
   if (!previous || hasExplicitModuleIntent(text) || extractExplicitModule(text.toLowerCase()) || isClarification(text)) return text;
+  if (/\bsort\s+(?:them|it|the results?)\s+(?:by|from)\s+(?:the\s+)?(?:most\s+recently\s+added|newest)/i.test(text)) {
+    return `${previous.question} sorted by created newest`;
+  }
+  const includeMatch = text.match(/\binclude\s+(?:the\s+)?(.+?)[?.!]?$/i);
+  if (includeMatch) return `${previous.question} including ${includeMatch[1]}`;
   if (!isFollowUpQuestion(text)) return text;
   if (/(this year|current year|last year|previous year|next year|this quarter|last quarter|next quarter|this month|current month|last month|previous month|next month|this week|last week|next week|today|yesterday|tomorrow|\b20\d{2}\b|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(text)) {
     const withoutPreviousPeriod = previous.question.replace(/\b(?:today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)\b/gi, '').replace(/\s+/g, ' ').trim();
@@ -476,7 +481,7 @@ function planQuestion(question) {
 
 
   const ownerName = extractOwnerName(text);
-  if (ownerName) filters.push({ field: 'Owner', operator: 'equals', value: ownerName });
+  if (ownerName) filters.push({ field: 'Owner', field_label: 'owner', operator: 'equals', value: ownerName, value_type: 'lookup' });
 
   const fieldComparison = extractFieldComparison(lower, module);
   if (fieldComparison && !filters.some((filter) => filter.field === fieldComparison.field)) filters.push(fieldComparison);
@@ -495,6 +500,10 @@ function planQuestion(question) {
     && !/not\s+closed\s+lost|is\s+not\s+closed\s+lost|!=\s*closed\s+lost|not_equals/.test(lower)
     && !filters.some((filter) => filter.field === 'Stage' && (filter.operator === 'not_equals' || filter.operator === 'not_in' || String(filter.value || '').toLowerCase() === 'closed lost')) ) {
     filters.push({ field: 'Stage', operator: 'equals', value: 'Closed Lost' });
+  }
+
+  if (/\bclosed\s+(?:deals?|records?)\b/.test(lower) && !/(closed won|closed-won|closed lost|closed-lost)/.test(lower)) {
+    filters.push({ field: '__field__', field_label: 'stage', operator: 'in', value: '__closed__', semantic_value: 'closed' });
   }
 
   if (/(not converted|unconverted|have not been converted)/.test(lower)) {
@@ -521,7 +530,7 @@ function planQuestion(question) {
     };
   }
 
-  if (module === 'Deals' && /(top|highest|best|rank).*(owner|owners|person|persons).*(total deal value|total deal amount|deal value|revenue|amount)/.test(lower)) {
+  if (module === 'Deals' && isOwnerPerformanceRanking(lower)) {
     return {
       module,
       complexity: 'MULTI-STEP',
@@ -1058,7 +1067,7 @@ function defaultSortField(module) {
 function extractOwnerName(text) {
   const hasGroupingOrOrderingClause = /\b(?:group(?:ed)?|sort(?:ed)?|order(?:ed)?)\s+by\b/i.test(text);
   const patterns = [
-    /(?:owned by|owner is|assigned to|belongs to)\s+([A-Za-z][A-Za-z .'-]*?)(?=\s+(?:above|below|greater than|less than|more than|for|\.|$))/i,
+    /(?:owned by|owner is|assigned to|belongs to|assigned user|responsible person)\s+([A-Za-z][A-Za-z .'-]*?)(?=\s*(?:above|below|greater than|less than|more than|for|created|sorted|[?.!]|$))/i,
     /(?:by)\s+([A-Za-z][A-Za-z .'-]*?)(?=\s+(?:above|below|greater than|less than|more than|for|\.|$))/i
   ];
 
@@ -1160,12 +1169,14 @@ function extractExcludedPicklistFilter(lowerText) {
 }
 
 function extractFieldLabels(lowerText) {
-  const match = lowerText.match(/\bwith\s+(.+?)(?=\s+(?:fields?|where|for|created|sorted|ordered|limit|top)\b|[?.!]|$)/i);
+  const match = lowerText.match(/\b(?:including|include)\s+(.+?)(?=\s+(?:fields?|where|for|created|sorted|ordered|limit|top)\b|[?.!]|$)/i)
+    || lowerText.match(/\bwith\s+(.+?)(?=\s+(?:fields?|where|for|created|sorted|ordered|limit|top)\b|[?.!]|$)/i);
   if (!match) return [];
   return match[1].split(/\s*(?:,|\band\b)\s*/i).map((value) => value.trim().replace(/^the\s+/i, '')).filter(Boolean);
 }
 
 function extractSearchTerm(text) {
+  if (/\b(?:assigned to|owned by|owner is|belongs to|assigned user|responsible person)\b/i.test(text)) return null;
   const match = text.match(/\b(?:named|called|matching)\s+["']?([^"']+?)["']?(?:\s+in\s+(?:leads?|contacts?|accounts?|deals?))?\s*$/i)
     || text.match(/\b(?:search(?:\s+for)?|find)\s+(?:(?:a|an|the)\s+)?(?:(?:lead|contact|account|deal|customer|product|item)s?\s+)?(?:(?:named|called|matching|containing|with|for)\s+)?["']?([^"']+?)["']?\s*$/i);
   if (!match) return null;
@@ -1409,10 +1420,20 @@ function detectAggregateOperation(lowerText) {
   return null;
 }
 
+function isOwnerPerformanceRanking(lowerText) {
+  const ranksOwners = /\b(?:top|highest|best|rank(?:ed|ing)?)\s+(?:\d+\s+)?owners?\b|\bowners?\s+(?:ranked\s+)?by\b/.test(lowerText);
+  const aggregateMetric = /\b(?:total|sum|combined)\s+(?:deal\s+)?(?:value|amount|revenue)\b|\b(?:deal\s+)?(?:value|amount|revenue)\s+(?:total|sum)\b/.test(lowerText);
+  return ranksOwners && aggregateMetric;
+}
+
 function extractGroupBy(lowerText) {
   const match = lowerText.match(/\bgroup(?:ed)?\s+by\s+([a-z][a-z0-9 _-]*?)(?=\s+(?:for|where|this|last|next|today|created)\b|[?.!,]|$)/i);
-  if (!match) return null;
-  const label = match[1].trim();
+  const aggregateByMatch = !match && /\b(?:total|sum|combined|average|avg|minimum|min|maximum|max|count)\b/.test(lowerText)
+    ? lowerText.match(/\bby\s+(stage|owner|lead source)\b/i)
+    : null;
+  const groupingMatch = match || aggregateByMatch;
+  if (!groupingMatch) return null;
+  const label = groupingMatch[1].trim();
   return { field: 'Stage', label };
 }
 

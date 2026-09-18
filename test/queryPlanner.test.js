@@ -173,6 +173,46 @@ test('builds valid unary and date-range COQL', () => {
   assert.equal(buildCoqlQuery({ module: 'Leads', fields: ['id'], filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-09-01', '2026-10-01'], exclusive_end: true, value_type: 'datetime' }] }), "select id from Leads where (Created_Time >= '2026-09-01T00:00:00+05:30' and Created_Time < '2026-10-01T00:00:00+05:30')");
 });
 
+test('keeps top-N record retrieval separate from aggregate intent', () => {
+  const cases = [
+    'show me the top 20 deals by amount',
+    'show me the top 20 deals created this month',
+    'show me the top 20 deals above 50000',
+    'show me the top 20 deals with account name',
+    'show me the top 20 deals with account industry sorted highest to lowest'
+  ];
+
+  for (const question of cases) {
+    const request = planQuestion(question);
+    assert.equal(request.request_type, 'records', question);
+    assert.equal(request.aggregate, undefined, question);
+    assert.equal(request.limit, 20, question);
+    assert.equal(request.offset, 0, question);
+  }
+
+  assert.deepEqual(planQuestion('what is the total deal amount?').aggregate, { operation: 'sum', field: 'amount' });
+  assert.equal(planQuestion('how many deals are there?').request_type, 'count');
+  const grouped = planQuestion('show me total deal amount by stage');
+  assert.equal(grouped.request_type, 'aggregate');
+  assert.equal(grouped.group_by, 'Stage');
+});
+
+test('plans detailed top-N deal retrieval as relationship records rather than aggregate analysis', () => {
+  const request = planQuestion('Show me the top 20 deals created this month with Amount greater than ₹50,000, including Deal Name, Amount, Stage, Account Name, Account Industry, Contact Name, and Owner Name, sorted from highest to lowest Amount.');
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.request_type, 'records');
+  assert.equal(request.aggregate, undefined);
+  assert.equal(request.limit, 20);
+  assert.equal(request.offset, 0);
+  assert.deepEqual(request.filters.map((filter) => [filter.field, filter.operator, filter.value]), [
+    ['Created_Time', 'between', request.filters[0].value],
+    ['amount', 'greater_than', 50000]
+  ]);
+  assert.deepEqual(request.field_labels, ['deal name', 'amount', 'stage', 'account name', 'account industry', 'contact name', 'owner name']);
+  assert.equal(request.sort_field, 'amount');
+  assert.equal(request.sort_order, 'desc');
+});
+
 test('plans today deals with a negated Stage filter and created-date filter', () => {
   const request = planQuestion("show me today's deals where the stage is not Closed Lost, sorted by amount from highest to lowest");
   assert.equal(request.module, 'Deals');
@@ -364,6 +404,38 @@ test('preserves non-Deals filters and sorts through generic pagination', async (
   assert.equal(calls[1].limit, 50);
   assert.deepEqual(calls[1].filters, calls[0].filters);
   assert.deepEqual(calls[1].sort, calls[0].sort);
+});
+
+test('preserves detailed top-N relationship record plans through pagination', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const offset = input.offset || 0;
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        fields: ['Deal_Name', 'Amount', 'Stage', 'Account_Name.Account_Name', 'Account_Name.Industry', 'Contact_Name', 'Owner'],
+        filters: input.filters,
+        relationships: [{ path_segments: [{ field: 'Account_Name', target_module: 'Accounts' }], target_field: 'Industry' }],
+        sort: input.sort,
+        data: Array.from({ length: 20 }, (_, index) => ({ id: String(offset + index + 1) })),
+        pagination: { limit: input.limit, offset, returned: 20, more_records: true }
+      };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  const question = 'Show me the top 20 deals created this month with Amount greater than ₹50,000, including Deal Name, Amount, Stage, Account Name, Account Industry, Contact Name, and Owner Name, sorted from highest to lowest Amount.';
+
+  await controller.assistant({ body: { conversation_id: 'top-n-relationship-pagination', question } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'top-n-relationship-pagination', question: 'Give me the next 20.' } }, response(), (error) => { throw error; });
+
+  assert.equal(calls[0].request_type, 'records');
+  assert.equal(calls[1].request_type, 'records');
+  assert.deepEqual(calls.map((call) => call.offset), [0, 20]);
+  assert.deepEqual(calls[1].filters, calls[0].filters);
+  assert.deepEqual(calls[1].sort, calls[0].sort);
+  assert.deepEqual(calls[1].relationships, [{ path_segments: [{ field: 'Account_Name', target_module: 'Accounts' }], target_field: 'Industry' }]);
 });
 
 test('keeps pagination state isolated across conversations and modules', async () => {

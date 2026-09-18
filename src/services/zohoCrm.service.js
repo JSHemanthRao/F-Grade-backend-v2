@@ -596,17 +596,35 @@ function parseCsvLine(line) {
     return apiNames;
   }
 
-  async resolveOwnerFilters(filters) {
-    const ownerFields = new Set(['Owner', 'Deal_Owner', 'Lead_Owner']);
+  async resolveLookupFilters(filters) {
     const resolved = [];
     for (const filter of filters) {
-      if (!ownerFields.has(filter.field) || !['equals', 'in'].includes(filter.operator)) { resolved.push(filter); continue; }
-      const users = await this.getUsers();
+      if (filter.value_type !== 'lookup' || !['equals', 'in'].includes(filter.operator)) { resolved.push(filter); continue; }
       const values = filter.operator === 'in' ? filter.value : [filter.value];
-      const ids = values.map((value) => this.resolveUserId(users, value));
+      const ids = await Promise.all(values.map((value) => this.resolveLookupValue(filter.lookup_target_module, value)));
       resolved.push({ ...filter, value: filter.operator === 'in' ? ids : ids[0] });
     }
     return resolved;
+  }
+
+  async resolveLookupValue(targetModule, value) {
+    const target = String(targetModule || '').toLowerCase();
+    if (target === 'users') return this.resolveUserId(await this.getUsers(), value);
+    if (/^\d+$/.test(String(value).trim())) return String(value);
+    if (!targetModule) throw createAppError('LOOKUP_TARGET_UNSUPPORTED', 'Lookup metadata did not identify a target module.', 400);
+    const metadata = await this.getFieldMetadata(targetModule);
+    const nameField = (metadata.metadata || []).find((field) => field.name_field === true)
+      || (metadata.metadata || []).find((field) => /(^|_)(name|title)$/i.test(field.api_name || ''));
+    if (!nameField?.api_name) throw createAppError('LOOKUP_TARGET_UNSUPPORTED', `Lookup target '${targetModule}' has no metadata-defined name field.`, 400, { target_module: targetModule });
+    const result = await this.searchRecords(targetModule, ['id', nameField.api_name], [{ field: nameField.api_name, operator: 'equals', value }]);
+    if (result.records.length === 0) throw createAppError('LOOKUP_VALUE_NOT_FOUND', `No '${targetModule}' record matches '${value}'.`, 400, { target_module: targetModule, value });
+    if (result.records.length > 1) throw createAppError('LOOKUP_VALUE_AMBIGUOUS', `Lookup value '${value}' matches multiple '${targetModule}' records.`, 400, { target_module: targetModule, value });
+    return String(result.records[0].id);
+  }
+
+  async resolveOwnerFilters(filters) {
+    const resolved = await this.resolveLookupFilters((filters || []).map((filter) => ({ ...filter, value_type: filter.value_type || 'lookup', lookup_target_module: filter.lookup_target_module || 'users' })));
+    return resolved.map(({ value_type: _valueType, lookup_target_module: _targetModule, ...filter }) => filter);
   }
 
   resolveUserId(users, value) {

@@ -5,7 +5,7 @@ const DEFAULT_TIMEZONE = env.crmTimezone;
 const PERIOD_ALIASES = Object.freeze({
   today: 'today', yesterday: 'yesterday', tomorrow: 'tomorrow',
   'this week': 'this week', 'last week': 'last week', 'next week': 'next week',
-  'this month': 'this month', 'last month': 'last month', 'next month': 'next month',
+  'this month': 'this month', 'last month': 'last month', 'next month': 'next month', 'past month': 'past month',
   'this quarter': 'this quarter', 'last quarter': 'last quarter', 'next quarter': 'next quarter',
   'this year': 'this year', 'last year': 'last year', 'next year': 'next year'
 });
@@ -45,6 +45,9 @@ function resolveRelativePeriod(period, now = new Date(), timeZone = DEFAULT_TIME
     const offset = normalized.startsWith('last') ? -7 : normalized.startsWith('next') ? 7 : 0;
     start = addDays(today, 1 - dayOfWeek + offset);
     end = addDays(start, 7);
+  } else if (normalized === 'past month') {
+    start = addDays(today, -31);
+    end = today;
   } else if (normalized.endsWith('month')) {
     const offset = normalized.startsWith('last') ? -1 : normalized.startsWith('next') ? 1 : 0;
     start = new Date(Date.UTC(parts.year, parts.month - 1 + offset, 1));

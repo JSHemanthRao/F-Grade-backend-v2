@@ -158,7 +158,9 @@ class CrmService {
       stage: 'filters_resolved'
     });
     recordCrmEvent('FILTERS_RESOLVED', diagnostics, { module: request.module, module_api_name: request.module_api_name, retrieval_strategy: retrievalStrategy, filters: request.filters });
-    if (typeof this.zohoService.resolveOwnerFilters === 'function') {
+    if (typeof this.zohoService.resolveLookupFilters === 'function') {
+      request.filters = await this.zohoService.resolveLookupFilters(request.filters);
+    } else if (typeof this.zohoService.resolveOwnerFilters === 'function') {
       request.filters = await this.zohoService.resolveOwnerFilters(request.filters);
     }
     log('info', `[CRM normalized request] ${JSON.stringify({ module: request.module, module_api_name: request.module_api_name, request_type: request.request_type, query_type: request.request_type, field_count: request.fields.length, filter_count: request.filters.length, date_range: request.date_range || null })}`);

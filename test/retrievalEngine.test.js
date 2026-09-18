@@ -66,6 +66,7 @@ test('selects retrieval strategy only from the materialized canonical plan', () 
   const cases = [
     [{ request_type: 'records', fields: ['Deal_Name'] }, RETRIEVAL_STRATEGIES.DIRECT_COQL],
     [{ request_type: 'records', fields: ['Account_Name.Industry'] }, RETRIEVAL_STRATEGIES.RELATIONSHIP_COQL],
+    [{ request_type: 'records', fields: ['Account_Name.Industry'], limit: 20, offset: 0 }, RETRIEVAL_STRATEGIES.RELATIONSHIP_COQL],
     [{ request_type: 'records', fields: ['Deal_Name'], offset: 20 }, RETRIEVAL_STRATEGIES.PAGINATED_COQL],
     [{ request_type: 'count' }, RETRIEVAL_STRATEGIES.COUNT_API],
     [{ request_type: 'aggregate', aggregate: { operation: 'sum', field: 'Amount' } }, RETRIEVAL_STRATEGIES.AGGREGATE_COQL],

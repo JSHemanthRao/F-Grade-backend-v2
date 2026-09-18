@@ -138,6 +138,53 @@ test('ordinary created-date record requests stay as records while explicit count
   assert.equal(planQuestion('how many deals were created today?').request_type, 'count');
 });
 
+test('materializes assignment language as a metadata-typed user lookup across modules', async () => {
+  const captured = [];
+  const service = new CrmService({
+    executionStats: {},
+    resolveModuleApiName: async (module) => module,
+    getFieldMetadata: async (module) => ({
+      fields: ['id', 'Owner', 'Created_Time'],
+      metadata: [
+        { api_name: 'id', data_type: 'text' },
+        { api_name: 'Owner', display_label: 'Owner', data_type: 'ownerlookup' },
+        { api_name: 'Created_Time', display_label: 'Created Time', data_type: 'datetime' }
+      ]
+    }),
+    resolveLookupFilters: async (filters) => filters.map((filter) => ({ ...filter, value: filter.value === 'John Smith' ? 'user-123' : filter.value })),
+    query: async (request) => {
+      captured.push(request);
+      return { records: [], info: { more_records: false }, module_api_name: request.module_api_name };
+    }
+  });
+
+  for (const question of ['Find all contacts assigned to John Smith.', 'Find all deals assigned to John Smith.', 'Find all tasks assigned to John Smith.']) {
+    const plan = planQuestion(question);
+    assert.equal(plan.request_type, 'records');
+    assert.equal(plan.filters[0].field, 'Owner');
+    assert.equal(plan.filters[0].value, 'John Smith');
+    await service.query(plan);
+  }
+
+  for (const request of captured) {
+    assert.equal(request.filters[0].field, 'Owner');
+    assert.equal(request.filters[0].value_type, 'lookup');
+    assert.equal(request.filters[0].lookup_target_module, 'users');
+    assert.equal(request.filters[0].value, 'user-123');
+  }
+});
+
+test('past month and last month remain typed date ranges with distinct semantics', () => {
+  const past = planQuestion('Show all closed deals from the past month.');
+  const last = planQuestion('Show all closed deals from last month.');
+  assert.deepEqual(past.filters[0].value, ['2026-08-18', '2026-09-18']);
+  assert.equal(past.filters[0].operator, 'between');
+  assert.equal(past.filters[0].exclusive_end, true);
+  assert.deepEqual(last.filters[0].value, ['2026-08-01', '2026-09-01']);
+  assert.equal(last.filters[0].operator, 'between');
+  assert.ok(Array.isArray(last.filters[0].value));
+});
+
 test('slash-format created-on dates become exclusive calendar ranges', () => {
   const request = planQuestion('List all deals created on 09/18/2026 with their details.');
   assert.equal(request.request_type, 'records');

@@ -91,10 +91,25 @@ async function materializeMetadataRequest(zohoService, input) {
     : plannerDefaults
       ? selectMetadataDefaultFields(fields, apiNames)
       : input.field_labels?.length ? relationshipPlan.fields : input.fields.map((field) => resolveField(field));
-  const resolvedFilters = (input.filters || []).map((filter) => ({
-    ...filter,
-    field: resolveField(filter.field, filter.field === 'Created_Time' || filter.field === '__date__' ? 'date' : filter.field_role || semanticRoleForField(filter.field, filter.field_label), filter.field_label, filter.field_role)
-  }));
+  const resolvedFilters = (input.filters || []).map((filter) => {
+    const field = resolveField(filter.field, filter.field === 'Created_Time' || filter.field === '__date__' ? 'date' : filter.field_role || semanticRoleForField(filter.field, filter.field_label), filter.field_label, filter.field_role);
+    const metadataField = metadataByApiName.get(field) || relationshipMetadataByPath.get(field);
+    const resolved = { ...filter, field };
+    if (isLookupField(metadataField)) {
+      resolved.value_type = 'lookup';
+      const targetModule = lookupTargetModule(metadataField);
+      if (targetModule) resolved.lookup_target_module = targetModule;
+    }
+    if (filter.semantic_value === 'closed') {
+      const values = closedPicklistValues(metadataField);
+      if (values.length === 0) {
+        throw createAppError('AMBIGUOUS_SEMANTIC_FILTER', `CRM field '${field}' has no metadata-defined closed values.`, 400, { module: input.module, module_api_name: moduleApiName, field });
+      }
+      resolved.value = values;
+      delete resolved.semantic_value;
+    }
+    return resolved;
+  });
   const resolveExpression = (expression) => {
     if (!expression) return expression;
     if (expression.field) return {
@@ -297,6 +312,24 @@ function validateFilterTypeCompatibility(input, filter, metadataField) {
     || filter.operator === 'between' && !numeric && !date
     || stringOperators.includes(filter.operator) && !text;
   if (invalid) throw createAppError('FIELD_OPERATION_NOT_SUPPORTED', `CRM field '${filter.field}' does not support operator '${filter.operator}'.`, 400, { module: input.module, module_api_name: input.module_api_name, field: filter.field, data_type: metadataField.data_type, operator: filter.operator });
+}
+
+function isLookupField(field) {
+  return ['lookup', 'ownerlookup', 'userlookup'].includes(String(field?.data_type || '').toLowerCase());
+}
+
+function lookupTargetModule(field) {
+  const lookup = field?.lookup?.module || field?.lookup_module || field?.associated_module || field?.module;
+  if (typeof lookup === 'string') return lookup;
+  if (lookup && typeof lookup === 'object') return lookup.api_name || lookup.module_name || lookup.name || null;
+  return /(?:owner|user)/i.test(String(field?.data_type || '')) || /owner/i.test(String(field?.api_name || '')) ? 'users' : null;
+}
+
+function closedPicklistValues(field) {
+  const values = field?.pick_list_values || field?.picklist_values || field?.values || [];
+  return values
+    .filter((value) => value && value.actual_value !== undefined && /\bclosed\b/i.test(String(value.display_value || value.actual_value)))
+    .map((value) => value.actual_value);
 }
 
 function collectExpressionFields(expression) {
