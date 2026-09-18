@@ -4,6 +4,7 @@ const { createCrmController, planQuestion } = require('../src/controllers/crm.co
 const { CrmService } = require('../src/services/crm.service');
 const { buildCoqlQuery } = require('../src/services/coql.service');
 const { createQueryIdentity } = require('../src/query/pagination');
+const { execFileSync } = require('node:child_process');
 
 function responseCapture() {
   const capture = { statusCode: null, body: null };
@@ -100,6 +101,18 @@ async function assistant(controller, body) {
   return capture.body;
 }
 
+test('CRM timezone fallback is configured India semantics independent of host timezone', () => {
+  const output = execFileSync(process.execPath, ['-e', `
+    process.env.CRM_TIMEZONE = '';
+    process.env.APPLICATION_TIMEZONE = '';
+    process.env.TZ = 'UTC';
+    const { env } = require('./src/config/env');
+    const { DEFAULT_TIMEZONE } = require('./src/utils/relativeDate');
+    process.stdout.write(JSON.stringify({ crmTimezone: env.crmTimezone, defaultTimezone: DEFAULT_TIMEZONE }));
+  `], { cwd: process.cwd(), encoding: 'utf8' });
+  assert.deepEqual(JSON.parse(output), { crmTimezone: 'Asia/Kolkata', defaultTimezone: 'Asia/Kolkata' });
+});
+
 test('count-to-details follow-up preserves metadata-typed DateTime filters and fingerprint', async () => {
   const { controller, calls } = createTypedDateHarness();
   const first = await assistant(controller, { conversation_id: 'date-count-details', question: 'How many deals were created today?' });
@@ -116,6 +129,24 @@ test('count-to-details follow-up preserves metadata-typed DateTime filters and f
   assert.equal(queryCall.request.filters[0].date_range.end_operator, 'less_than');
   assert.match(queryCall.request.filters[0].value[0], /^\d{4}-\d{2}-\d{2}T00:00:00[+-]\d{2}:\d{2}$/);
   assert.equal(second.diagnostics.query_fingerprint, first.diagnostics.query_fingerprint);
+});
+
+test('ordinary created-date record requests stay as records while explicit count stays count', () => {
+  assert.equal(planQuestion('give me deals created today').request_type, 'records');
+  assert.equal(planQuestion('show me deals created today').request_type, 'records');
+  assert.equal(planQuestion('list deals created today').request_type, 'records');
+  assert.equal(planQuestion('how many deals were created today?').request_type, 'count');
+});
+
+test('slash-format created-on dates become exclusive calendar ranges', () => {
+  const request = planQuestion('List all deals created on 09/18/2026 with their details.');
+  assert.equal(request.request_type, 'records');
+  assert.deepEqual(request.filters[0], {
+    field: 'Created_Time',
+    operator: 'between',
+    value: ['2026-09-18', '2026-09-19'],
+    exclusive_end: true
+  });
 });
 
 test('pagination follow-up preserves typed date filters while advancing only offset', async () => {

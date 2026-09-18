@@ -1,4 +1,6 @@
-const DEFAULT_TIMEZONE = process.env.CRM_TIMEZONE || process.env.APPLICATION_TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+const { env } = require('../config/env');
+
+const DEFAULT_TIMEZONE = env.crmTimezone;
 
 const PERIOD_ALIASES = Object.freeze({
   today: 'today', yesterday: 'yesterday', tomorrow: 'tomorrow',

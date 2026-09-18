@@ -641,7 +641,7 @@ function planQuestion(question) {
     };
   }
 
-  if (/\b(?:count|how many|number of|total number|many)\b/.test(lower) || /(?:lead|deal)s? created/.test(lower)) {
+  if (/\b(?:count|how many|number of|total number|many)\b/.test(lower)) {
     return {
       module,
       complexity: 'SIMPLE',
@@ -1258,6 +1258,13 @@ function detectDateFilter(lowerText, module) {
     return calendarFilter(dateField, [`${year}-01-01`, `${year}-12-31`]);
   }
 
+  const slashDateMatch = lowerText.match(/\b(?:created|updated|modified|on|for|date)\s+(?:on\s+)?(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/i)
+    || lowerText.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
+  if (slashDateMatch) {
+    const date = isoDateFromMonthDayYear(slashDateMatch[1], slashDateMatch[2], slashDateMatch[3]);
+    if (date) return calendarFilter(dateField, [date, date]);
+  }
+
   const exactRange = lowerText.match(/between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})/i);
   if (exactRange) {
     return calendarFilter(dateField, [exactRange[1], exactRange[2]]);
@@ -1331,6 +1338,15 @@ function calendarFilter(field, value) {
   const exclusiveEnd = new Date(`${value[1]}T00:00:00Z`);
   exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
   return { field, operator: 'between', value: [value[0], exclusiveEnd.toISOString().slice(0, 10)], exclusive_end: true };
+}
+
+function isoDateFromMonthDayYear(month, day, year) {
+  const parsedYear = Number(year);
+  const parsedMonth = Number(month);
+  const parsedDay = Number(day);
+  const date = new Date(Date.UTC(parsedYear, parsedMonth - 1, parsedDay));
+  if (date.getUTCFullYear() !== parsedYear || date.getUTCMonth() !== parsedMonth - 1 || date.getUTCDate() !== parsedDay) return null;
+  return `${parsedYear}-${String(parsedMonth).padStart(2, '0')}-${String(parsedDay).padStart(2, '0')}`;
 }
 
 function dayRange(date) {

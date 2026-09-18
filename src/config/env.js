@@ -29,7 +29,7 @@ const env = Object.freeze({
   zohoMaxQueryBudget: numberFromEnv('ZOHO_MAX_QUERY_BUDGET', 20),
   zohoMetadataTtlMs: numberFromEnv('ZOHO_METADATA_TTL_MS', 300000)
   ,
-  crmTimezone: process.env.CRM_TIMEZONE || process.env.APPLICATION_TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  crmTimezone: process.env.CRM_TIMEZONE || process.env.APPLICATION_TIMEZONE || 'Asia/Kolkata'
   ,
   useZohoMetadataForStaticModules: process.env.USE_ZOHO_METADATA_FOR_STATIC_MODULES === 'true'
   ,
