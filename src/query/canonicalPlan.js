@@ -18,6 +18,7 @@ function createCanonicalPlan(input = {}) {
   const offset = clampInteger(request.pagination?.offset ?? request.offset, 0, 0, Number.MAX_SAFE_INTEGER);
   const sort = normalizeSort(request.sort, request.sort_field, request.sort_order);
   const fields = uniqueStrings(request.fields);
+  const fieldLabels = uniqueStrings(request.field_labels);
   const filters = Array.isArray(request.filters) ? request.filters.map((filter) => ({ ...filter })) : [];
   const groupBy = uniqueStrings(request.group_by);
 
@@ -29,6 +30,7 @@ function createCanonicalPlan(input = {}) {
     intent: requestType,
     request_type: requestType,
     fields,
+    field_labels: fieldLabels,
     filters,
     filter_expression: request.filter_expression,
     sort,

@@ -272,7 +272,7 @@ function validateModuleFieldScope({
 
   const errors = [];
   const addInvalid = (path, field) => errors.push({ path, field });
-  const isSupported = (field) => typeof field === 'string' && supportedFields.includes(field);
+  const isSupported = (field) => typeof field === 'string' && (supportedFields.includes(field) || field.includes('.'));
 
   (Array.isArray(fields) ? fields : []).forEach((field, index) => {
     if (!isSupported(field)) addInvalid(`fields[${index}]`, field);

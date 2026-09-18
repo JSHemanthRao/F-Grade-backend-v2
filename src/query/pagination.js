@@ -59,6 +59,7 @@ function createQueryIdentity(plan) {
     module: plan?.module || null,
     module_api_name: plan?.module_api_name || null,
     fields: plan?.fields || [],
+    relationships: plan?.relationships || [],
     response_fields: plan?.response_fields || [],
     filters: plan?.filters || [],
     filter_expression: plan?.filter_expression || null,

@@ -24,6 +24,11 @@ test('canonical plans have one stable shape for record requests', () => {
   assert.equal(plan.filters[0].value, 50000);
 });
 
+test('canonical plans preserve semantic field labels for relationship resolution', () => {
+  const plan = createCanonicalPlan({ module: 'Deals', fields: ['id'], field_labels: ['deal name', 'account industry'] });
+  assert.deepEqual(plan.field_labels, ['deal name', 'account industry']);
+});
+
 test('the planner rejects record mutations before execution', () => {
   const planner = createCrmQueryPlanner(() => ({ module: 'Deals', fields: ['id'], filters: [] }));
   assert.throws(() => planner('Delete the deals'), (error) => error.code === 'READ_ONLY_OPERATION');

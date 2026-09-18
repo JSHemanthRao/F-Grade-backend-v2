@@ -1153,7 +1153,7 @@ function extractExcludedPicklistFilter(lowerText) {
 function extractFieldLabels(lowerText) {
   const match = lowerText.match(/\bwith\s+(.+?)(?=\s+(?:fields?|where|for|created|sorted|ordered|limit|top)\b|[?.!]|$)/i);
   if (!match) return [];
-  return match[1].split(/\s*(?:,|\band\b)\s*/i).map((value) => value.trim()).filter(Boolean);
+  return match[1].split(/\s*(?:,|\band\b)\s*/i).map((value) => value.trim().replace(/^the\s+/i, '')).filter(Boolean);
 }
 
 function extractSearchTerm(text) {
@@ -1354,7 +1354,7 @@ function toIsoDate(date) {
 }
 
 function detectAggregateOperation(lowerText) {
-  if (/(sort(?:ed)? by|order(?:ed)? by).*?(amount|deal value|revenue|price).*?(highest|lowest|top|largest|smallest)/.test(lowerText)) {
+  if (/(?:sort(?:ed)?|order(?:ed)?)\s+(?:from\s+)?(?:highest|lowest|largest|smallest|top|bottom)\s+to\s+(?:highest|lowest|largest|smallest|top|bottom)|(?:sort(?:ed)?|order(?:ed)?)\s+by/.test(lowerText)) {
     return null;
   }
   const hasMeasure = /(amount|deal\s+value|revenue|unit\s+price|price|cost|quantity|qty)/.test(lowerText);

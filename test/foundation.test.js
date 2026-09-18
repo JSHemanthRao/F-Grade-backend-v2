@@ -398,6 +398,17 @@ test('plans highest-value deal requests with server-side amount sorting', () => 
   assert.equal(request.sort_order, 'desc');
 });
 
+test('keeps detailed deal retrieval as records when sorted by amount', () => {
+  const request = require('../src/controllers/crm.controller').planQuestion('Show me deals above 50000 with the deal name, amount, stage, account name, account industry, and owner name, sorted from highest to lowest amount.');
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.request_type, 'records');
+  assert.equal(request.aggregate, undefined);
+  assert.equal(request.sort_field, 'amount');
+  assert.equal(request.sort_order, 'desc');
+  assert.deepEqual(request.field_labels, ['deal name', 'amount', 'stage', 'account name', 'account industry', 'owner name']);
+  assert.deepEqual(request.filters, [{ field: 'Amount', operator: 'greater_than', value: 50000 }]);
+});
+
 test('separates owner dimension from total deal value metric', () => {
   const request = require('../src/controllers/crm.controller').planQuestion('Show the top 3 owners by total deal value');
   assert.equal(request.module, 'Deals');

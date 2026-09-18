@@ -11,6 +11,7 @@ const { resolveRelativePeriod } = require('../utils/relativeDate');
 const { getCurrentCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, updateDiagnostics } = require('../utils/crmDiagnostics');
 const { createCanonicalPlan } = require('../query/canonicalPlan');
 const { buildExecutionFields, capExecutionFields } = require('../query/fieldSelection');
+const { resolveRequestedFields } = require('../relationships/relationshipResolver');
 
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
@@ -343,7 +344,7 @@ class CrmService {
   }
 
   async resolveSemanticFields(input) {
-    if (!Array.isArray(input?.field_labels) || input.field_labels.length === 0 || !input.module || input.module === 'CRM') return input;
+    if (!Array.isArray(input?.field_labels) || input.field_labels.length === 0 || !input.module || input.module === 'CRM' || typeof this.zohoService.getFieldMetadata === 'function') return input;
     const fields = await this.zohoService.resolveFieldApiNames(input.module, input.field_labels);
     return { ...input, fields, field_labels: undefined };
   }
@@ -1143,7 +1144,7 @@ async function validateMetadataFields(zohoService, request) {
     request.having_filter?.field,
     ...(Array.isArray(request.sort) ? request.sort.map((sort) => sort.field) : [request.sort?.field])
   ].filter(Boolean);
-  const missing = [...new Set(fields.filter((field) => !metadata.fields.includes(field)))];
+  const missing = [...new Set(fields.filter((field) => !metadata.fields.includes(field) && !String(field).includes('.')))];
   if (missing.length > 0) throw createAppError('FIELD_NOT_AVAILABLE', `Zoho CRM metadata for '${moduleApiName}' does not expose the requested field(s).`, 400, { module: request.module, module_api_name: moduleApiName, field: missing[0], fields: missing });
 }
 
@@ -1163,6 +1164,16 @@ async function materializeMetadataRequest(zohoService, input) {
     for (const value of [field.api_name, field.display_label, field.field_label, field.label]) {
       if (value) aliases.set(normalizeMetadataLabel(value), field.api_name);
     }
+  }
+
+  let relationshipPlan = { fields: [], relationships: [] };
+  if (Array.isArray(input.field_labels) && input.field_labels.length > 0) {
+    relationshipPlan = await resolveRequestedFields({
+      module: input.module,
+      fieldLabels: input.field_labels,
+      metadata: fields,
+      getFieldMetadata: (targetModule) => zohoService.getFieldMetadata(targetModule)
+    });
   }
   const resolveField = (field, role, label, dateRole) => {
     if (!field) return field;
@@ -1218,7 +1229,7 @@ async function materializeMetadataRequest(zohoService, input) {
     ? selectMetadataSearchFields(fields, apiNames)
     : plannerDefaults
     ? selectMetadataDefaults(fields, apiNames)
-    : input.fields.map((field) => resolveField(field));
+    : input.field_labels?.length ? relationshipPlan.fields : input.fields.map((field) => resolveField(field));
   const resolvedFilters = (input.filters || []).map((filter) => ({
     ...filter,
     field: resolveField(filter.field, filter.field === 'Created_Time' || filter.field === '__date__' ? 'date' : filter.field_role || semanticRoleForField(filter.field, filter.field_label), filter.field_label, filter.field_role)
@@ -1299,7 +1310,7 @@ async function materializeMetadataRequest(zohoService, input) {
     const metadataField = metadataByResolvedName.get(aggregate.field);
     if (metadataField?.aggregatable === false) throw createAppError('FIELD_OPERATION_NOT_SUPPORTED', `CRM field '${aggregate.field}' cannot be aggregated.`, 400, { module: input.module, module_api_name: moduleApiName, field: aggregate.field, operation: aggregate.operation });
   }
-  const missingField = usedFields.find((field) => !apiNames.has(field));
+  const missingField = usedFields.find((field) => !apiNames.has(field) && !String(field).includes('.'));
   if (fields.length > 0 && missingField) {
     if (!input._metadata_refreshed && typeof zohoService.getFieldMetadata === 'function') {
       await zohoService.getFieldMetadata(moduleApiName, { forceRefresh: true });
@@ -1316,7 +1327,7 @@ async function materializeMetadataRequest(zohoService, input) {
   const resolvedComparison = input.comparison && fields.length > 0 && resolvedFilters.length === 0 && input.date_field_role
     ? { ...input.comparison, date_field: chooseMetadataDateField(fields, input.date_field_role) }
     : input.comparison;
-  return { ...input, fields: executionFields, requested_fields: input.field_labels || input.fields || [], execution_fields: executionFields, response_fields: responseFields, filters: resolvedFilters, filter_expression: resolvedFilterExpression, sort: resolvedSort, aggregate, group_by: groupBy, having_filter: havingFilter, comparison: resolvedComparison, sort_field: undefined, sort_order: undefined, _resolved_field_diagnostics: resolvedFieldDiagnostics, _available_metadata_fields: [...apiNames] };
+  return { ...input, fields: executionFields, requested_fields: input.field_labels || input.fields || [], execution_fields: executionFields, response_fields: responseFields, filters: resolvedFilters, filter_expression: resolvedFilterExpression, sort: resolvedSort, aggregate, group_by: groupBy, having_filter: havingFilter, comparison: resolvedComparison, relationships: [...(input.relationships || []), ...relationshipPlan.relationships], sort_field: undefined, sort_order: undefined, _resolved_field_diagnostics: resolvedFieldDiagnostics, _available_metadata_fields: [...apiNames] };
 }
 
 function selectMetadataDefaults(metadata, apiNames) {
