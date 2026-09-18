@@ -138,7 +138,7 @@ function createCrmController(crmService = new CrmService()) {
 }
 
 function extractNaturalQuestion(body) {
-  for (const key of ['question', 'prompt', 'message']) {
+  for (const key of ['question', 'prompt', 'message', 'original_question']) {
     if (typeof body?.[key] === 'string' && body[key].trim()) return body[key].trim();
   }
   return null;

@@ -64,6 +64,23 @@ test('POST /api/crm/query prefers the natural-language question over stale conne
   assert.equal(captured.filters[0].field, 'Created_Time');
 });
 
+test('POST /api/crm/query also treats original_question as the natural-language request', async () => {
+  let captured;
+  const app = createApp({ crmService: { query: async (input) => {
+    captured = input;
+    return { module: input.module, request_type: input.request_type, count: 0, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } };
+  } } });
+  const response = await requestJson(app, '/api/crm/query', 'POST', {
+    original_question: 'give me deals created today.',
+    module: 'Accounts',
+    fields: ['Closing_Date'],
+    filters: [{ field: 'Closing_Date', operator: 'between', value: ['2026-09-18', '2026-09-19'] }]
+  });
+  assert.equal(response.status, 200);
+  assert.equal(captured.module, 'Deals');
+  assert.equal(captured.filters[0].field, 'Created_Time');
+});
+
 test('POST /api/crm/assistant accepts the question input only', async () => {
   const calls = [];
   const app = createApp({ crmService: { query: async (input) => {
@@ -325,6 +342,77 @@ test('passes Deals, Calls, Tasks, Contacts, and Meetings to their exact Zoho API
   }
   assert.deepEqual(requests.map((request) => request.module), ['Deals', 'Calls', 'Calls', 'Meetings', 'Tasks', 'Contacts']);
   assert.equal(requests[3].module_api_name, 'Events');
+});
+
+test('CRM service reconciles stale connector module hints from requested fields before live metadata', async () => {
+  const requests = [];
+  const metadataFor = (fields) => ({
+    fields,
+    metadata: fields.map((field) => ({
+      api_name: field,
+      display_label: field.replace(/_/g, ' '),
+      data_type: field.endsWith('_Time') ? 'datetime' : (field.endsWith('_Date') ? 'date' : 'text')
+    }))
+  });
+  const metadata = {
+    Accounts: metadataFor(['id', 'Account_Name', 'Created_Time', 'Modified_Time']),
+    Deals: metadataFor(['id', 'Deal_Name', 'Closing_Date', 'Created_Time', 'Stage', 'Amount'])
+  };
+  const zoho = {
+    executionStats: {},
+    resolveModuleApiName: async (module) => module,
+    getFieldMetadata: async (module) => metadata[module],
+    resolveOwnerFilters: async (filters) => filters,
+    query: async (request) => {
+      requests.push(request);
+      return { records: [], info: { more_records: false }, module_api_name: request.module_api_name };
+    }
+  };
+  const service = new CrmService(zoho);
+  await service.query({
+    module: 'Accounts',
+    request_type: 'records',
+    fields: ['Deal_Name', 'Closing_Date'],
+    filters: [{ field: 'Closing_Date', operator: 'between', value: ['2026-09-18', '2026-09-19'], exclusive_end: true }],
+    limit: 20,
+    offset: 0
+  });
+  assert.equal(requests[0].module, 'Deals');
+  assert.equal(requests[0].module_api_name, 'Deals');
+  assert.deepEqual(requests[0].filters[0].field, 'Closing_Date');
+});
+
+test('CRM service cleans connector field-label prefixes while reconciling stale modules', async () => {
+  const requests = [];
+  const metadataFor = (fields) => ({
+    fields,
+    metadata: fields.map((field) => ({ api_name: field, display_label: field.replace(/_/g, ' '), data_type: 'text' }))
+  });
+  const metadata = {
+    Accounts: metadataFor(['id', 'Account_Name', 'Created_Time']),
+    Deals: metadataFor(['id', 'Deal_Name', 'Closing_Date', 'Created_Time'])
+  };
+  const zoho = {
+    executionStats: {},
+    resolveModuleApiName: async (module) => module,
+    getFieldMetadata: async (module) => metadata[module],
+    resolveOwnerFilters: async (filters) => filters,
+    query: async (request) => {
+      requests.push(request);
+      return { records: [], info: { more_records: false }, module_api_name: request.module_api_name };
+    }
+  };
+  const service = new CrmService(zoho);
+  await service.query({
+    module: 'Accounts',
+    request_type: 'records',
+    field_labels: ['fields: deal_name'],
+    filters: [],
+    limit: 20,
+    offset: 0
+  });
+  assert.equal(requests[0].module, 'Deals');
+  assert.equal(requests[0].response_fields.includes('Deal_Name'), true);
 });
 
 test('does not fall back from zero Products records or an unavailable module to Deals', async () => {

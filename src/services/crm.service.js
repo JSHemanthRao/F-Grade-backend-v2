@@ -1,7 +1,7 @@
 const { validateCrmQuery, validateModuleFieldScope, validateAggregateQuery } = require('../validators/crmQuery.validator');
 const { ZohoCrmService } = require('./zohoCrm.service');
 const { sanitizeZohoRecord } = require('../utils/zohoRecord');
-const { CRM_API_NAMES } = require('../constants/crmModules');
+const { CRM_API_NAMES, CRM_MODULES } = require('../constants/crmModules');
 const { buildFilterClauses, buildWhereClause } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
 const { log } = require('../utils/logger');
@@ -71,6 +71,7 @@ class CrmService {
         }
       };
     }
+    input = reconcileConnectorModuleFieldScope(input);
     const activeDiagnostics = diagnostics || getCurrentCrmDiagnostics();
     if (diagnostics && getCurrentCrmDiagnostics() !== diagnostics) {
       return runWithCrmDiagnostics(diagnostics, () => this.query(input, executionContext));
@@ -1113,6 +1114,129 @@ function normalizeBulkResult(result) {
 
 function createExecutionContext() {
   return { resultCache: new Map(), startedAt: Date.now(), queryBudget: Math.max(1, env.zohoMaxQueryBudget), queriesReserved: 0 };
+}
+
+function reconcileConnectorModuleFieldScope(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const sanitizedFieldLabels = sanitizeConnectorFieldLabels(input.field_labels);
+  let next = sanitizedFieldLabels.changed
+    ? { ...input, field_labels: sanitizedFieldLabels.labels.length > 0 ? sanitizedFieldLabels.labels : undefined }
+    : input;
+  const currentModule = resolveStaticModuleKey(next.module);
+  if (!currentModule || currentModule === 'CRM') return next;
+
+  const requestedTerms = [...new Set(collectRequestedFieldTerms(next).map(stripConnectorFieldPrefix).filter(Boolean))];
+  if (requestedTerms.length === 0) return next;
+  const invalidTerms = requestedTerms.filter((field) => isInferrableFieldTerm(field) && !moduleSupportsStaticField(currentModule, field));
+  if (invalidTerms.length === 0) return next;
+
+  const candidates = Object.keys(CRM_MODULES)
+    .filter((moduleName) => moduleName !== currentModule)
+    .map((moduleName) => {
+      const invalidMatches = invalidTerms.filter((field) => moduleSupportsStaticField(moduleName, field)).length;
+      const requestedMatches = requestedTerms.filter((field) => moduleSupportsStaticField(moduleName, field)).length;
+      return { moduleName, invalidMatches, requestedMatches, score: invalidMatches * 100 + requestedMatches };
+    })
+    .filter((candidate) => candidate.invalidMatches > 0)
+    .sort((left, right) => right.score - left.score);
+  if (candidates.length === 0 || (candidates[1] && candidates[1].score === candidates[0].score)) return next;
+
+  const moduleName = candidates[0].moduleName;
+  return {
+    ...next,
+    module: moduleName,
+    module_api_name: undefined,
+    primary_entity: {
+      ...(next.primary_entity || {}),
+      module: moduleName,
+      module_api_name: CRM_API_NAMES[moduleName] || moduleName
+    },
+    module_resolution: {
+      ...(next.module_resolution || {}),
+      reference: next.module,
+      semantic_name: moduleName,
+      api_name: CRM_API_NAMES[moduleName] || moduleName,
+      confidence: 0.95,
+      match_type: 'field_scope_reconciliation',
+      reason: `Requested field(s) ${invalidTerms.join(', ')} are not available on ${currentModule}.`
+    }
+  };
+}
+
+function sanitizeConnectorFieldLabels(fieldLabels) {
+  if (!Array.isArray(fieldLabels)) return { changed: false, labels: [] };
+  const labels = fieldLabels
+    .map((label) => stripConnectorFieldPrefix(label))
+    .filter(Boolean);
+  return {
+    changed: labels.length !== fieldLabels.length || labels.some((label, index) => label !== fieldLabels[index]),
+    labels: [...new Set(labels)]
+  };
+}
+
+function collectRequestedFieldTerms(input = {}) {
+  const terms = [];
+  const add = (value) => {
+    if (Array.isArray(value)) return value.forEach(add);
+    if (typeof value === 'string' && value.trim()) terms.push(value.trim());
+  };
+  add(input.fields);
+  add(input.field_labels);
+  add(input.requested_fields);
+  if (Array.isArray(input.filters)) {
+    input.filters.forEach((filter) => {
+      add(filter?.field);
+      add(filter?.field_label);
+    });
+  }
+  add(collectMetadataExpressionFields(input.filter_expression));
+  add(input.aggregate?.field);
+  add(input.aggregate?.field_label);
+  add(input.group_by);
+  add(input.group_by_label);
+  add(input.having_filter?.field);
+  add(input.having_filter?.field_label);
+  const sort = input.sort || (input.sort_field ? { field: input.sort_field } : undefined);
+  if (Array.isArray(sort)) sort.forEach((entry) => {
+    add(entry?.field);
+    add(entry?.field_label);
+  });
+  else {
+    add(sort?.field);
+    add(sort?.field_label);
+  }
+  add(input.comparison?.field);
+  add(input.comparison?.date_field);
+  add(input.date_range?.field);
+  add(input.date_field);
+  return terms;
+}
+
+function stripConnectorFieldPrefix(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/^\s*(?:fields?|columns?|select)\s*:\s*/i, '').trim();
+}
+
+function isInferrableFieldTerm(value) {
+  const field = stripConnectorFieldPrefix(value);
+  return Boolean(field) && !field.includes('.') && !field.startsWith('__') && normalizeFieldToken(field) !== 'id';
+}
+
+function moduleSupportsStaticField(moduleName, field) {
+  const fields = CRM_MODULES[moduleName] || [];
+  const wanted = normalizeFieldToken(field);
+  return fields.some((candidate) => normalizeFieldToken(candidate) === wanted);
+}
+
+function resolveStaticModuleKey(moduleName) {
+  if (!moduleName || typeof moduleName !== 'string') return undefined;
+  const normalized = moduleName.trim().toLowerCase();
+  return Object.keys(CRM_MODULES).find((key) => key.toLowerCase() === normalized)
+    || Object.keys(CRM_API_NAMES).find((key) => key.toLowerCase() === normalized || String(CRM_API_NAMES[key]).toLowerCase() === normalized);
+}
+
+function normalizeFieldToken(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 async function executeCached(context, key, operation) {
