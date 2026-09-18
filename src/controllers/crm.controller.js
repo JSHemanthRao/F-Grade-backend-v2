@@ -57,7 +57,9 @@ function createCrmController(crmService = new CrmService()) {
     },
     query: async (req, res, next) => {
       try {
-        const result = await crmService.query(req.body);
+        const naturalQuestion = extractNaturalQuestion(req.body);
+        const input = naturalQuestion ? planCrmQuestion(naturalQuestion) : req.body;
+        const result = await crmService.query(input);
         // Ensure structured summary objects are serialized to strings for connector compatibility
         const safe = stringifySummary(Object.assign({}, result));
         res.status(200).json({ success: true, status: 'ok', ...safe });
@@ -133,6 +135,13 @@ function createCrmController(crmService = new CrmService()) {
       }
     }
   };
+}
+
+function extractNaturalQuestion(body) {
+  for (const key of ['question', 'prompt', 'message']) {
+    if (typeof body?.[key] === 'string' && body[key].trim()) return body[key].trim();
+  }
+  return null;
 }
 
 function stringifySummary(obj) {

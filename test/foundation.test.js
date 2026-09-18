@@ -46,6 +46,24 @@ test('POST /api/crm/query returns the CRM service response', async () => {
   assert.equal(response.body.count, 1);
 });
 
+test('POST /api/crm/query prefers the natural-language question over stale connector hints', async () => {
+  let captured;
+  const app = createApp({ crmService: { query: async (input) => {
+    captured = input;
+    return { module: input.module, request_type: input.request_type, count: 0, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } };
+  } } });
+  const response = await requestJson(app, '/api/crm/query', 'POST', {
+    question: 'give me deals created today.',
+    module: 'Accounts',
+    field_labels: ['fields: deal_name'],
+    query: { module: 'Accounts', field_labels: ['fields: deal_name'] }
+  });
+  assert.equal(response.status, 200);
+  assert.equal(captured.module, 'Deals');
+  assert.equal(captured.field_labels, undefined);
+  assert.equal(captured.filters[0].field, 'Created_Time');
+});
+
 test('POST /api/crm/assistant accepts the question input only', async () => {
   const calls = [];
   const app = createApp({ crmService: { query: async (input) => {
