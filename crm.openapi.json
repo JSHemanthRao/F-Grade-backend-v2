@@ -117,7 +117,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 2000,
-          "description": "Pass the user's complete original natural-language CRM request exactly as written. Do not rewrite, summarize, translate, interpret, construct structured CRM parameters, calculate pagination, or construct COQL."
+          "description": "Pass the user's complete original natural-language CRM request exactly as written. This must be the user's text, such as 'give me next 20 deals'; never pass a conversation ID, request ID, UUID, module, fields, filters, limit, or offset. Do not rewrite, summarize, translate, interpret, construct structured CRM parameters, calculate pagination, or construct COQL."
         },
         "conversation_id": {
           "type": "string",

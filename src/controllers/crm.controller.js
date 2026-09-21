@@ -79,6 +79,9 @@ function createCrmController(crmService = new CrmService()) {
         if (typeof question !== 'string' || question.trim().length === 0) {
           throw createAppError('QUESTION_REQUIRED', 'One of question, prompt, or message is required.', 400);
         }
+        if (isLikelyIdentifier(question)) {
+          throw createAppError('QUESTION_INVALID', 'question must contain the user\'s natural-language CRM request, not a conversation or request identifier.', 400, { received: 'identifier' });
+        }
         if (question.length > MAX_QUESTION_LENGTH) {
           throw createAppError('QUESTION_TOO_LONG', `Question must not exceed ${MAX_QUESTION_LENGTH} characters.`, 400);
         }
@@ -151,6 +154,10 @@ function extractNaturalQuestion(body) {
     if (typeof body?.[key] === 'string' && body[key].trim()) return body[key].trim();
   }
   return null;
+}
+
+function isLikelyIdentifier(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 }
 
 function stringifySummary(obj) {
