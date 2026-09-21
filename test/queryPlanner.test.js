@@ -397,6 +397,34 @@ test('advances Leads for the natural-language next set follow-up', async () => {
   assert.deepEqual(calls.map((call) => [call.module, call.offset, call.limit]), [['Leads', 0, 20], ['Leads', 20, 20]]);
 });
 
+test('runs three Leads pages with stable conversation state and distinct IDs', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const offset = input.offset || 0;
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        data: Array.from({ length: 20 }, (_, index) => ({ id: `lead-${offset + index + 1}` })),
+        pagination: { limit: input.limit, offset, returned: 20, more_records: true }
+      };
+    }
+  });
+  const responses = [];
+  const response = () => ({ status: () => ({ json: (value) => { responses.push(value); return value; } }), json: (value) => { responses.push(value); return value; } });
+  await controller.assistant({ body: { question: 'Show me the first 20 leads.' } }, response(), (error) => { throw error; });
+  const conversationId = responses[0].conversation_id;
+  await controller.assistant({ body: { conversation_id: conversationId, question: 'give me next 20 records' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: conversationId, question: 'give me next 20 records' } }, response(), (error) => { throw error; });
+  assert.ok(conversationId);
+  assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40]);
+  assert.deepEqual(calls.map((call) => call.module), ['Leads', 'Leads', 'Leads']);
+  assert.deepEqual(responses.map((responseBody) => responseBody.pagination.offset), [0, 20, 40]);
+  assert.deepEqual(responses.map((responseBody) => responseBody.conversation_id), [conversationId, conversationId, conversationId]);
+  assert.equal(new Set(responses.flatMap((responseBody) => responseBody.data.map((record) => record.id))).size, 60);
+});
+
 test('paginates every supported record module through the same continuation path', async () => {
   const modules = ['Deals', 'Leads', 'Contacts', 'Accounts', 'Calls', 'Meetings', 'Tasks', 'Products', 'Quotes', 'SalesOrders', 'PurchaseOrders', 'Invoices'];
   const calls = [];

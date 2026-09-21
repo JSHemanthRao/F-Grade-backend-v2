@@ -3,12 +3,12 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const createApp = require('../src/app').createApp;
 
-function request(app, body) {
+function request(app, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const server = app.listen(0, '127.0.0.1', () => {
       const port = server.address().port;
       const payload = JSON.stringify(body);
-      const req = http.request({ hostname: '127.0.0.1', port, path: '/api/crm/assistant', method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } }, (res) => {
+      const req = http.request({ hostname: '127.0.0.1', port, path: '/api/crm/assistant', method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload), ...headers } }, (res) => {
         let response = '';
         res.setEncoding('utf8');
         res.on('data', (chunk) => { response += chunk; });
@@ -22,6 +22,30 @@ function request(app, body) {
     server.on('error', reject);
   });
 }
+
+test('uses the connector conversation header when the body omits conversation_id', async () => {
+  const calls = [];
+  const app = createApp({ crmService: makeMockService((input) => {
+    calls.push(input);
+    const offset = input.offset || 0;
+    return {
+      module: input.module,
+      request_type: input.request_type,
+      data: Array.from({ length: 20 }, (_, index) => ({ id: `deal-${offset + index + 1}` })),
+      pagination: { limit: input.limit, offset, returned: 20, more_records: true }
+    };
+  }) });
+
+  const headers = { 'x-ms-conversation-id': 'copilot-conversation-1' };
+  const first = await request(app, { question: 'Show me the first 20 deals.' }, headers);
+  const second = await request(app, { question: 'give me next 20 records' }, headers);
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(first.body.conversation_id, 'copilot-conversation-1');
+  assert.equal(second.body.conversation_id, 'copilot-conversation-1');
+  assert.deepEqual(calls.map((call) => call.offset), [0, 20]);
+});
 
 // Create a generic mock crmService that echoes expected shapes
 function makeMockService(handler) {

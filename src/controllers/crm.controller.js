@@ -84,6 +84,11 @@ function createCrmController(crmService = new CrmService()) {
         }
         const providedConversationId = resolveConversationId(req);
         const conversationId = providedConversationId || (isPaginationContinuation(question) || isExplicitPageRequest(question) ? null : randomUUID());
+        recordCrmEvent('CONVERSATION_RESOLVED', diagnostics, {
+          conversation_id: conversationId,
+          source: providedConversationId ? 'request' : 'server_generated',
+          continuation: isPaginationContinuation(question) || isExplicitPageRequest(question)
+        });
         const executed = await assistantService.execute({ question, conversationId, diagnostics });
         const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
         res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, conversation_id: conversationId, question, answer: executed.answer, diagnostics: publicDiagnostics, ...executed.result });
@@ -185,7 +190,11 @@ function resolveConversationId(req) {
     req.body?.sessionId,
     req.get?.('x-conversation-id'),
     req.get?.('x-session-id'),
-    req.get?.('x-ms-conversation-id')
+    req.get?.('x-ms-conversation-id'),
+    req.get?.('x-ms-conversationid'),
+    req.get?.('x-ms-client-conversation-id'),
+    req.get?.('conversation-id'),
+    req.get?.('session-id')
   ];
   const value = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
   return value ? value.trim() : null;

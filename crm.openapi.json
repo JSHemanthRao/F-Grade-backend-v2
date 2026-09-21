@@ -4,7 +4,7 @@
     "title": "Zoho CRM Natural Language Assistant",
     "version": "3.0.0",
     "description": "Read-only natural-language access to live Zoho CRM data. Send the user's complete CRM question unchanged in the question field. The backend resolves intent, module, fields, dates, filters, sorting, aggregation, relationships, activity type, and pagination.",
-    "x-copilot-studio-tool-description": "Use this read-only tool only for live Zoho CRM questions. Pass the complete user request unchanged in question; do not construct modules, fields, filters, limits, offsets, or COQL. Never emit a Leads field named Converted. Conversion questions must remain natural language and be sent unchanged in question."
+    "x-copilot-studio-tool-description": "Use this read-only tool only for live Zoho CRM questions. FIRST REQUEST: send question and do not invent conversation_id for a new request. FOLLOW-UP: when a previous CRM response exists and the user asks next 20, next page, show more, continue, next batch, or another 20, pass the exact conversation_id returned by the previous response. Never create, change, or omit conversation_id for an existing query. Do not construct modules, fields, filters, limits, offsets, or COQL. Never emit a Leads field named Converted. Conversion questions must remain natural language and be sent unchanged in question."
   },
   "servers": [
     {
@@ -18,7 +18,7 @@
         "operationId": "askCrmAssistant",
         "summary": "Ask Zoho CRM",
         "x-ms-summary": "Ask Zoho CRM",
-        "description": "Pass the user's complete CRM question unchanged. The backend owns CRM interpretation, field resolution, filtering, sorting, analysis, and pagination. For follow-ups such as next 20, next page, continue, or proceed, provide the same conversation_id and do not calculate an offset.",
+        "description": "Pass the user's complete CRM question unchanged. On the first request, omit conversation_id unless the application already has one. For follow-ups such as next 20, next page, show more, continue, next batch, or another 20, pass the exact conversation_id returned by the previous CRM assistant response. Never generate, change, or omit it when continuing an existing query; do not calculate an offset.",
         "security": [
           {
             "apiKeyAuth": []
@@ -99,7 +99,7 @@
             "type": "string",
             "minLength": 1,
             "x-ms-summary": "Conversation ID",
-            "description": "Optional stable conversation or session identifier. Supply the same value for pagination follow-ups such as next page, continue, or proceed."
+             "description": "Optional on the first request. For every pagination follow-up, pass the exact conversation_id returned by the previous response unchanged. Do not generate a new value, change it, or omit it when continuing an existing query."
           }
         }
       },

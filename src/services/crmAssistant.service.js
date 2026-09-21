@@ -1,7 +1,7 @@
 const { createAppError } = require('../utils/errors');
 const { createQueryIdentity, isPaginationAffirmation, isPaginationDecline } = require('../query/pagination');
 const { PaginationManager } = require('../pagination/paginationManager');
-const { updateDiagnostics } = require('../utils/crmDiagnostics');
+const { updateDiagnostics, recordCrmEvent } = require('../utils/crmDiagnostics');
 
 class CrmAssistantService {
   constructor({
@@ -74,6 +74,16 @@ class CrmAssistantService {
     const statePlan = mergeResolvedPlan(plannedRequest, result);
     const state = this.paginationManager.save(conversationId, statePlan, result, diagnostics?.request_id, resolvedQuestion);
     const queryIdentity = createQueryIdentity(statePlan);
+    recordCrmEvent('PAGINATION_STATE', diagnostics, {
+      conversation_id: conversationId,
+      query_identity: queryIdentity,
+      module: plannedRequest.module || result.module || null,
+      previous_offset: previous?.pagination?.offset ?? null,
+      requested_limit: plannedRequest.limit ?? plannedRequest.pagination?.limit ?? null,
+      returned_count: state?.pagination?.returned ?? 0,
+      next_offset: state?.pagination?.offset ?? plannedRequest.offset ?? 0,
+      more_records: state?.pagination?.more_records ?? false
+    });
     if (diagnostics) {
       diagnostics.previous_module = previous?.canonical_plan?.module || null;
       diagnostics.current_module = plannedRequest.module || result.module || null;
