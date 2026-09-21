@@ -253,10 +253,10 @@ test('plans plain meeting requests as the Meetings module', async () => {
 test('plans today activity requests as a multi-module analysis', () => {
   const { planQuestion } = require('../src/controllers/crm.controller');
   const request = planQuestion('Give me todays activity with the logs');
-  assert.equal(request.request_type, 'analysis');
-  assert.deepEqual(request.analysis, { type: 'today_activity', activity_type: 'ACTIVITY_HISTORY' });
-  assert.equal(request.activity_type, 'ACTIVITY_HISTORY');
-  assert.equal(request.module, 'CRM');
+  assert.equal(request.request_type, 'audit_log');
+  assert.equal(request.intent, 'audit_log');
+  assert.equal(request.audit_log.date_range.field, 'audited_time');
+  assert.equal(request.module, null);
 });
 
 test('classifies scheduled today activity as SCHEDULED_ACTIVITY and history as ACTIVITY_HISTORY', () => {

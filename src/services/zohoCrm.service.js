@@ -12,12 +12,14 @@ const { getCurrentCrmDiagnostics, recordCrmEvent, updateDiagnostics } = require(
 const { resolveModuleReference, assertResolvedModule, buildModuleRegistry, normalizeModuleReference } = require('../resolvers/moduleResolver');
 const { buildCoqlPagination } = require('../coql/coqlPagination');
 const { buildExecutableCoqlPlan } = require('../coql/coqlBuilder');
+const { ZohoAuditLogService } = require('./zohoAuditLog.service');
 
 class ZohoCrmService {
   constructor(httpClient = axios, configLoader = getZohoConfig, authService) {
     this.httpClient = httpClient;
     this.configLoader = configLoader;
     this.authService = authService || new ZohoAuthService(httpClient, configLoader);
+    this.auditLogService = new ZohoAuditLogService(httpClient, configLoader, this.authService);
     this.circuitBreaker = new CircuitBreaker({ failureThreshold: env.zohoCircuitFailureThreshold, resetTimeoutMs: env.zohoCircuitResetTimeoutMs });
     this.executionStats = { calls: 0, successfulCalls: 0, failedCalls: 0, retries: 0 };
     this.maxConcurrency = Math.max(1, env.zohoMaxConcurrency);

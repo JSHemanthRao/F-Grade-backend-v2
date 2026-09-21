@@ -5,7 +5,8 @@ const INTENTS = Object.freeze({
   comparison: 'comparison',
   analysis: 'analysis',
   search: 'search',
-  bulk_read: 'bulk_read'
+  bulk_read: 'bulk_read',
+  audit_log: 'audit_log'
 });
 
 const DEFAULT_LIMIT = 20;
@@ -13,7 +14,7 @@ const MAX_LIMIT = 200;
 
 function createCanonicalPlan(input = {}) {
   const request = input && typeof input === 'object' ? input : {};
-  const requestType = INTENTS[request.request_type] || 'records';
+  const requestType = INTENTS[request.request_type] || (request.intent === 'audit_log' ? 'audit_log' : 'records');
   const limit = clampInteger(request.pagination?.limit ?? request.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
   const offset = clampInteger(request.pagination?.offset ?? request.offset, 0, 0, Number.MAX_SAFE_INTEGER);
   const sort = normalizeSort(request.sort, request.sort_field, request.sort_order);
@@ -55,6 +56,7 @@ function createCanonicalPlan(input = {}) {
     relationships: Array.isArray(request.relationships) ? request.relationships : [],
     search: request.search || null,
     analysis: request.analysis || null,
+    audit_log: request.audit_log || null,
     original_question: request.original_question || null,
     metadata_driven: request.metadata_driven === true
   };

@@ -226,9 +226,39 @@ test('plans today deals with a negated Stage filter and created-date filter', ()
 
 test('routes today activity history through the CRM audit-log analysis path', () => {
   const request = planQuestion("today's activity?");
-  assert.equal(request.module, 'CRM');
-  assert.equal(request.activity_type, 'ACTIVITY_HISTORY');
-  assert.deepEqual(request.analysis, { type: 'today_activity', activity_type: 'ACTIVITY_HISTORY' });
+  assert.equal(request.module, null);
+  assert.equal(request.intent, 'audit_log');
+  assert.equal(request.request_type, 'audit_log');
+  assert.equal(request.audit_log.date_range.field, 'audited_time');
+});
+
+test('routes generic activity to the canonical audit_log intent', () => {
+  for (const question of [
+    "Give me today's activity.",
+    "Give me today's CRM activity.",
+    'What activity was done yesterday?',
+    'What activity was done on Saturday?',
+    'Show activity from September 20.',
+    'What did John Smith update yesterday?',
+    'Show Deal activity today.'
+  ]) {
+    const request = planQuestion(question);
+    assert.equal(request.intent, 'audit_log', question);
+    assert.equal(request.request_type, 'audit_log', question);
+    assert.equal(request.module, null, question);
+    assert.equal(request.audit_log.date_range?.field, 'audited_time', question);
+  }
+  assert.equal(planQuestion('What did John Smith update yesterday?').audit_log.user.name, 'John Smith');
+  assert.equal(planQuestion('What did John Smith update yesterday?').audit_log.action, 'Updated');
+  assert.equal(planQuestion('Show Deal activity today.').audit_log.entity, 'Deals');
+});
+
+test('keeps explicit activity modules out of audit_log', () => {
+  for (const [question, module] of [["Show today's tasks.", 'Tasks'], ["Show today's calls.", 'Calls'], ["Show today's meetings.", 'Meetings'], ["Show today's events.", 'Meetings']]) {
+    const request = planQuestion(question);
+    assert.equal(request.module, module, question);
+    assert.notEqual(request.intent, 'audit_log', question);
+  }
 });
 
 test('does not reject activity history as an explicit Tasks module', async () => {
@@ -241,8 +271,9 @@ test('does not reject activity history as an explicit Tasks module', async () =>
   });
   const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
   await controller.assistant({ body: { conversation_id: 'activity-history-routing', question: "today's activity?" } }, response(), (error) => { throw error; });
-  assert.equal(captured.module, 'CRM');
-  assert.equal(captured.activity_type, 'ACTIVITY_HISTORY');
+  assert.equal(captured.module, null);
+  assert.equal(captured.intent, 'audit_log');
+  assert.equal(captured.request_type, 'audit_log');
 });
 
 test('routes today activity including tasks, calls, and meetings as one CRM activity request', async () => {

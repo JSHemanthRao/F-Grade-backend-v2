@@ -215,6 +215,79 @@ function isTodayActivityQuestion(lowerText) {
     || (/(?:today|toda)\b/.test(lowerText) && /(activity|activities|history|log|logs|audit)/.test(lowerText));
 }
 
+function isAuditLogQuestion(lowerText) {
+  if (/\b(?:what|who|which)\s+is\s+activity\b/.test(lowerText)) return false;
+  if (/\b(?:task|tasks|call|calls|meeting|meetings|event|events)\b/.test(lowerText)) return false;
+  return /\bactivity\b|\bactivities\b|\baudit\s+log|\baudit\s+trail|\bwhat changes?\b|\bwhat did\b|\bwhat was (?:added|updated|deleted)\b/.test(lowerText);
+}
+
+function buildAuditLogPlan(text, lowerText) {
+  const dateRange = detectAuditDateRange(lowerText);
+  const action = /\b(?:update|updated|updating|modify|modified|changed)\b/.test(lowerText)
+    ? 'Updated'
+    : /\b(?:add|added|create|created)\b/.test(lowerText)
+      ? 'Added'
+      : /\b(?:delete|deleted|remove|removed)\b/.test(lowerText) ? 'Deleted' : null;
+  const userMatch = text.match(/\b(?:what did|what activity did|activity done by|done by|performed by)\s+([a-z][a-z .'-]*?)(?=\s+(?:update|updated|add|added|delete|deleted|today|yesterday|this|last|on|in|between)\b|[?.!]|$)/i);
+  const entityMatch = lowerText.match(/\b(deal|deals|lead|leads|contact|contacts|account|accounts)\s+(?:activity|activities|changes?|updates?)\b/i);
+  return {
+    module: null,
+    intent: 'audit_log',
+    request_type: 'audit_log',
+    complexity: 'MODERATE',
+    fields: ['id'],
+    filters: [],
+    audit_log: {
+      date_range: dateRange,
+      user: userMatch ? { name: userMatch[1].trim(), id: null } : null,
+      action,
+      entity: entityMatch ? normalizeAuditEntity(entityMatch[1]) : null
+    },
+    date_range: dateRange,
+    limit: 200,
+    offset: 0,
+    original_question: text
+  };
+}
+
+function normalizeAuditEntity(value) {
+  const entities = { deal: 'Deals', deals: 'Deals', lead: 'Leads', leads: 'Leads', contact: 'Contacts', contacts: 'Contacts', account: 'Accounts', accounts: 'Accounts' };
+  return entities[String(value || '').toLowerCase()] || null;
+}
+
+function detectAuditDateRange(lowerText) {
+  const period = /\btodays\b/.test(lowerText) ? 'today' : relativePeriodFromText(lowerText);
+  if (period) return { ...resolveRelativePeriod(period), field: 'audited_time', field_type: 'datetime', end_operator: 'exclusive' };
+  const namedRange = lowerText.match(/between\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:,?\s+(20\d{2}))?\s+and\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:,?\s+(20\d{2}))?/i);
+  if (namedRange) {
+    const year = Number(namedRange[3] || new Date().getFullYear());
+    const endYear = Number(namedRange[6] || year);
+    const start = new Date(`${namedRange[1]} ${namedRange[2]}, ${year}`);
+    const end = new Date(`${namedRange[4]} ${namedRange[5]}, ${endYear}`);
+    end.setDate(end.getDate() + 1);
+    return auditDateRange(start, end);
+  }
+  const single = lowerText.match(/\b(?:on|from)\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:,?\s+(20\d{2}))?/i);
+  if (single) {
+    const date = new Date(`${single[1]} ${single[2]}, ${single[3] || new Date().getFullYear()}`);
+    return auditDateRange(date, new Date(date.getTime() + 86400000));
+  }
+  const weekday = lowerText.match(/\b(?:on\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+  if (weekday) {
+    const today = new Date();
+    const target = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].indexOf(weekday[1].toLowerCase());
+    const delta = (today.getDay() - target + 7) % 7;
+    const date = new Date(today);
+    date.setDate(today.getDate() - delta);
+    return auditDateRange(date, new Date(date.getTime() + 86400000));
+  }
+  return null;
+}
+
+function auditDateRange(start, end) {
+  return { field: 'audited_time', start: toIsoDate(start), end: toIsoDate(end), field_type: 'datetime', end_operator: 'exclusive', timezone: 'Asia/Kolkata' };
+}
+
 function detectActivityType(lowerText) {
   const hasHistoryIntent = /(activity|activities|history|log|logs|audit|what happened|what happened today|today's activity|today activity|daily activity|today's crm activity)/.test(lowerText);
   const hasScheduledIntent = /\b(?:meeting|meetings|event|events|call|calls|task|tasks)\b/.test(lowerText);
@@ -366,6 +439,7 @@ function planQuestion(question) {
   if (/\b(?:organization|organisation|org)\s+(?:details|information|info)\b/.test(lower)) {
     return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'organization' }, fields: ['id'], filters: [], limit: 20, offset: 0 };
   }
+  if (isAuditLogQuestion(lower)) return buildAuditLogPlan(text, lower);
   if (/\b(?:audit logs?|audit trail)\b/.test(lower)) {
     return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'audit_logs' }, audit: {}, fields: ['id'], filters: [], limit: 200, offset: 0 };
   }

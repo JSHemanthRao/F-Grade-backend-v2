@@ -16,6 +16,7 @@ const { selectRetrievalStrategy } = require('../query/retrievalStrategy');
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
     this.zohoService = zohoService;
+    this.auditLogService = zohoService.auditLogService || null;
   }
 
   async runDiagnostics() {
@@ -92,6 +93,11 @@ class CrmService {
       limit: input?.limit ?? null,
       offset: input?.offset ?? null
     });
+    if (input.intent === 'audit_log' || input.request_type === 'audit_log') {
+      const result = await this.queryAuditLog(input, diagnostics);
+      this.logExecution(executionId, startedAt, statsAtStart, 'audit_log');
+      return result;
+    }
     let normalizedInput = await this.resolveSemanticFields(input);
     updateDiagnostics(diagnostics, {
       resolved_module: normalizedInput?.module || diagnostics?.resolved_module,
@@ -273,6 +279,33 @@ class CrmService {
     };
     this.logExecution(executionId, startedAt, statsAtStart, request.request_type);
     return response;
+  }
+
+  async queryAuditLog(input) {
+    const audit = { ...(input.audit_log || {}) };
+    if (audit.user?.name && !audit.user.id && typeof this.zohoService.getUsers === 'function') {
+      const users = await this.zohoService.getUsers();
+      const wanted = audit.user.name.trim().toLowerCase();
+      const matches = users.filter((user) => [user.full_name, user.name, [user.first_name, user.last_name].filter(Boolean).join(' ')].some((name) => String(name || '').trim().toLowerCase() === wanted));
+      if (matches.length > 1) throw createAppError('CRM_USER_AMBIGUOUS', `More than one CRM user matches '${audit.user.name}'.`, 409, { name: audit.user.name });
+      if (matches.length === 0) throw createAppError('CRM_USER_NOT_FOUND', `No CRM user matches '${audit.user.name}'.`, 404, { name: audit.user.name });
+      audit.user = { name: audit.user.name, id: matches[0].id };
+    }
+    const service = this.auditLogService || this.zohoService;
+    if (typeof service.getAuditLogs !== 'function') throw createAppError('AUDIT_LOG_UNAVAILABLE', 'The CRM Audit Log service is not configured.', 501);
+    const result = await service.getAuditLogs({ ...audit, date_range: audit.date_range || input.date_range });
+    const records = Array.isArray(result?.records) ? result.records : [];
+    return {
+      intent: 'audit_log',
+      request_type: 'audit_log',
+      module: null,
+      audit_log: audit,
+      count: records.length,
+      returned: records.length,
+      records,
+      data: records,
+      pagination: { limit: input.limit, offset: input.offset, returned: records.length, more_records: Boolean(result?.info?.more_records) }
+    };
   }
 
   logExecution(executionId, startedAt, statsAtStart, operation) {

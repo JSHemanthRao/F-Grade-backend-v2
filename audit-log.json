@@ -1,0 +1,37 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Zoho CRM Audit Log Assistant",
+    "version": "1.0.0",
+    "description": "Natural-language access to CRM Audit Log activity. The backend resolves dates, users, actions, and entities."
+  },
+  "paths": {
+    "/api/crm/audit-log/assistant": {
+      "post": {
+        "operationId": "askCrmAuditLog",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["question"],
+                "properties": {
+                  "question": { "type": "string", "minLength": 1, "maxLength": 2000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Audit Log activity response." },
+          "400": { "description": "Invalid question." },
+          "401": { "description": "Unauthorized." },
+          "403": { "description": "Zoho Audit Log permission denied." },
+          "502": { "description": "Zoho Audit Log failure." }
+        }
+      }
+    }
+  }
+}

@@ -61,8 +61,9 @@ class CrmAssistantService {
       new_offset: plannedRequest.offset ?? plannedRequest.pagination?.offset ?? 0,
       stage: 'query_planned'
     });
+    const isAuditLogPlan = plannedRequest.intent === 'audit_log' || plannedRequest.request_type === 'audit_log';
     const isTodayActivityPlan = plannedRequest.module === 'CRM' && plannedRequest.analysis?.type === 'today_activity';
-    const explicitModule = isTodayActivityPlan
+    const explicitModule = isAuditLogPlan || isTodayActivityPlan
       ? null
       : continuationDetected && previous && !this.hasExplicitModuleIntent(question)
       ? null
