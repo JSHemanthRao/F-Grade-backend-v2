@@ -4,6 +4,7 @@ const { createCrmController, planQuestion } = require('../src/controllers/crm.co
 const { CrmService } = require('../src/services/crm.service');
 const { buildCoqlQuery } = require('../src/services/coql.service');
 const { createQueryIdentity } = require('../src/query/pagination');
+const { resolveRelativePeriod } = require('../src/utils/relativeDate');
 const { execFileSync } = require('node:child_process');
 
 function responseCapture() {
@@ -177,10 +178,12 @@ test('materializes assignment language as a metadata-typed user lookup across mo
 test('past month and last month remain typed date ranges with distinct semantics', () => {
   const past = planQuestion('Show all closed deals from the past month.');
   const last = planQuestion('Show all closed deals from last month.');
-  assert.deepEqual(past.filters[0].value, ['2026-08-18', '2026-09-18']);
+  const expectedPast = resolveRelativePeriod('past month');
+  const expectedLast = resolveRelativePeriod('last month');
+  assert.deepEqual(past.filters[0].value, [expectedPast.start, expectedPast.end]);
   assert.equal(past.filters[0].operator, 'between');
   assert.equal(past.filters[0].exclusive_end, true);
-  assert.deepEqual(last.filters[0].value, ['2026-08-01', '2026-09-01']);
+  assert.deepEqual(last.filters[0].value, [expectedLast.start, expectedLast.end]);
   assert.equal(last.filters[0].operator, 'between');
   assert.ok(Array.isArray(last.filters[0].value));
 });

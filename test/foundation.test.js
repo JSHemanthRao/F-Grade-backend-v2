@@ -704,8 +704,8 @@ test('Copilot schema treats conversion as an operation, not the invalid Converte
 
 test('OpenAPI exposes one assistant operation with optional conversation state', () => {
   const operation = openApi.paths['/api/crm/assistant'].post;
-  const request = openApi.components.schemas.AssistantRequest;
-  const response = openApi.components.schemas.CrmResponse;
+  const request = openApi.definitions.AssistantRequest;
+  const response = openApi.definitions.CrmResponse;
 
   assert.equal(operation.operationId, 'askCrmAssistant');
   assert.deepEqual(Object.keys(request.properties), ['question', 'conversation_id', 'continuation_token']);
@@ -714,7 +714,9 @@ test('OpenAPI exposes one assistant operation with optional conversation state',
   assert.equal(request.additionalProperties, false);
   assert.ok(Object.keys(response.properties).includes('module_api_name'));
   assert.equal(Object.keys(openApi.paths).length, 1);
-  assert.ok(openApi.components.securitySchemes.apiKeyAuth);
+  assert.equal(openApi.swagger, '2.0');
+  assert.equal(openApi.components, undefined);
+  assert.ok(openApi.securityDefinitions.api_key);
 });
 
 test('module-specific CRM routes remain unavailable', async () => {
