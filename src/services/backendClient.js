@@ -89,8 +89,8 @@ class BackendClient {
         timeout: this.config.backendRequestTimeoutMs || 15000
       });
 
-      if (response.data?.conversation_id) this.conversationId = response.data.conversation_id;
-      if (response.data?.continuation_token) this.continuationToken = response.data.continuation_token;
+      if (Object.prototype.hasOwnProperty.call(response.data || {}, 'conversation_id')) this.conversationId = response.data.conversation_id || null;
+      if (Object.prototype.hasOwnProperty.call(response.data || {}, 'continuation_token')) this.continuationToken = response.data.continuation_token || null;
 
       this.logDiagnostic('response', { method: 'POST', endpoint, status: response.status, durationMs: Date.now() - startedAt });
       return response.data;

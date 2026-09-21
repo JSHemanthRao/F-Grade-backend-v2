@@ -728,12 +728,15 @@ test('advances from the actual short page length instead of requested limit', as
   assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40, 47]);
 });
 
-test('does not require conversation_id when no continuation token is supplied', async () => {
+test('rejects pagination without continuation state instead of repeating the first page', async () => {
   const calls = [];
   const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, data: [], pagination: { limit: input.limit, offset: input.offset, returned: 0, more_records: true } }; } });
-  const response = () => ({ status: (code) => ({ json: (value) => ({ code, value }) }), json: (value) => value });
-  await controller.assistant({ body: { question: 'give me next 20 deals' }, get: () => null }, response(), (error) => { throw error; });
-  assert.equal(calls.length, 1);
+  let received;
+  const response = () => ({ status: (code) => ({ json: (value) => { received = { code, value }; return value; } }), json: (value) => { received = { code: 200, value }; return value; } });
+  await controller.assistant({ body: { question: 'give me next 20 deals' }, get: () => null }, response(), (error) => { received = { code: error.statusCode, value: { error: { code: error.code } } }; });
+  assert.equal(calls.length, 0);
+  assert.equal(received.code, 409);
+  assert.equal(received.value.error.code, 'PAGINATION_STATE_NOT_FOUND');
 });
 
 test('returns an empty page rather than repeating records when pagination is exhausted', async () => {

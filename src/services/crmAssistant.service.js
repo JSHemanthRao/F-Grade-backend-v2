@@ -40,9 +40,11 @@ class CrmAssistantService {
     const previous = tokenState || this.paginationManager.get(conversationId);
     const continuationRequested = this.paginationManager.isContinuation(question) || Boolean(previous && isPaginationAffirmation(question));
     const continuationDetected = Boolean(tokenState) || Boolean(previous && continuationRequested);
+    if (continuationRequested && !previous) {
+      throw createAppError('PAGINATION_STATE_NOT_FOUND', 'No previous CRM page is available. Pass the continuation_token from the previous CRM response.', 409);
+    }
     if (previous && isPaginationDecline(question)) return paginationTerminalResponse(previous, conversationId, question, 'Pagination stopped.');
     const detailsFollowUp = !continuationDetected && isDetailsFollowUp(question, previous);
-    if (continuationDetected && !previous && conversationId) throw createAppError('PAGINATION_STATE_NOT_FOUND', 'No previous CRM page is available for this conversation.', 409);
     if (continuationDetected && previous && previous.more_records === false) return paginationTerminalResponse(previous, conversationId, question, 'No more CRM records are available.');
 
     const resolvedQuestion = this.resolveFollowUpQuestion(question, previous);
