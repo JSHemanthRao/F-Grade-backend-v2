@@ -2,6 +2,7 @@ const { createAppError } = require('../utils/errors');
 const { createQueryIdentity, isPaginationAffirmation, isPaginationDecline } = require('../query/pagination');
 const { PaginationManager } = require('../pagination/paginationManager');
 const { updateDiagnostics, recordCrmEvent } = require('../utils/crmDiagnostics');
+const { createHash } = require('node:crypto');
 
 class CrmAssistantService {
   constructor({
@@ -32,15 +33,17 @@ class CrmAssistantService {
     this.diagnostics = diagnostics;
   }
 
-  async execute({ question, conversationId, diagnostics }) {
-    updateDiagnostics(diagnostics, { question, conversation_id_present: Boolean(conversationId), conversation_id: conversationId });
-    const previous = this.paginationManager.get(conversationId);
-    const continuationDetected = this.paginationManager.isContinuation(question) || Boolean(previous && isPaginationAffirmation(question));
+  async execute({ question, conversationId, continuationToken, diagnostics }) {
+    const tokenHash = continuationToken ? createHash('sha256').update(continuationToken).digest('hex') : null;
+    updateDiagnostics(diagnostics, { question, conversation_id_present: Boolean(conversationId), conversation_id: conversationId, continuation_token_hash: tokenHash });
+    const tokenState = continuationToken ? this.paginationManager.getByToken(continuationToken) : null;
+    const previous = tokenState || this.paginationManager.get(conversationId);
+    const continuationRequested = this.paginationManager.isContinuation(question) || Boolean(previous && isPaginationAffirmation(question));
+    const continuationDetected = Boolean(tokenState) || Boolean(previous && continuationRequested);
     if (previous && isPaginationDecline(question)) return paginationTerminalResponse(previous, conversationId, question, 'Pagination stopped.');
     const detailsFollowUp = !continuationDetected && isDetailsFollowUp(question, previous);
-    if (continuationDetected && !conversationId) throw createAppError('PAGINATION_CONVERSATION_REQUIRED', 'A stable conversation_id is required to continue pagination.', 409);
-    if (continuationDetected && !previous) throw createAppError('PAGINATION_STATE_NOT_FOUND', 'No previous CRM page is available for this conversation.', 409);
-    if (continuationDetected && previous.more_records === false) return paginationTerminalResponse(previous, conversationId, question, 'No more CRM records are available.');
+    if (continuationDetected && !previous && conversationId) throw createAppError('PAGINATION_STATE_NOT_FOUND', 'No previous CRM page is available for this conversation.', 409);
+    if (continuationDetected && previous && previous.more_records === false) return paginationTerminalResponse(previous, conversationId, question, 'No more CRM records are available.');
 
     const resolvedQuestion = this.resolveFollowUpQuestion(question, previous);
     const plannedRequest = continuationDetected
@@ -72,10 +75,11 @@ class CrmAssistantService {
 
     const result = await this.crmService.query(plannedRequest, undefined, diagnostics);
     const statePlan = mergeResolvedPlan(plannedRequest, result);
-    const state = this.paginationManager.save(conversationId, statePlan, result, diagnostics?.request_id, resolvedQuestion);
+    const state = this.paginationManager.save(conversationId, statePlan, result, diagnostics?.request_id, resolvedQuestion, continuationToken);
     const queryIdentity = createQueryIdentity(statePlan);
     recordCrmEvent('PAGINATION_STATE', diagnostics, {
       conversation_id: conversationId,
+      continuation_token_hash: state?.continuation_token ? hashToken(state.continuation_token) : null,
       query_identity: queryIdentity,
       module: plannedRequest.module || result.module || null,
       previous_offset: previous?.pagination?.offset ?? null,
@@ -112,10 +116,15 @@ class CrmAssistantService {
       result: this.stringifySummary(Object.assign({}, result)),
       answer,
       conversation_id: conversationId,
+      continuation_token: state?.continuation_token || null,
       question,
       pagination: state?.pagination || null
     };
   }
+}
+
+function hashToken(token) {
+  return token ? createHash('sha256').update(token).digest('hex') : null;
 }
 
 function paginationTerminalResponse(previous, conversationId, question, answer) {

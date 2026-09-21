@@ -83,15 +83,16 @@ function createCrmController(crmService = new CrmService()) {
           throw createAppError('QUESTION_TOO_LONG', `Question must not exceed ${MAX_QUESTION_LENGTH} characters.`, 400);
         }
         const providedConversationId = resolveConversationId(req);
+        const continuationToken = typeof req.body?.continuation_token === 'string' ? req.body.continuation_token.trim() : null;
         const conversationId = providedConversationId || (isPaginationContinuation(question) || isExplicitPageRequest(question) ? null : randomUUID());
         recordCrmEvent('CONVERSATION_RESOLVED', diagnostics, {
           conversation_id: conversationId,
           source: providedConversationId ? 'request' : 'server_generated',
           continuation: isPaginationContinuation(question) || isExplicitPageRequest(question)
         });
-        const executed = await assistantService.execute({ question, conversationId, diagnostics });
+        const executed = await assistantService.execute({ question, conversationId, continuationToken, diagnostics });
         const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
-        res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, conversation_id: conversationId, question, answer: executed.answer, diagnostics: publicDiagnostics, ...executed.result });
+        res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, conversation_id: conversationId, continuation_token: executed.continuation_token || null, question, answer: executed.answer, diagnostics: publicDiagnostics, ...executed.result });
         return;
         } catch (error) {
         diagnosticsFromError(error, diagnostics);

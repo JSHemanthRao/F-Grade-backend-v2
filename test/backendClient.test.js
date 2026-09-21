@@ -48,6 +48,26 @@ test('BackendClient reuses the backend conversation ID for pagination follow-ups
   ]);
 });
 
+test('BackendClient reuses and rotates continuation tokens', async () => {
+  const bodies = [];
+  let page = 0;
+  const client = new BackendClient({
+    post: async (_url, body) => {
+      bodies.push(body);
+      page += 1;
+      return { status: 200, data: { success: true, continuation_token: `token-${page}` } };
+    }
+  }, { backendApiUrl: 'https://example.test', backendApiPath: '/api/crm/assistant', backendRequestTimeoutMs: 1000, backendDiagnostics: false });
+  await client.ask('show me deals');
+  await client.ask('next 20');
+  await client.ask('next 20');
+  assert.deepEqual(bodies, [
+    { question: 'show me deals' },
+    { question: 'next 20', continuation_token: 'token-1' },
+    { question: 'next 20', continuation_token: 'token-2' }
+  ]);
+});
+
 test('BackendClient routes bare Quotes to Books Estimates without changing explicit CRM Quotes', async () => {
   let captured = null;
   const client = new BackendClient({ post: async (url, body) => { captured = { url, body }; return { status: 200, data: { success: true } }; } }, {

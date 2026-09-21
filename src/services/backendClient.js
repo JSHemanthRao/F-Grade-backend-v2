@@ -10,6 +10,7 @@ class BackendClient {
     this.httpClient = httpClient;
     this.config = config;
     this.conversationId = null;
+    this.continuationToken = null;
   }
 
   getEndpoint(question) {
@@ -80,8 +81,8 @@ class BackendClient {
     try {
       // If the caller provided a structured request, forward it directly to the backend
       const payload = isObject
-        ? { ...questionOrRequest, ...(questionOrRequest.conversation_id || questionOrRequest.conversationId ? {} : this.conversationId ? { conversation_id: this.conversationId } : {}) }
-        : { question: questionText, ...(this.conversationId ? { conversation_id: this.conversationId } : {}) };
+        ? { ...questionOrRequest, ...(questionOrRequest.continuation_token ? {} : this.continuationToken ? { continuation_token: this.continuationToken } : {}), ...(questionOrRequest.conversation_id || questionOrRequest.conversationId ? {} : this.conversationId ? { conversation_id: this.conversationId } : {}) }
+        : { question: questionText, ...(this.continuationToken ? { continuation_token: this.continuationToken } : {}), ...(this.conversationId ? { conversation_id: this.conversationId } : {}) };
       const response = await this.httpClient.post(endpoint, booksRequest || payload, {
         headers: this.buildHeaders(),
         signal: controller.signal,
@@ -89,6 +90,7 @@ class BackendClient {
       });
 
       if (response.data?.conversation_id) this.conversationId = response.data.conversation_id;
+      if (response.data?.continuation_token) this.continuationToken = response.data.continuation_token;
 
       this.logDiagnostic('response', { method: 'POST', endpoint, status: response.status, durationMs: Date.now() - startedAt });
       return response.data;

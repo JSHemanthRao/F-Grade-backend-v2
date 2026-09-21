@@ -425,6 +425,40 @@ test('runs three Leads pages with stable conversation state and distinct IDs', a
   assert.equal(new Set(responses.flatMap((responseBody) => responseBody.data.map((record) => record.id))).size, 60);
 });
 
+test('uses continuation tokens without requiring conversation_id and rotates them', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const offset = input.offset || 0;
+      return { module: input.module, request_type: input.request_type, data: Array.from({ length: 20 }, (_, index) => ({ id: `deal-${offset + index + 1} ` })), pagination: { limit: input.limit, offset, returned: 20, more_records: true } };
+    }
+  });
+  const responses = [];
+  const response = () => ({ status: () => ({ json: (value) => { responses.push(value); return value; } }), json: (value) => { responses.push(value); return value; } });
+  await controller.assistant({ body: { question: 'Show me the top 20 deals' } }, response(), (error) => { throw error; });
+  const firstToken = responses[0].continuation_token;
+  await controller.assistant({ body: { question: 'give me next 20 records', continuation_token: firstToken } }, response(), (error) => { throw error; });
+  const secondToken = responses[1].continuation_token;
+  await controller.assistant({ body: { question: 'give me next 20 records', continuation_token: secondToken } }, response(), (error) => { throw error; });
+  assert.ok(firstToken);
+  assert.ok(secondToken);
+  assert.notEqual(firstToken, secondToken);
+  assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40]);
+  assert.deepEqual(responses.map((item) => item.pagination.offset), [0, 20, 40]);
+});
+
+test('rejects an invalid continuation token before calling CRM', async () => {
+  let calls = 0;
+  const controller = createCrmController({ query: async () => { calls += 1; return { data: [] }; } });
+  let received;
+  const response = () => ({ status: (code) => ({ json: (value) => { received = { code, value }; return value; } }), json: (value) => { received = { code: 200, value }; return value; } });
+  await controller.assistant({ body: { question: 'next 20', continuation_token: 'invalid-token' } }, response(), (error) => { received = { code: error.statusCode, value: { error: { code: error.code } } }; });
+  assert.equal(received.code, 409);
+  assert.equal(received.value.error.code, 'PAGINATION_TOKEN_INVALID');
+  assert.equal(calls, 0);
+});
+
 test('paginates every supported record module through the same continuation path', async () => {
   const modules = ['Deals', 'Leads', 'Contacts', 'Accounts', 'Calls', 'Meetings', 'Tasks', 'Products', 'Quotes', 'SalesOrders', 'PurchaseOrders', 'Invoices'];
   const calls = [];
@@ -671,14 +705,12 @@ test('advances from the actual short page length instead of requested limit', as
   assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40, 47]);
 });
 
-test('requires stable conversation state for pagination continuations', async () => {
+test('does not require conversation_id when no continuation token is supplied', async () => {
   const calls = [];
   const controller = createCrmController({ query: async (input) => { calls.push(input); return { module: input.module, data: [], pagination: { limit: input.limit, offset: input.offset, returned: 0, more_records: true } }; } });
   const response = () => ({ status: (code) => ({ json: (value) => ({ code, value }) }), json: (value) => value });
-  let error;
-  await controller.assistant({ body: { question: 'give me next 20 deals' }, get: () => null }, response(), (received) => { error = received; });
-  assert.equal(error.code, 'PAGINATION_CONVERSATION_REQUIRED');
-  assert.equal(calls.length, 0);
+  await controller.assistant({ body: { question: 'give me next 20 deals' }, get: () => null }, response(), (error) => { throw error; });
+  assert.equal(calls.length, 1);
 });
 
 test('returns an empty page rather than repeating records when pagination is exhausted', async () => {
