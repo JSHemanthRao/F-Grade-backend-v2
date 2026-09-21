@@ -448,6 +448,29 @@ test('uses continuation tokens without requiring conversation_id and rotates the
   assert.deepEqual(responses.map((item) => item.pagination.offset), [0, 20, 40]);
 });
 
+test('continues Deals for the Copilot wording next 20 deals also', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const offset = input.offset || 0;
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        data: Array.from({ length: 20 }, (_, index) => ({ id: `deal-${offset + index + 1}` })),
+        pagination: { limit: input.limit, offset, returned: 20, more_records: true }
+      };
+    }
+  });
+  const responses = [];
+  const response = () => ({ status: () => ({ json: (value) => { responses.push(value); return value; } }), json: (value) => { responses.push(value); return value; } });
+
+  await controller.assistant({ body: { question: 'Show me the first 20 deals' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { question: 'give me next 20 deals also', continuation_token: responses[0].continuation_token } }, response(), (error) => { throw error; });
+
+  assert.deepEqual(calls.map((call) => [call.module, call.offset, call.limit]), [['Deals', 0, 20], ['Deals', 20, 20]]);
+});
+
 test('rejects an invalid continuation token before calling CRM', async () => {
   let calls = 0;
   const controller = createCrmController({ query: async () => { calls += 1; return { data: [] }; } });
