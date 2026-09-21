@@ -471,6 +471,26 @@ test('continues Deals for the Copilot wording next 20 deals also', async () => {
   assert.deepEqual(calls.map((call) => [call.module, call.offset, call.limit]), [['Deals', 0, 20], ['Deals', 20, 20]]);
 });
 
+test('uses a UUID sent in question as the prior conversation ID for connector follow-ups', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const offset = input.offset || 0;
+      return { module: input.module, request_type: input.request_type, data: Array.from({ length: 20 }, (_, index) => ({ id: `contact-${offset + index + 1}` })), pagination: { limit: input.limit, offset, returned: 20, more_records: true } };
+    }
+  });
+  const responses = [];
+  const response = () => ({ status: () => ({ json: (value) => { responses.push(value); return value; } }), json: (value) => { responses.push(value); return value; } });
+  const conversationId = 'bc644ec6-2e16-4db7-8dd3-5b3db89550ea';
+
+  await controller.assistant({ body: { conversation_id: conversationId, question: 'show me contacts' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { question: conversationId } }, response(), (error) => { throw error; });
+
+  assert.deepEqual(calls.map((call) => [call.module, call.offset]), [['Contacts', 0], ['Contacts', 20]]);
+  assert.equal(responses[1].conversation_id, conversationId);
+});
+
 test('rejects an invalid continuation token before calling CRM', async () => {
   let calls = 0;
   const controller = createCrmController({ query: async () => { calls += 1; return { data: [] }; } });

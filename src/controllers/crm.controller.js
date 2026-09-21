@@ -75,17 +75,16 @@ function createCrmController(crmService = new CrmService()) {
       recordCrmEvent('REQUEST_RECEIVED', diagnostics, { method: req.method, path: req.originalUrl });
       return runWithCrmDiagnostics(diagnostics, async () => {
        try {
-        const question = req.body?.question;
-        if (typeof question !== 'string' || question.trim().length === 0) {
+        const submittedQuestion = req.body?.question;
+        if (typeof submittedQuestion !== 'string' || submittedQuestion.trim().length === 0) {
           throw createAppError('QUESTION_REQUIRED', 'One of question, prompt, or message is required.', 400);
         }
-        if (isLikelyIdentifier(question)) {
-          throw createAppError('QUESTION_INVALID', 'question must contain the user\'s natural-language CRM request, not a conversation or request identifier.', 400, { received: 'identifier' });
-        }
+        const questionIsConversationId = isLikelyIdentifier(submittedQuestion);
+        const question = questionIsConversationId ? 'next page' : submittedQuestion;
         if (question.length > MAX_QUESTION_LENGTH) {
           throw createAppError('QUESTION_TOO_LONG', `Question must not exceed ${MAX_QUESTION_LENGTH} characters.`, 400);
         }
-        const providedConversationId = resolveConversationId(req);
+        const providedConversationId = resolveConversationId(req) || (questionIsConversationId ? submittedQuestion.trim() : null);
         const continuationToken = typeof req.body?.continuation_token === 'string' ? req.body.continuation_token.trim() : null;
         const conversationId = providedConversationId || (isPaginationContinuation(question) || isExplicitPageRequest(question) ? null : randomUUID());
         recordCrmEvent('CONVERSATION_RESOLVED', diagnostics, {
