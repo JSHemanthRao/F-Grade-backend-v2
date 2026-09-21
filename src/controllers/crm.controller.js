@@ -7,6 +7,8 @@ const { env } = require('../config/env');
 const { createCrmQueryPlanner } = require('../planners/crmQueryPlanner');
 const { CrmAssistantService } = require('../services/crmAssistant.service');
 const { PaginationManager } = require('../pagination/paginationManager');
+const { randomUUID } = require('node:crypto');
+const { isPaginationContinuation, isExplicitPageRequest } = require('../query/pagination');
 
 const MAX_QUESTION_LENGTH = 2000;
 
@@ -74,13 +76,14 @@ function createCrmController(crmService = new CrmService()) {
       return runWithCrmDiagnostics(diagnostics, async () => {
        try {
         const question = req.body?.question;
-        const conversationId = resolveConversationId(req);
         if (typeof question !== 'string' || question.trim().length === 0) {
           throw createAppError('QUESTION_REQUIRED', 'One of question, prompt, or message is required.', 400);
         }
         if (question.length > MAX_QUESTION_LENGTH) {
           throw createAppError('QUESTION_TOO_LONG', `Question must not exceed ${MAX_QUESTION_LENGTH} characters.`, 400);
         }
+        const providedConversationId = resolveConversationId(req);
+        const conversationId = providedConversationId || (isPaginationContinuation(question) || isExplicitPageRequest(question) ? null : randomUUID());
         const executed = await assistantService.execute({ question, conversationId, diagnostics });
         const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
         res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, conversation_id: conversationId, question, answer: executed.answer, diagnostics: publicDiagnostics, ...executed.result });

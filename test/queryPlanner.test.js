@@ -377,6 +377,26 @@ test('advances the exact module offset for next-page follow-ups', async () => {
   assert.equal(calls[1].offset, 10);
 });
 
+test('advances Leads for the natural-language next set follow-up', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const offset = input.offset || 0;
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        data: Array.from({ length: 20 }, (_, index) => ({ id: String(offset + index + 1) })),
+        pagination: { limit: input.limit, offset, returned: 20, more_records: true }
+      };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+  await controller.assistant({ body: { conversation_id: 'leads-pagination', question: 'give me leads' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'leads-pagination', question: 'give me next set of records' } }, response(), (error) => { throw error; });
+  assert.deepEqual(calls.map((call) => [call.module, call.offset, call.limit]), [['Leads', 0, 20], ['Leads', 20, 20]]);
+});
+
 test('paginates every supported record module through the same continuation path', async () => {
   const modules = ['Deals', 'Leads', 'Contacts', 'Accounts', 'Calls', 'Meetings', 'Tasks', 'Products', 'Quotes', 'SalesOrders', 'PurchaseOrders', 'Invoices'];
   const calls = [];

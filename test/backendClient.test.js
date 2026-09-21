@@ -25,6 +25,29 @@ test('BackendClient forwards the natural-language question to the configured ass
   assert.equal(calls[0][2].headers['Content-Type'], 'application/json');
 });
 
+test('BackendClient reuses the backend conversation ID for pagination follow-ups', async () => {
+  const bodies = [];
+  const client = new BackendClient({
+    post: async (_url, body) => {
+      bodies.push(body);
+      return { status: 200, data: { success: true, conversation_id: 'conversation-1' } };
+    }
+  }, {
+    backendApiUrl: 'https://example.test',
+    backendApiPath: '/api/crm/assistant',
+    backendRequestTimeoutMs: 1000,
+    backendDiagnostics: false
+  });
+
+  await client.ask('give me leads');
+  await client.ask('give me next set of records');
+
+  assert.deepEqual(bodies, [
+    { question: 'give me leads' },
+    { question: 'give me next set of records', conversation_id: 'conversation-1' }
+  ]);
+});
+
 test('BackendClient routes bare Quotes to Books Estimates without changing explicit CRM Quotes', async () => {
   let captured = null;
   const client = new BackendClient({ post: async (url, body) => { captured = { url, body }; return { status: 200, data: { success: true } }; } }, {
