@@ -94,7 +94,7 @@ function createCrmController(crmService = new CrmService()) {
         });
         const executed = await assistantService.execute({ question, conversationId, continuationToken, diagnostics });
         const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
-        res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, conversation_id: conversationId, continuation_token: executed.continuation_token || null, question, answer: executed.answer, diagnostics: publicDiagnostics, ...executed.result });
+        res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, conversation_id: conversationId, continuation_token: executed.continuation_token || '', question, answer: executed.answer, diagnostics: publicDiagnostics, ...executed.result });
         return;
         } catch (error) {
         diagnosticsFromError(error, diagnostics);

@@ -35,7 +35,7 @@
         "operationId": "askCrmAssistant",
         "summary": "Ask Zoho CRM",
         "x-ms-summary": "Ask Zoho CRM",
-        "description": "Pass the user's complete original natural-language CRM request exactly as written. Do not rewrite, summarize, translate, interpret, construct structured CRM parameters, calculate pagination, or construct COQL. For the first request, send the user's original question only. For pagination follow-ups, pass the exact continuation_token returned by the previous CRM response. Never invent, modify, decode, or calculate it.",
+        "description": "Pass the user's complete original natural-language CRM request exactly as written in question. For example: 'give me next 20 contacts'. Never map a conversation ID, request ID, activity ID, UUID, module, fields, filters, limit, or offset into question. For pagination follow-ups, pass the exact continuation_token returned by the previous CRM response. Never invent, modify, decode, or calculate the token. The backend owns module resolution, query planning, filtering, sorting, and offsets.",
         "security": [
           {
             "api_key": []
@@ -138,6 +138,8 @@
         "request_id",
         "question",
         "answer",
+        "conversation_id",
+        "continuation_token",
         "module",
         "module_api_name",
         "request_type",
@@ -158,9 +160,13 @@
           "type": "string",
           "description": "Backend request identifier for tracing and diagnostics."
         },
+        "conversation_id": {
+          "type": "string",
+          "description": "Backend-owned conversation state identifier. Pass this exact value back as conversation_id on follow-up requests when continuation_token is unavailable. Never generate or modify it."
+        },
         "continuation_token": {
           "type": "string",
-          "description": "Opaque backend-generated token used to continue the current CRM query. For pagination follow-ups, pass this exact value back to the backend. Never generate, modify, decode, or calculate this value."
+          "description": "Opaque backend-generated token used to continue the current CRM query. Always pass this exact value back as continuation_token for pagination follow-ups. Never generate, modify, decode, or calculate this value. An empty string means no further page is available."
         },
         "question": {
           "type": "string",

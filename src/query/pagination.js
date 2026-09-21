@@ -30,9 +30,16 @@ function extractPageNumber(text) {
 
 function advancePagination(previousState, originalQuestion, priorPlan) {
   const previousPagination = previousState?.pagination || {};
-  const previousOffset = integerOr(previousPagination.offset, 0);
-  const previousReturned = integerOr(previousPagination.returned, 0);
-  const previousLimit = clampLimit(integerOr(previousPagination.limit, priorPlan?.limit || DEFAULT_LIMIT));
+  const previousOffset = integerOr(previousPagination.offset ?? previousState?.last_offset, 0);
+  const previousReturned = integerOr(previousPagination.returned ?? previousState?.last_returned, 0);
+  const previousLimit = clampLimit(integerOr(previousPagination.limit ?? previousState?.last_limit, priorPlan?.limit || DEFAULT_LIMIT));
+  if (previousReturned === 0 && !isExplicitPageRequest(originalQuestion)) {
+    const error = new Error('The previous CRM page contained no records, so the next page cannot advance.');
+    error.code = 'PAGINATION_NO_PROGRESS';
+    error.statusCode = 409;
+    error.details = { previous_offset: previousOffset, previous_returned: previousReturned };
+    throw error;
+  }
   const requestedLimit = extractPageSize(originalQuestion) || previousLimit;
   const offset = isExplicitPageRequest(originalQuestion)
     ? Math.max(0, (extractPageNumber(originalQuestion) - 1) * requestedLimit)
