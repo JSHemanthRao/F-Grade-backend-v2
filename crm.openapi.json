@@ -3,18 +3,32 @@
   "info": {
     "title": "Zoho CRM Structured Query Assistant",
     "version": "1.0.0",
-    "description": "Read-only structured JSON access to live Zoho CRM data. Copilot Studio must translate natural language into the versioned CRM JSON request contract and send pagination as offset plus limit. No continuation token, conversation ID, Redis token, or internal state ID is required for normal pagination.",
-    "x-copilot-studio-tool-description": "Use this read-only tool only for live Zoho CRM questions. Always send a complete structured JSON request. For an initial records request, set pagination.offset to 0 and pagination.limit to the requested page size or 20. For continuation requests such as next, next 20, next page, show more, or continue, preserve the previous module, fields, filters, sort, grouping, and query semantics exactly. Only change pagination. For next, reuse the previous limit. For next N, set limit to N. Set offset from the previous response pagination.next_offset. Never restart at offset 0 for a continuation. Never use continuation_token. Never use conversation_id for pagination. Never ask the user for pagination state. Never invent filters or sorting during continuation. Always include deterministic sort for offset pagination; the backend also adds id desc when needed."
+    "description": "Read-only structured JSON access to live Zoho CRM data. The API accepts one complete CRM request object. Backend logic applies deterministic sorting and stateless offset/limit pagination; users do not provide continuation tokens, conversation IDs, or internal pagination state.",
+    "x-copilot-studio-tool-description": "Executes a complete structured JSON request for Zoho CRM. Accepts one CRM request containing the module, operation, filters, fields, deterministic sorting, and stateless limit/offset pagination. For continuation requests, preserve the previous query and advance only pagination. Never request continuation tokens, conversation IDs, offsets, or sort fields from the user unless the user explicitly requests a custom sort or page size. Never use continuation_token. Never use conversation_id for pagination. Always use pagination.next_offset to advance offset for continuation, never reset to 0."
   },
   "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",
-  "schemes": ["https"],
-  "consumes": ["application/json"],
-  "produces": ["application/json"],
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
   "securityDefinitions": {
-    "api_key": { "type": "apiKey", "in": "header", "name": "x-api-key" }
+    "api_key": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "x-api-key"
+    }
   },
-  "security": [{ "api_key": [] }],
+  "security": [
+    {
+      "api_key": []
+    }
+  ],
   "paths": {
     "/api/crm/assistant": {
       "post": {
@@ -22,23 +36,71 @@
         "summary": "Ask Zoho CRM",
         "x-ms-summary": "Ask Zoho CRM",
         "description": "Executes a complete structured CRM JSON request. Pagination is stateless and uses pagination.offset plus pagination.limit.",
-        "security": [{ "api_key": [] }],
-        "parameters": [{
-          "in": "body",
-          "name": "body",
-          "required": true,
-          "description": "Versioned structured CRM JSON request.",
-          "schema": { "$ref": "#/definitions/StructuredCrmRequest" }
-        }],
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "description": "Versioned structured CRM JSON request.",
+            "schema": {
+              "$ref": "#/definitions/StructuredCrmRequest"
+            }
+          }
+        ],
         "responses": {
-          "200": { "description": "Successful CRM response.", "schema": { "$ref": "#/definitions/StructuredCrmResponse" } },
-          "400": { "description": "Invalid CRM request.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
-          "401": { "description": "Missing or invalid API key.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
-          "403": { "description": "Access denied by the CRM provider.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
-          "409": { "description": "Query context or pagination conflict.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
-          "429": { "description": "Rate limit exceeded.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
-          "500": { "description": "Unexpected backend error.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
-          "502": { "description": "Upstream CRM or dependency failure.", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+          "200": {
+            "description": "Successful CRM response.",
+            "schema": {
+              "$ref": "#/definitions/StructuredCrmResponse"
+            }
+          },
+          "400": {
+            "description": "Invalid CRM request.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "403": {
+            "description": "Access denied by the CRM provider.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Query context or pagination conflict.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Unexpected backend error.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "502": {
+            "description": "Upstream CRM or dependency failure.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
         }
       }
     }
@@ -47,136 +109,322 @@
     "StructuredCrmRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "request", "query", "pagination"],
+      "required": [
+        "request"
+      ],
       "properties": {
-        "schema_version": { "type": "string", "enum": ["1.0"] },
-        "request": { "$ref": "#/definitions/RequestDescriptor" },
-        "query": { "$ref": "#/definitions/QueryDescriptor" },
-        "pagination": { "$ref": "#/definitions/PaginationRequest" },
-        "query_context": { "$ref": "#/definitions/QueryContext" }
+        "request": {
+          "$ref": "#/definitions/RequestDescriptor"
+        }
       }
     },
     "RequestDescriptor": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["module", "operation"],
+      "required": [
+        "module",
+        "operation",
+        "query",
+        "pagination"
+      ],
       "properties": {
-        "module": { "type": "string", "description": "CRM module such as Deals, Leads, Contacts, Accounts, Calls, Meetings, Tasks, Products, Quotes, Sales Orders, Purchase Orders, or Invoices." },
-        "operation": { "type": "string", "enum": ["list", "count"] }
+        "module": {
+          "type": "string",
+          "description": "CRM module. This tool is CRM-only and allows Zoho CRM modules only."
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "list",
+            "count"
+          ],
+          "description": "The CRM operation to execute."
+        },
+        "query": {
+          "$ref": "#/definitions/QueryDescriptor"
+        },
+        "pagination": {
+          "$ref": "#/definitions/PaginationRequest"
+        },
+        "query_context": {
+          "$ref": "#/definitions/QueryContext"
+        }
       }
     },
     "QueryDescriptor": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["fields", "filters", "sort"],
       "properties": {
-        "fields": { "type": "array", "items": { "type": "string" }, "description": "Zoho CRM API field names to return." },
-        "filters": { "type": "object", "additionalProperties": { "$ref": "#/definitions/FilterDescriptor" }, "description": "Object keyed by field API name. Semantic date operators such as this_month are allowed." },
-        "sort": { "type": "array", "items": { "$ref": "#/definitions/SortDescriptor" }, "description": "Stable sort list. Include id desc as a tie-breaker when possible." },
-        "grouping": { "type": "string" }
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Zoho CRM API field names to return."
+        },
+        "filters": {
+          "type": "object",
+          "description": "Object keyed by field API name. Semantic date operators such as this_month are allowed.",
+          "additionalProperties": true
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SortDescriptor"
+          },
+          "description": "Deterministic stable sort list. If omitted, the backend applies Created_Time desc then id desc."
+        }
       }
     },
     "FilterDescriptor": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operator"],
+      "required": [
+        "operator"
+      ],
       "properties": {
-        "operator": { "type": "string", "description": "CRM filter operator such as equals, between, greater_than, less_than, is_not_null, or semantic date operators such as this_month." },
-        "value": { "description": "Required for value-based operators." }
+        "operator": {
+          "type": "string",
+          "description": "CRM filter operator such as equals, between, greater_than, less_than, is_not_null, or semantic date operators such as this_month."
+        },
+        "value": {
+          "description": "Required for value-based operators."
+        }
       }
     },
     "SortDescriptor": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["field", "order"],
+      "required": [
+        "field",
+        "order"
+      ],
       "properties": {
-        "field": { "type": "string" },
-        "order": { "type": "string", "enum": ["asc", "desc"] }
+        "field": {
+          "type": "string"
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        }
       }
     },
     "PaginationRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["limit", "offset"],
+      "required": [
+        "limit",
+        "offset"
+      ],
       "properties": {
-        "limit": { "type": "integer", "format": "int32", "minimum": 1, "maximum": 200, "default": 20 },
-        "offset": { "type": "integer", "format": "int32", "minimum": 0, "default": 0 }
+        "limit": {
+          "type": "integer",
+          "format": "int32",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 20
+        },
+        "offset": {
+          "type": "integer",
+          "format": "int32",
+          "minimum": 0,
+          "default": 0
+        }
       }
     },
     "QueryContext": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "fingerprint": { "type": "string", "description": "Optional deterministic query fingerprint from the previous response. This is an integrity check, not a continuation token." }
+        "fingerprint": {
+          "type": "string",
+          "description": "Optional deterministic query fingerprint from the previous response. This is an integrity check, not a continuation token."
+        }
       }
     },
     "StructuredCrmResponse": {
       "type": "object",
-      "required": ["success", "status", "request_id", "request", "data", "pagination", "query"],
+      "required": [
+        "success",
+        "status",
+        "request_id",
+        "request",
+        "data",
+        "pagination",
+        "query"
+      ],
       "properties": {
-        "success": { "type": "boolean" },
-        "status": { "type": "string" },
-        "request_id": { "type": "string" },
-        "request": { "$ref": "#/definitions/ResponseRequestDescriptor" },
-        "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-        "records": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-        "pagination": { "$ref": "#/definitions/PaginationResponse" },
-        "page": { "$ref": "#/definitions/PageDescriptor" },
-        "query": { "$ref": "#/definitions/ResponseQueryDescriptor" }
+        "success": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/definitions/ResponseRequestDescriptor"
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "pagination": {
+          "$ref": "#/definitions/PaginationResponse"
+        },
+        "page": {
+          "$ref": "#/definitions/PageDescriptor"
+        },
+        "query": {
+          "$ref": "#/definitions/ResponseQueryDescriptor"
+        }
       }
     },
     "ResponseRequestDescriptor": {
       "type": "object",
       "properties": {
-        "module": { "type": "string" },
-        "module_api_name": { "type": "string" },
-        "operation": { "type": "string" }
+        "module": {
+          "type": "string"
+        },
+        "module_api_name": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        }
       }
     },
     "PaginationResponse": {
       "type": "object",
-      "required": ["offset", "limit", "returned", "next_offset", "has_more"],
+      "required": [
+        "offset",
+        "limit",
+        "returned",
+        "next_offset",
+        "has_more"
+      ],
       "properties": {
-        "offset": { "type": "integer", "format": "int32" },
-        "limit": { "type": "integer", "format": "int32" },
-        "returned": { "type": "integer", "format": "int32" },
-        "next_offset": { "type": "integer", "format": "int32", "x-nullable": true },
-        "has_more": { "type": "boolean" }
+        "offset": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "limit": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "returned": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "next_offset": {
+          "type": "integer",
+          "format": "int32",
+          "x-nullable": true
+        },
+        "has_more": {
+          "type": "boolean"
+        }
       }
     },
     "PageDescriptor": {
       "type": "object",
       "properties": {
-        "number": { "type": "integer", "format": "int32" }
+        "number": {
+          "type": "integer",
+          "format": "int32"
+        }
       }
     },
     "ResponseQueryDescriptor": {
       "type": "object",
-      "required": ["fingerprint"],
+      "required": [
+        "fingerprint"
+      ],
       "properties": {
-        "fingerprint": { "type": "string" },
-        "fields": { "type": "array", "items": { "type": "string" } },
-        "filters": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-        "sort": { "type": "array", "items": { "$ref": "#/definitions/SortDescriptor" } }
+        "fingerprint": {
+          "type": "string"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SortDescriptor"
+          }
+        }
       }
     },
     "ErrorResponse": {
       "type": "object",
-      "required": ["success", "status", "request_id", "error"],
+      "required": [
+        "success",
+        "status",
+        "request_id",
+        "error"
+      ],
       "properties": {
-        "success": { "type": "boolean", "enum": [false] },
-        "status": { "type": "string", "enum": ["error"] },
-        "request_id": { "type": "string" },
-        "error": { "$ref": "#/definitions/ErrorDetail" }
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "error"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "error": {
+          "$ref": "#/definitions/ErrorDetail"
+        }
       }
     },
     "ErrorDetail": {
       "type": "object",
-      "required": ["code", "message"],
+      "required": [
+        "code",
+        "message"
+      ],
       "properties": {
-        "code": { "type": "string" },
-        "message": { "type": "string" },
-        "details": { "type": "object", "additionalProperties": true }
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true
+        }
       }
     }
   }

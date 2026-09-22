@@ -83,6 +83,31 @@ test('structured CRM request validates optional query fingerprint continuity', (
   );
 });
 
+test('single nested CRM request object is the canonical schema contract', () => {
+  const body = {
+    schema_version: '1.0',
+    request: {
+      module: 'Deals',
+      operation: 'list',
+      query: {
+        fields: [],
+        filters: { Created_Time: { operator: 'this_month' } },
+        sort: [
+          { field: 'Created_Time', order: 'desc' },
+          { field: 'id', order: 'desc' }
+        ]
+      },
+      pagination: { limit: 20, offset: 0 }
+    }
+  };
+
+  const normalized = normalizeStructuredCrmRequest(body);
+  assert.equal(normalized.plan.module, 'Deals');
+  assert.equal(normalized.plan.offset, 0);
+  assert.equal(normalized.plan.limit, 20);
+  assert.deepEqual(normalized.plan.sort.map((item) => [item.field, item.order]), [['Created_Time', 'desc'], ['id', 'desc']]);
+});
+
 test('pagination engine advances from actual returned count for short pages and limit changes', () => {
   const engine = new PaginationEngine();
   assert.deepEqual(engine.buildPaginationMetadata({ offset: 0, limit: 20, returned: 13, hasMore: true }), {

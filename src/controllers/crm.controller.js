@@ -167,7 +167,11 @@ function createCrmController(crmService = new CrmService()) {
 }
 
 function isStructuredCrmJson(body) {
-  return body?.schema_version === '1.0' && body?.request && body?.query;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  if (body.schema_version === '1.0' && body.request && typeof body.request === 'object') {
+    return Boolean(body.request.module || body.request.operation || body.request.query || body.request.pagination);
+  }
+  return Boolean(body.request && typeof body.request === 'object' && (body.request.query || body.request.pagination || body.request.module || body.request.operation));
 }
 
 async function executeStructuredCrmJson(body, crmService, diagnostics, paginationEngine) {

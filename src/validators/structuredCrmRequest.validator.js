@@ -7,7 +7,7 @@ const { ensureStableSort } = require('../coql/coqlBuilder');
 
 const SUPPORTED_SCHEMA_VERSION = '1.0';
 const ALLOWED_TOP_LEVEL_KEYS = new Set(['schema_version', 'request', 'query', 'pagination', 'query_context']);
-const ALLOWED_REQUEST_KEYS = new Set(['module', 'operation']);
+const ALLOWED_REQUEST_KEYS = new Set(['module', 'operation', 'query', 'pagination', 'query_context']);
 const ALLOWED_QUERY_KEYS = new Set(['fields', 'filters', 'sort', 'grouping']);
 const ALLOWED_PAGINATION_KEYS = new Set(['limit', 'offset']);
 const ALLOWED_QUERY_CONTEXT_KEYS = new Set(['fingerprint']);
@@ -23,33 +23,45 @@ function normalizeStructuredCrmRequest(body, { paginationEngine = new Pagination
     throw validationError([{ path: 'body', message: 'Request body must be a JSON object.' }]);
   }
 
+  const requestBody = isPlainObject(body.request) ? body.request : {};
+  const legacyQuery = isPlainObject(body.query) ? body.query : {};
+  const legacyPagination = isPlainObject(body.pagination) ? body.pagination : {};
+  const legacyQueryContext = isPlainObject(body.query_context) ? body.query_context : {};
+  const requestQuery = requestBody.query ?? legacyQuery;
+  const requestPagination = requestBody.pagination ?? legacyPagination;
+  const requestQueryContext = requestBody.query_context ?? legacyQueryContext;
+  const moduleValue = requestBody.module ?? body.module;
+  const operationValue = requestBody.operation ?? body.operation;
+
   rejectUnknownKeys(body, ALLOWED_TOP_LEVEL_KEYS, '', addError);
-  if (body.schema_version !== SUPPORTED_SCHEMA_VERSION) addError('schema_version', `schema_version must be ${SUPPORTED_SCHEMA_VERSION}.`);
-  if (!isPlainObject(body.request)) addError('request', 'request must be an object.');
-  if (!isPlainObject(body.query)) addError('query', 'query must be an object.');
-  if (body.pagination !== undefined && !isPlainObject(body.pagination)) addError('pagination', 'pagination must be an object.');
-  if (body.query_context !== undefined && !isPlainObject(body.query_context)) addError('query_context', 'query_context must be an object.');
+  if (body.schema_version !== undefined && body.schema_version !== SUPPORTED_SCHEMA_VERSION) addError('schema_version', `schema_version must be ${SUPPORTED_SCHEMA_VERSION}.`);
+  if (!isPlainObject(requestBody) && (!body.query || !isPlainObject(body.query)) && (!body.pagination || !isPlainObject(body.pagination))) {
+    addError('request', 'request must be an object.');
+  }
+  if (requestQuery !== undefined && !isPlainObject(requestQuery)) addError('request.query', 'query must be an object.');
+  if (requestPagination !== undefined && !isPlainObject(requestPagination)) addError('request.pagination', 'pagination must be an object.');
+  if (requestQueryContext !== undefined && !isPlainObject(requestQueryContext)) addError('request.query_context', 'query_context must be an object.');
   if (errors.length > 0) throw validationError(errors);
 
-  rejectUnknownKeys(body.request, ALLOWED_REQUEST_KEYS, 'request', addError);
-  rejectUnknownKeys(body.query, ALLOWED_QUERY_KEYS, 'query', addError);
-  rejectUnknownKeys(body.pagination || {}, ALLOWED_PAGINATION_KEYS, 'pagination', addError);
-  rejectUnknownKeys(body.query_context || {}, ALLOWED_QUERY_CONTEXT_KEYS, 'query_context', addError);
+  rejectUnknownKeys(requestBody, ALLOWED_REQUEST_KEYS, 'request', addError);
+  rejectUnknownKeys(requestQuery || {}, ALLOWED_QUERY_KEYS, 'request.query', addError);
+  rejectUnknownKeys(requestPagination || {}, ALLOWED_PAGINATION_KEYS, 'request.pagination', addError);
+  rejectUnknownKeys(requestQueryContext || {}, ALLOWED_QUERY_CONTEXT_KEYS, 'request.query_context', addError);
 
-  const module = normalizeModule(body.request.module);
-  const operation = body.request.operation;
+  const module = normalizeModule(moduleValue);
+  const operation = operationValue;
   if (!module) addError('request.module', 'module must be a supported CRM module string.');
   if (!['list', 'count'].includes(operation)) addError('request.operation', 'operation must be list or count.');
 
-  const fields = normalizeFields(body.query.fields, addError);
-  const filters = normalizeFilters(body.query.filters, addError);
-  const sort = normalizeSort(body.query.sort, addError);
-  const grouping = body.query.grouping;
+  const fields = normalizeFields(requestQuery.fields, addError);
+  const filters = normalizeFilters(requestQuery.filters, addError);
+  const sort = normalizeSort(requestQuery.sort, addError);
+  const grouping = requestQuery.grouping;
   if (grouping !== undefined && typeof grouping !== 'string') addError('query.grouping', 'grouping must be a string when provided.');
 
   let pagination;
   try {
-    pagination = paginationEngine.normalizePagination(body.pagination || {});
+    pagination = paginationEngine.normalizePagination(requestPagination || {});
   } catch (error) {
     throw error;
   }
@@ -65,7 +77,7 @@ function normalizeStructuredCrmRequest(body, { paginationEngine = new Pagination
     grouping: grouping || null
   };
   const fingerprint = createQueryFingerprint(logicalQuery);
-  paginationEngine.validateQueryContinuity(logicalQuery, body.query_context || {});
+  paginationEngine.validateQueryContinuity(logicalQuery, requestQueryContext || {});
 
   return {
     schema_version: SUPPORTED_SCHEMA_VERSION,
@@ -94,8 +106,9 @@ function normalizeModule(value) {
 }
 
 function normalizeFields(value, addError) {
-  if (!Array.isArray(value) || value.length === 0) {
-    addError('query.fields', 'fields must be a non-empty array.');
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    addError('query.fields', 'fields must be an array.');
     return [];
   }
   return value.map((field, index) => {

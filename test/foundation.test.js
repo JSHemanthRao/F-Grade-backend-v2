@@ -702,17 +702,19 @@ test('Copilot schema keeps conversion guidance out of structured field lists', (
   assert.equal(openApi.info['x-copilot-studio-field-mappings'], undefined);
 });
 
-test('OpenAPI exposes one assistant operation with structured JSON pagination', () => {
+test('OpenAPI exposes one assistant operation with a single nested CRM request contract', () => {
   const operation = openApi.paths['/api/crm/assistant'].post;
   const request = openApi.definitions.StructuredCrmRequest;
   const response = openApi.definitions.StructuredCrmResponse;
 
   assert.equal(operation.operationId, 'askCrmAssistant');
-  assert.deepEqual(Object.keys(request.properties), ['schema_version', 'request', 'query', 'pagination', 'query_context']);
-  assert.deepEqual(request.required, ['schema_version', 'request', 'query', 'pagination']);
+  assert.deepEqual(Object.keys(request.properties), ['request']);
+  assert.deepEqual(request.required, ['request']);
   assert.equal(request.additionalProperties, false);
   assert.ok(Object.keys(response.properties).includes('query'));
   assert.ok(Object.keys(response.properties).includes('pagination'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(request.properties, 'query'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(request.properties, 'pagination'));
   assert.ok(!Object.prototype.hasOwnProperty.call(request.properties, 'continuation_token'));
   assert.ok(!Object.prototype.hasOwnProperty.call(request.properties, 'conversation_id'));
   assert.ok(!Object.prototype.hasOwnProperty.call(response.properties, 'continuation_token'));
