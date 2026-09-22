@@ -4,7 +4,7 @@
     "title": "Zoho CRM Natural Language Assistant",
     "version": "1.0.0",
     "description": "Read-only natural-language access to live Zoho CRM data. The backend resolves module, metadata, field names, dates, filters, sorting, aggregation, comparisons, relationships, activities, pagination, and continuation. The user sends only a natural-language CRM question and the backend owns all planning and token management.",
-    "x-copilot-studio-tool-description": "Use this read-only tool only for live Zoho CRM questions. FIRST REQUEST: Send the user's complete original CRM question in question. Do not create a continuation_token. PAGINATION FOLLOW-UP: When the user asks next 20, next 10, next 50, next page, next batch, show more, continue, another 20, page 2, or page 3, and a previous CRM response contains continuation_token, pass the exact continuation_token from that response. Never generate a token. Never modify a token. Never calculate an offset. Never construct COQL. Never construct module names. Never construct field API names. Never emit a Leads field named Converted. Conversion questions must remain natural language, and the backend owns pagination and query planning."
+    "x-copilot-studio-tool-description": "Use this read-only tool only for live Zoho CRM questions. INITIAL REQUEST: Send the user's complete original CRM question in question, for example {question: 'give me deals created this month'}. Do not send continuation_token or conversation_id for a new query. IMPORTANT PAGINATION STATE RULE: Every successful CRM response may contain conversation_id and continuation_token. You MUST preserve both values. For the user's next pagination request, if continuation_token is present in the immediately previous response, you MUST pass that exact unchanged continuation_token back to this tool. You MUST also pass the exact unchanged conversation_id returned by the previous response when available. Example: first call {question: 'give me deals created this month'}; previous response {conversation_id: 'abc', continuation_token: 'xyz'}; user says 'yes, fetch the next set'; second call MUST be {question: 'yes, fetch the next set', conversation_id: 'abc', continuation_token: 'xyz'}. Never generate a token. Never modify it. Never decode it. Never calculate offsets. Never replace it with a conversation ID. Never call this tool for a pagination follow-up without passing the previous pagination state when that state exists. Do not reconstruct filters or create a new CRM query for a pagination continuation. Never emit a Leads field named Converted. Conversion questions must remain natural language. The backend owns pagination, query planning, filters, sorting, offsets, and COQL."
   },
   "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",
@@ -35,7 +35,7 @@
         "operationId": "askCrmAssistant",
         "summary": "Ask Zoho CRM",
         "x-ms-summary": "Ask Zoho CRM",
-        "description": "Pass the user's complete original natural-language CRM request exactly as written in question. For example: 'give me next 20 contacts'. Never map a conversation ID, request ID, activity ID, UUID, module, fields, filters, limit, or offset into question. For pagination follow-ups, pass only the exact continuation_token returned by the previous CRM response. Never invent, modify, decode, or calculate the token. The backend owns all state, module resolution, query planning, filtering, sorting, and offsets.",
+        "description": "Pass the user's complete original natural-language CRM request exactly as written in question. For example: 'give me next 20 contacts'. Never map a conversation ID, request ID, activity ID, UUID, module, fields, filters, limit, or offset into question. For pagination follow-ups, pass the exact continuation_token and conversation_id returned by the immediately previous CRM response when available. Never invent, modify, decode, replace, or calculate either value. The backend owns all state, module resolution, query planning, filtering, sorting, and offsets.",
         "security": [
           {
             "api_key": []
@@ -123,6 +123,11 @@
           "type": "string",
           "minLength": 1,
           "description": "Optional for a new query. For pagination follow-ups, pass the exact continuation_token returned by the previous CRM response. Never invent, modify, decode, or calculate it."
+        },
+        "conversation_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional for a new query. For pagination follow-ups, pass the exact conversation_id returned by the previous CRM response unchanged when available. The continuation_token remains the primary pagination cursor."
         }
       }
     },
@@ -132,6 +137,7 @@
         "success",
         "status",
         "request_id",
+        "conversation_id",
         "question",
         "answer",
         "continuation_token",
@@ -158,6 +164,10 @@
         "continuation_token": {
           "type": "string",
           "description": "Opaque backend-generated token used to continue the current CRM query. Always pass this exact value back as continuation_token for pagination follow-ups. Never generate, modify, decode, or calculate this value. An empty string means no further page is available."
+        },
+        "conversation_id": {
+          "type": "string",
+          "description": "Backend-generated conversation identifier. Preserve this value and send it unchanged on subsequent CRM pagination requests."
         },
         "question": {
           "type": "string",

@@ -2,12 +2,12 @@ const { CrmService } = require('../services/crm.service');
 const { createAppError } = require('../utils/errors');
 const { CRM_API_NAMES, CRM_MODULES } = require('../constants/crmModules');
 const { resolveRelativePeriod, relativePeriodFromText } = require('../utils/relativeDate');
-const { createCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, diagnosticsFromError, publicCrmDiagnostics } = require('../utils/crmDiagnostics');
+const { createCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, diagnosticsFromError, publicCrmDiagnostics, updateDiagnostics } = require('../utils/crmDiagnostics');
 const { env } = require('../config/env');
 const { createCrmQueryPlanner } = require('../planners/crmQueryPlanner');
 const { CrmAssistantService } = require('../services/crmAssistant.service');
 const { PaginationManager } = require('../pagination/paginationManager');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { isPaginationContinuation, isExplicitPageRequest } = require('../query/pagination');
 
 const MAX_QUESTION_LENGTH = 2000;
@@ -87,6 +87,12 @@ function createCrmController(crmService = new CrmService()) {
         const providedConversationId = resolveConversationId(req) || (questionIsConversationId ? submittedQuestion.trim() : null);
         const continuationToken = resolveContinuationToken(req);
         const conversationId = providedConversationId || (isPaginationContinuation(question) || isExplicitPageRequest(question) ? null : randomUUID());
+        updateDiagnostics(diagnostics, {
+          conversation_id_present: Boolean(conversationId),
+          conversation_id: conversationId,
+          continuation_token_present: Boolean(continuationToken),
+          continuation_token_hash: continuationToken ? createHash('sha256').update(continuationToken).digest('hex') : null
+        });
         recordCrmEvent('CONVERSATION_RESOLVED', diagnostics, {
           conversation_id: conversationId,
           source: providedConversationId ? 'request' : 'server_generated',

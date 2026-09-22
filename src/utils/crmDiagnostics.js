@@ -23,6 +23,8 @@ function createCrmDiagnostics(requestId = createRequestId()) {
     request_id: requestId,
     conversation_id_present: false,
     conversation_id: null,
+    continuation_token_present: false,
+    continuation_token_hash: null,
     continuation_detected: false,
     previous_state_found: false,
     previous_module: null,

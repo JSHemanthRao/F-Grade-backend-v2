@@ -708,12 +708,14 @@ test('OpenAPI exposes one assistant operation with optional conversation state',
   const response = openApi.definitions.CrmResponse;
 
   assert.equal(operation.operationId, 'askCrmAssistant');
-  assert.deepEqual(Object.keys(request.properties), ['question', 'continuation_token']);
+  assert.deepEqual(Object.keys(request.properties), ['question', 'continuation_token', 'conversation_id']);
   assert.deepEqual(request.required, ['question']);
   assert.deepEqual(request.required, ['question']);
   assert.equal(request.additionalProperties, false);
   assert.ok(Object.keys(response.properties).includes('module_api_name'));
   assert.ok(response.required.includes('continuation_token'));
+  assert.ok(response.required.includes('conversation_id'));
+  assert.ok(Object.keys(response.properties).includes('conversation_id'));
   assert.equal(Object.keys(openApi.paths).length, 1);
   assert.equal(openApi.swagger, '2.0');
   assert.equal(openApi.components, undefined);

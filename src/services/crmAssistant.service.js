@@ -35,7 +35,7 @@ class CrmAssistantService {
 
   async execute({ question, conversationId, continuationToken, diagnostics }) {
     const tokenHash = continuationToken ? createHash('sha256').update(continuationToken).digest('hex') : null;
-    updateDiagnostics(diagnostics, { question, conversation_id_present: Boolean(conversationId), conversation_id: conversationId, continuation_token_hash: tokenHash });
+    updateDiagnostics(diagnostics, { question, conversation_id_present: Boolean(conversationId), conversation_id: conversationId, continuation_token_present: Boolean(continuationToken), continuation_token_hash: tokenHash });
     const tokenState = continuationToken ? await this.paginationManager.getByTokenAsync(continuationToken) : null;
     const previous = tokenState || await this.paginationManager.getConversationStateAsync(conversationId);
     const continuationRequested = this.paginationManager.isContinuation(question) || Boolean(previous && isPaginationAffirmation(question));

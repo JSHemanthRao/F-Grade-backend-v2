@@ -47,6 +47,59 @@ test('uses the connector conversation header when the body omits conversation_id
   assert.deepEqual(calls.map((call) => call.offset), [0, 20]);
 });
 
+test('propagates conversation_id and continuation_token across connector pagination calls', async () => {
+  const calls = [];
+  const app = createApp({ crmService: makeMockService((input) => {
+    calls.push({ offset: input.offset || 0, limit: input.limit || 20 });
+    const offset = input.offset || 0;
+    return {
+      module: 'Deals',
+      request_type: 'records',
+      data: Array.from({ length: 20 }, (_, index) => ({ id: `deal-${offset + index + 1}` })),
+      pagination: { limit: input.limit || 20, offset, returned: 20, more_records: true }
+    };
+  }) });
+
+  const first = await request(app, { question: 'give me deals created this month' });
+  const conversationId = first.body.conversation_id;
+  const token1 = first.body.continuation_token;
+  const second = await request(app, { question: 'Yes please fetch the next set of deals.', conversation_id: conversationId, continuation_token: token1 });
+  const token2 = second.body.continuation_token;
+  const third = await request(app, { question: 'next 20', conversation_id: conversationId, continuation_token: token2 });
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(third.status, 200);
+  assert.ok(conversationId);
+  assert.ok(token1);
+  assert.ok(token2);
+  assert.notEqual(token1, token2);
+  assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40]);
+  assert.deepEqual([first.body.pagination.offset, second.body.pagination.offset, third.body.pagination.offset], [0, 20, 40]);
+  assert.equal(second.body.diagnostics.continuation_token_present, true);
+  assert.equal(second.body.diagnostics.previous_state_found, true);
+  assert.equal(second.body.diagnostics.previous_offset, 0);
+  assert.equal(second.body.diagnostics.new_offset, 20);
+});
+
+test('uses conversation_id as pagination fallback when continuation_token is absent', async () => {
+  const offsets = [];
+  const app = createApp({ crmService: makeMockService((input) => {
+    const offset = input.offset || 0;
+    offsets.push(offset);
+    return { module: 'Deals', request_type: 'records', data: [{ id: `deal-${offset}` }], pagination: { limit: 20, offset, returned: 1, more_records: true } };
+  }) });
+
+  const first = await request(app, { conversation_id: 'fallback-conversation', question: 'show me deals' });
+  const second = await request(app, { conversation_id: 'fallback-conversation', question: 'next 20' });
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.deepEqual(offsets, [0, 1]);
+  assert.equal(second.body.diagnostics.continuation_token_present, false);
+  assert.equal(second.body.diagnostics.conversation_id_present, true);
+});
+
 // Create a generic mock crmService that echoes expected shapes
 function makeMockService(handler) {
   return {
