@@ -36,8 +36,8 @@ class CrmAssistantService {
   async execute({ question, conversationId, continuationToken, diagnostics }) {
     const tokenHash = continuationToken ? createHash('sha256').update(continuationToken).digest('hex') : null;
     updateDiagnostics(diagnostics, { question, conversation_id_present: Boolean(conversationId), conversation_id: conversationId, continuation_token_hash: tokenHash });
-    const tokenState = continuationToken ? this.paginationManager.getByToken(continuationToken) : null;
-    const previous = tokenState || this.paginationManager.get(conversationId);
+    const tokenState = continuationToken ? await this.paginationManager.getByTokenAsync(continuationToken) : null;
+    const previous = tokenState || await this.paginationManager.getAsync(conversationId);
     const continuationRequested = this.paginationManager.isContinuation(question) || Boolean(previous && isPaginationAffirmation(question));
     const continuationDetected = Boolean(tokenState) || Boolean(previous && continuationRequested);
     if (continuationRequested && !previous) {
@@ -77,7 +77,7 @@ class CrmAssistantService {
 
     const result = await this.crmService.query(plannedRequest, undefined, diagnostics);
     const statePlan = mergeResolvedPlan(plannedRequest, result);
-    const state = this.paginationManager.save(conversationId, statePlan, result, diagnostics?.request_id, resolvedQuestion, continuationToken);
+    const state = await this.paginationManager.saveAsync(conversationId, statePlan, result, diagnostics?.request_id, resolvedQuestion, continuationToken);
     const queryIdentity = createQueryIdentity(statePlan);
     recordCrmEvent('PAGINATION_STATE', diagnostics, {
       conversation_id: conversationId,
