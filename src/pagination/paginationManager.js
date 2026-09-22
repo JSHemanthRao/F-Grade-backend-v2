@@ -1,35 +1,29 @@
-const {
-  advancePagination,
-  createPaginationState,
-  createQueryIdentity,
-  isExplicitPageRequest,
-  isPaginationContinuation
-} = require('../query/pagination');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { createClient } = require('redis');
 const { env } = require('../config/env');
+const { advance, advancePagination, createPaginationState, createQueryIdentity, extractPageSize, isPaginationContinuation, isExplicitPageRequest } = require('../query/pagination');
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 
 class PaginationManager {
-  constructor({ maxConversations = 1000, tokenTtlMs = DEFAULT_TTL_MS, redisUrl = env.redisUrl, redisPrefix = env.redisPrefix } = {}) {
+  constructor({ maxConversations = 1000, maxStates = 5000, tokenTtlMs = DEFAULT_TTL_MS, redisUrl = env.redisUrl, redisPrefix = env.redisPrefix } = {}) {
     this.states = new Map();
     this.tokenStates = new Map();
     this.maxConversations = maxConversations;
+    this.maxStates = maxStates;
     this.tokenTtlMs = tokenTtlMs;
     this.redisPrefix = redisPrefix;
     this.redis = redisUrl ? createClient({ url: redisUrl }) : null;
     this.redisConnection = null;
-    if (this.redis) {
-      this.redis.on('error', (error) => console.error('[PAGINATION_REDIS] connection error', error.message));
-    }
+    if (this.redis) this.redis.on('error', (error) => console.error('[PAGINATION] storage=redis error=', error.message));
+    console.log(`[PAGINATION] storage=${this.redis ? 'redis' : 'memory'}`);
   }
 
-  get(conversationId) {
+  getConversationState(conversationId) {
     return conversationId ? this.states.get(conversationId) || null : null;
   }
 
-  getByToken(token) {
+  getTokenState(token) {
     if (!token) return null;
     const state = this.tokenStates.get(token);
     if (!state) {
@@ -48,33 +42,24 @@ class PaginationManager {
     return state;
   }
 
-  async getAsync(conversationId) {
-    const local = this.get(conversationId);
-    if (local || !this.redis) return local;
-    const state = await this.readRedis(`conversation:${conversationId}`);
-    if (!state) return null;
-    this.remember(state);
-    return state;
-  }
-
-  async getByTokenAsync(token) {
-    if (!token) return null;
-    const local = this.tokenStates.get(token);
-    if (local) return this.getByToken(token);
-    if (!this.redis) return this.getByToken(token);
-    const state = await this.readRedis(`token:${token}`);
-    if (!state) return this.getByToken(token);
-    this.remember(state, token);
-    return this.getByToken(token);
-  }
+  get(conversationId) { return this.getConversationState(conversationId); }
+  getByToken(token) { return this.getTokenState(token); }
 
   isContinuation(question) {
     return isPaginationContinuation(question) || isExplicitPageRequest(question);
   }
 
+  advance(previousState, requestedLimit) {
+    if (!previousState) throw paginationError('PAGINATION_STATE_NOT_FOUND', 'No previous CRM page is available.', 409);
+    if (previousState.pagination.more_records === false) return null;
+    return advance(previousState, requestedLimit);
+  }
+
   planContinuation(question, previous) {
     if (!previous?.canonical_plan) return null;
-    const pagination = advancePagination(previous, question, previous.canonical_plan);
+    const pagination = isExplicitPageRequest(question)
+      ? advancePagination(previous, question, previous.canonical_plan)
+      : this.advance(previous, extractPageSize(question));
     return {
       ...previous.canonical_plan,
       ...pagination,
@@ -82,25 +67,16 @@ class PaginationManager {
     };
   }
 
-  save(conversationId, canonicalPlan, result, requestId, question, previousToken = null) {
+  save(conversationId, canonicalPlan, result, requestId, question, previousState = null) {
     const pagination = createPaginationState(canonicalPlan, result);
-    const previous = previousToken ? this.getByToken(previousToken) : this.get(conversationId);
     const recordIds = extractRecordIds(result);
-    if (previous && previous.query_fingerprint === createQueryIdentity(canonicalPlan)
-      && previous.pagination.offset !== pagination.offset
-      && previous.pagination.limit === pagination.limit
-      && recordIds.length > 0
-      && JSON.stringify(previous.record_ids) === JSON.stringify(recordIds)) {
-      const error = new Error('The requested next page returned the same records as the previous page.');
-      error.code = 'PAGINATION_DUPLICATE_PAGE';
-      error.statusCode = 409;
-      throw error;
-    }
+    if (previousState && samePage(previousState.page.record_ids, recordIds)) throw paginationError('PAGINATION_DUPLICATE_PAGE', 'The requested next page returned the same records as the previous page.', 409, { record_ids: recordIds });
     const continuationToken = randomUUID();
     const now = Date.now();
     const state = {
       conversation_id: conversationId,
       continuation_token: continuationToken,
+      canonical_query: stripPagination(canonicalPlan),
       canonical_plan: { ...canonicalPlan, pagination },
       pagination,
       last_offset: pagination.offset,
@@ -109,77 +85,65 @@ class PaginationManager {
       more_records: pagination.more_records,
       query_fingerprint: createQueryIdentity(canonicalPlan),
       record_ids: recordIds,
+      page: { number: (previousState?.page?.number || 0) + 1, record_ids: recordIds, identity: pageIdentity(recordIds) },
+      continuation: { token: continuationToken, created_at: new Date(now).toISOString(), expires_at: now + this.tokenTtlMs },
+      metadata: { request_id: requestId, created_from_question: question, updated_at: new Date(now).toISOString() },
       created_at: new Date(now).toISOString(),
       expires_at: now + this.tokenTtlMs,
       updated_at: new Date(now).toISOString(),
       request_id: requestId,
       question
     };
-    // Keep prior tokens as aliases to the newest state so connector retries do
-    // not restart or fail a conversation after a token rotation.
-    if (previous) {
-      for (const [token, tokenState] of this.tokenStates.entries()) {
-        if (tokenState === previous) this.tokenStates.set(token, state);
-      }
-    }
     this.tokenStates.set(continuationToken, state);
     if (conversationId) this.states.set(conversationId, state);
-    if (this.tokenStates.size > this.maxConversations) this.tokenStates.delete(this.tokenStates.keys().next().value);
+    while (this.tokenStates.size > this.maxStates) this.tokenStates.delete(this.tokenStates.keys().next().value);
     if (this.states.size > this.maxConversations) this.states.delete(this.states.keys().next().value);
     return state;
   }
 
-  async saveAsync(conversationId, canonicalPlan, result, requestId, question, previousToken = null) {
-    const previous = previousToken
-      ? await this.getByTokenAsync(previousToken)
-      : await this.getAsync(conversationId);
-    if (previous) this.remember(previous);
-    const state = this.save(conversationId, canonicalPlan, result, requestId, question, previousToken);
-    if (!this.redis) return state;
-    await this.writeRedis(`token:${state.continuation_token}`, state);
-    if (conversationId) await this.writeRedis(`conversation:${conversationId}`, state);
-    if (previous?.continuation_token) await this.writeRedis(`token:${previous.continuation_token}`, state);
+  async getByTokenAsync(token) {
+    const local = this.tokenStates.get(token);
+    if (local) return this.getTokenState(token);
+    const state = await this.readRedis(`token:${token}`);
+    if (!state) return this.getTokenState(token);
+    this.tokenStates.set(token, state);
     return state;
   }
 
-  remember(state, token = null) {
-    if (!state) return;
-    if (state.conversation_id) this.states.set(state.conversation_id, state);
-    if (state.continuation_token) this.tokenStates.set(state.continuation_token, state);
-    if (token) this.tokenStates.set(token, state);
+  async getConversationStateAsync(conversationId) {
+    const local = this.getConversationState(conversationId);
+    if (local || !this.redis) return local;
+    const state = await this.readRedis(`conversation:${conversationId}`);
+    if (state) {
+      this.states.set(conversationId, state);
+      this.tokenStates.set(state.continuation.token, state);
+    }
+    return state;
+  }
+
+  async saveAsync(conversationId, canonicalPlan, result, requestId, question, previousState = null) {
+    const state = this.save(conversationId, canonicalPlan, result, requestId, question, previousState);
+    await this.writeRedis(`token:${state.continuation.token}`, state);
+    if (conversationId) await this.writeRedis(`conversation:${conversationId}`, state);
+    return state;
   }
 
   async connectRedis() {
     if (!this.redis) return false;
-    if (!this.redisConnection) {
-      this.redisConnection = this.redis.connect().catch((error) => {
-        this.redisConnection = null;
-        console.error('[PAGINATION_REDIS] unavailable', error.message);
-        return false;
-      });
-    }
+    if (!this.redisConnection) this.redisConnection = this.redis.connect().catch((error) => { this.redisConnection = null; console.error('[PAGINATION] storage=memory redis_unavailable=', error.message); return false; });
     return this.redisConnection;
   }
 
   async readRedis(key) {
     if (!(await this.connectRedis())) return null;
-    try {
-      const value = await this.redis.get(`${this.redisPrefix}${key}`);
-      return value ? JSON.parse(value) : null;
-    } catch (error) {
-      console.error('[PAGINATION_REDIS] read failed', error.message);
-      return null;
-    }
+    try { const value = await this.redis.get(`${this.redisPrefix}pagination:${key}`); return value ? JSON.parse(value) : null; } catch (error) { console.error('[PAGINATION] redis_read_failed=', error.message); return null; }
   }
 
   async writeRedis(key, state) {
     if (!(await this.connectRedis())) return;
-    try {
-      await this.redis.set(`${this.redisPrefix}${key}`, JSON.stringify(state), { PX: Math.max(1, state.expires_at - Date.now()) });
-    } catch (error) {
-      console.error('[PAGINATION_REDIS] write failed', error.message);
-    }
+    try { await this.redis.set(`${this.redisPrefix}pagination:${key}`, JSON.stringify(state), { PX: Math.max(1, state.continuation.expires_at - Date.now()) }); } catch (error) { console.error('[PAGINATION] redis_write_failed=', error.message); }
   }
+
 }
 
 function extractRecordIds(result) {
@@ -187,4 +151,25 @@ function extractRecordIds(result) {
   return records.map((record) => String(record?.id || record?.ID || '')).filter(Boolean);
 }
 
-module.exports = { PaginationManager };
+function stripPagination(plan) {
+  const { pagination: _pagination, limit: _limit, offset: _offset, ...query } = plan || {};
+  return query;
+}
+
+function pageIdentity(recordIds) {
+  return recordIds.length ? createHash('sha256').update(JSON.stringify(recordIds)).digest('hex') : null;
+}
+
+function samePage(previousIds, currentIds) {
+  return previousIds.length > 0 && currentIds.length > 0 && pageIdentity(previousIds) === pageIdentity(currentIds);
+}
+
+function paginationError(code, message, statusCode = 409, details) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = statusCode;
+  if (details) error.details = details;
+  return error;
+}
+
+module.exports = { PaginationManager, extractRecordIds, pageIdentity };

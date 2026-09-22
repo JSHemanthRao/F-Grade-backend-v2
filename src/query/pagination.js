@@ -35,22 +35,20 @@ function extractPageNumber(text) {
   return match ? Math.min(Math.max(Number(match[1]), 1), 1000) : 1;
 }
 
-function advancePagination(previousState, originalQuestion, priorPlan) {
+function advance(previousState, requestedLimit) {
   const previousPagination = previousState?.pagination || {};
   const previousOffset = integerOr(previousPagination.offset ?? previousState?.last_offset, 0);
   const previousReturned = integerOr(previousPagination.returned ?? previousState?.last_returned, 0);
-  const previousLimit = clampLimit(integerOr(previousPagination.limit ?? previousState?.last_limit, priorPlan?.limit || DEFAULT_LIMIT));
-  if (previousReturned === 0 && !isExplicitPageRequest(originalQuestion)) {
+  const previousLimit = clampLimit(integerOr(previousPagination.limit ?? previousState?.last_limit, DEFAULT_LIMIT));
+  if (previousReturned === 0) {
     const error = new Error('The previous CRM page contained no records, so the next page cannot advance.');
     error.code = 'PAGINATION_NO_PROGRESS';
     error.statusCode = 409;
     error.details = { previous_offset: previousOffset, previous_returned: previousReturned };
     throw error;
   }
-  const requestedLimit = extractPageSize(originalQuestion) || previousLimit;
-  const offset = isExplicitPageRequest(originalQuestion)
-    ? Math.max(0, (extractPageNumber(originalQuestion) - 1) * requestedLimit)
-    : previousOffset + previousReturned;
+  const limit = clampLimit(requestedLimit || previousLimit);
+  const offset = previousOffset + previousReturned;
 
   if (!Number.isInteger(offset) || offset <= previousOffset) {
     const error = new Error('The next CRM page did not advance beyond the previous page.');
@@ -60,16 +58,26 @@ function advancePagination(previousState, originalQuestion, priorPlan) {
     throw error;
   }
 
-  return { limit: requestedLimit, offset };
+  return { limit, offset };
+}
+
+function advancePagination(previousState, originalQuestion, priorPlan) {
+  const requestedLimit = extractPageSize(originalQuestion)
+    || clampLimit(integerOr(previousState?.pagination?.limit ?? previousState?.last_limit, priorPlan?.limit || DEFAULT_LIMIT));
+  if (isExplicitPageRequest(originalQuestion)) {
+    return { limit: requestedLimit, offset: Math.max(0, (extractPageNumber(originalQuestion) - 1) * requestedLimit) };
+  }
+  return advance(previousState, requestedLimit);
 }
 
 function createPaginationState(plan, result) {
   const records = Array.isArray(result?.data) ? result.data : Array.isArray(result?.records) ? result.records : [];
   const requested = plan?.pagination || {};
+  const returned = result?.info?.count ?? result?.pagination?.returned ?? result?.returned;
   return {
     limit: integerOr(requested.limit, DEFAULT_LIMIT),
     offset: integerOr(requested.offset, 0),
-    returned: records.length,
+    returned: integerOr(returned, records.length),
     more_records: resolveMoreRecords(result)
   };
 }
@@ -93,6 +101,7 @@ function createQueryIdentity(plan) {
 }
 
 function resolveMoreRecords(result) {
+  if (typeof result?.info?.more_records === 'boolean') return result.info.more_records;
   if (typeof result?.pagination?.more_records === 'boolean') return result.pagination.more_records;
   if (typeof result?.more_records === 'boolean') return result.more_records;
   return false;
@@ -117,6 +126,7 @@ function stableStringify(value) {
 }
 
 module.exports = {
+  advance,
   advancePagination,
   createPaginationState,
   createQueryIdentity,

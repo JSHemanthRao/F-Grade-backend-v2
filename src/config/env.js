@@ -22,7 +22,7 @@ const env = Object.freeze({
   backendRequestTimeoutMs: numberFromEnv('BACKEND_REQUEST_TIMEOUT_MS', 15000),
   backendDiagnostics: process.env.BACKEND_DIAGNOSTICS === 'true',
   redisUrl: process.env.REDIS_URL || '',
-  redisPrefix: process.env.REDIS_PREFIX || 'f-grade:crm:pagination:',
+  redisPrefix: process.env.REDIS_PREFIX || 'f-grade:crm:',
   crmDebug: process.env.CRM_DEBUG === 'true',
   zohoMaxRetries: numberFromEnv('ZOHO_MAX_RETRIES', 2),
   zohoCircuitFailureThreshold: numberFromEnv('ZOHO_CIRCUIT_FAILURE_THRESHOLD', 3),

@@ -448,7 +448,7 @@ test('uses continuation tokens without requiring conversation_id and rotates the
   assert.deepEqual(responses.map((item) => item.pagination.offset), [0, 20, 40]);
 });
 
-test('replayed continuation tokens advance from the latest page', async () => {
+test('replayed continuation tokens deterministically request the same next page', async () => {
   const offsets = [];
   const controller = createCrmController({
     query: async (input) => {
@@ -465,7 +465,7 @@ test('replayed continuation tokens advance from the latest page', async () => {
   await controller.assistant({ body: { question: 'next 20', continuation_token: firstToken } }, response(), (error) => { throw error; });
   await controller.assistant({ body: { question: 'next 20', continuation_token: firstToken } }, response(), (error) => { throw error; });
 
-  assert.deepEqual(offsets, [0, 1, 2]);
+  assert.deepEqual(offsets, [0, 1, 1]);
 });
 
 test('continues Deals for the Copilot wording next 20 deals also', async () => {

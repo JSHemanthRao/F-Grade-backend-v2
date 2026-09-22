@@ -82,10 +82,10 @@ Copy `.env.example` and provide only the credentials needed by the enabled integ
 - Set `BACKEND_API_KEY` in every shared or deployed environment. Requests under `/api` then require `x-api-key` or `Authorization: Bearer <key>`.
 - Set `CORS_ORIGIN` to the specific caller origin in production instead of `*`.
 - Set `CRM_TIMEZONE` to the business timezone used when converting date-only CRM filters to datetime bounds.
-- Set `REDIS_URL` in deployed or horizontally scaled environments so pagination state survives restarts and is shared by all backend instances. `REDIS_PREFIX` can be used to isolate environments.
+- Set `REDIS_URL` and optionally `REDIS_PREFIX` when pagination must survive restarts or be shared across Render instances. Without Redis, pagination uses bounded in-memory state and continuation requests must reach the same process.
 
 ## Operational notes
 
-CRM OAuth tokens and CRM metadata are cached in memory. Pagination state uses Redis when `REDIS_URL` is configured and falls back to in-memory state for local development. Configure Redis in production so a follow-up such as `Yes fetch the next 20 records` can be handled after a restart or by a different backend instance.
+CRM OAuth tokens and CRM metadata are cached in memory. Pagination uses Redis as shared state when configured and falls back to bounded in-memory state otherwise. Each continuation token represents one exact page state; historical tokens are not rewritten to newer pages.
 
 The backend is intentionally read-only. The planner rejects mutation requests before CRM execution, and the public API should be deployed behind TLS, a reverse-proxy rate limit, and an explicit API key.

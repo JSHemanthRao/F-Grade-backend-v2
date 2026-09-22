@@ -1,5 +1,5 @@
 const { createAppError } = require('../utils/errors');
-const { createQueryIdentity, isPaginationAffirmation, isPaginationDecline } = require('../query/pagination');
+const { createQueryIdentity, extractPageSize, isExplicitPageRequest, isPaginationAffirmation, isPaginationDecline } = require('../query/pagination');
 const { PaginationManager } = require('../pagination/paginationManager');
 const { updateDiagnostics, recordCrmEvent } = require('../utils/crmDiagnostics');
 const { createHash } = require('node:crypto');
@@ -37,7 +37,7 @@ class CrmAssistantService {
     const tokenHash = continuationToken ? createHash('sha256').update(continuationToken).digest('hex') : null;
     updateDiagnostics(diagnostics, { question, conversation_id_present: Boolean(conversationId), conversation_id: conversationId, continuation_token_hash: tokenHash });
     const tokenState = continuationToken ? await this.paginationManager.getByTokenAsync(continuationToken) : null;
-    const previous = tokenState || await this.paginationManager.getAsync(conversationId);
+    const previous = tokenState || await this.paginationManager.getConversationStateAsync(conversationId);
     const continuationRequested = this.paginationManager.isContinuation(question) || Boolean(previous && isPaginationAffirmation(question));
     const continuationDetected = Boolean(tokenState) || Boolean(previous && continuationRequested);
     if (continuationRequested && !previous) {
@@ -49,7 +49,9 @@ class CrmAssistantService {
 
     const resolvedQuestion = this.resolveFollowUpQuestion(question, previous);
     const plannedRequest = continuationDetected
-      ? this.paginationManager.planContinuation(question, previous)
+      ? isExplicitPageRequest(question)
+        ? this.paginationManager.planContinuation(question, previous)
+        : buildContinuationPlan(previous, this.paginationManager.advance(previous, extractPageSize(question)))
       : detailsFollowUp
         ? convertToDetailPlan(previous.canonical_plan)
       : this.planner(resolvedQuestion);
@@ -77,7 +79,7 @@ class CrmAssistantService {
 
     const result = await this.crmService.query(plannedRequest, undefined, diagnostics);
     const statePlan = mergeResolvedPlan(plannedRequest, result);
-    const state = await this.paginationManager.saveAsync(conversationId, statePlan, result, diagnostics?.request_id, resolvedQuestion, continuationToken);
+    const state = await this.paginationManager.saveAsync(conversationId, statePlan, result, diagnostics?.request_id, resolvedQuestion, continuationDetected ? previous : null);
     const queryIdentity = createQueryIdentity(statePlan);
     recordCrmEvent('PAGINATION_STATE', diagnostics, {
       conversation_id: conversationId,
@@ -85,10 +87,14 @@ class CrmAssistantService {
       query_identity: queryIdentity,
       module: plannedRequest.module || result.module || null,
       previous_offset: previous?.pagination?.offset ?? null,
-      requested_limit: plannedRequest.limit ?? plannedRequest.pagination?.limit ?? null,
-      returned_count: state?.pagination?.returned ?? 0,
+      previous_limit: previous?.pagination?.limit ?? null,
+      previous_returned: previous?.pagination?.returned ?? null,
+      previous_more_records: previous?.pagination?.more_records ?? null,
+      requested_limit: plannedRequest.pagination?.limit ?? plannedRequest.limit ?? null,
       next_offset: state?.pagination?.offset ?? plannedRequest.offset ?? 0,
-      more_records: state?.pagination?.more_records ?? false
+      next_limit: state?.pagination?.limit ?? plannedRequest.limit ?? null,
+      new_returned: state?.pagination?.returned ?? 0,
+      new_more_records: state?.pagination?.more_records ?? false
     });
     if (diagnostics) {
       diagnostics.previous_module = previous?.canonical_plan?.module || null;
@@ -127,6 +133,14 @@ class CrmAssistantService {
 
 function hashToken(token) {
   return token ? createHash('sha256').update(token).digest('hex') : null;
+}
+
+function buildContinuationPlan(previous, pagination) {
+  return {
+    ...previous.canonical_plan,
+    ...pagination,
+    pagination: { ...(previous.canonical_plan.pagination || {}), ...pagination }
+  };
 }
 
 function paginationTerminalResponse(previous, conversationId, question, answer) {
