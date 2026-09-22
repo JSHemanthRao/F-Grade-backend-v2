@@ -471,6 +471,28 @@ test('continues Deals for the Copilot wording next 20 deals also', async () => {
   assert.deepEqual(calls.map((call) => [call.module, call.offset, call.limit]), [['Deals', 0, 20], ['Deals', 20, 20]]);
 });
 
+test('treats yes please fetch the next batch of leads as a continuation', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push(input);
+      const offset = input.offset || 0;
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        data: Array.from({ length: 20 }, (_, index) => ({ id: `lead-${offset + index + 1}` })),
+        pagination: { limit: input.limit, offset, returned: 20, more_records: true }
+      };
+    }
+  });
+  const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
+
+  await controller.assistant({ body: { conversation_id: 'pagination-batch-continue', question: 'show me leads' } }, response(), (error) => { throw error; });
+  await controller.assistant({ body: { conversation_id: 'pagination-batch-continue', question: 'Yes please fetch the next batch of leads.' } }, response(), (error) => { throw error; });
+
+  assert.deepEqual(calls.map((call) => [call.module, call.offset, call.limit]), [['Leads', 0, 20], ['Leads', 20, 20]]);
+});
+
 test('uses a UUID sent in question as the prior conversation ID for connector follow-ups', async () => {
   const calls = [];
   const controller = createCrmController({

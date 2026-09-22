@@ -2,7 +2,14 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 200;
 
 function isPaginationContinuation(text) {
-  return /^(?:(?:yes|yeah|yep|please)[,!\s]+)?(?:(?:proceed|continue)|(?:fetch\s+)?next(?:\s+(?:\d+\s+)?(?:page|records?|batch(?:es)?|set)|\s+\d+)?|(?:show|give|fetch)\s+me\s+(?:the\s+)?(?:next(?:\s+(?:\d+\s+)?(?:page|records?|batch(?:es)?|set)|\s+\d+)?|more(?:\s+(?:records?|results?))?)|more(?:\s+(?:records?|results?))?)\b/i.test(String(text || '').trim());
+  const value = String(text || '').trim();
+  if (!value) return false;
+
+  const directContinuation = /^(?:continue|proceed|next(?:\s+\d+)?(?:\s+(?:page|records?|batch(?:es)?|set))?|more(?:\s+(?:records?|results?))?)\b/i;
+  const explicitFollowUp = /^(?:(?:yes|yeah|yep|please)(?:[,!\s]+|\s+please\s+)?|(?:please\s+)?)(?:(?:fetch|show|give)(?:\s+me)?\s+(?:the\s+)?(?:next(?:\s+\d+)?(?:\s+(?:page|records?|batch(?:es)?|set))?|more(?:\s+(?:records?|results?))?)|(?:fetch|show|give)\s+(?:the\s+)?next(?:\s+\d+)?(?:\s+(?:page|records?|batch(?:es)?|set))?)/i;
+  const affirmativeFetchNext = /^(?:yes|yeah|yep|please)[,!\s]*(?:fetch|show|give)(?:\s+me)?\s+(?:the\s+)?next(?:\s+\d+)?(?:\s+(?:page|records?|batch(?:es)?|set))?/i;
+
+  return directContinuation.test(value) || explicitFollowUp.test(value) || affirmativeFetchNext.test(value);
 }
 
 function isPaginationAffirmation(text) {
