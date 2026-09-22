@@ -4,7 +4,7 @@
     "title": "Zoho CRM Natural Language Assistant",
     "version": "1.0.0",
     "description": "Read-only natural-language access to live Zoho CRM data. The backend resolves module, metadata, field names, dates, filters, sorting, aggregation, comparisons, relationships, activities, pagination, and continuation. The user sends only a natural-language CRM question. Copilot Studio must store continuation_token and conversation_id in internal variables and pass them back on pagination follow-ups.",
-    "x-copilot-studio-tool-description": "Use this read-only tool only for live Zoho CRM questions. INITIAL REQUEST: Send the user's complete original CRM question in question, for example {question: 'give me deals created this month'}. Do not send continuation_token for a new query. PAGINATION STATE RULE: continuation_token and conversation_id are opaque internal state values. Do not fill them with generative AI and never ask the user for them. Store every successful response continuation_token in CRM_ContinuationToken and response conversation_id in CRM_ConversationId. For pagination follow-ups such as next, next 20, continue, show more, another 20, or yes fetch the next set, call this tool with question set to the user's exact text, continuation_token set from CRM_ContinuationToken, and conversation_id set from CRM_ConversationId. After each successful page, replace CRM_ContinuationToken with the newest response continuation_token and preserve CRM_ConversationId. For a new CRM query, clear CRM_ContinuationToken before calling this tool. Never generate a token. Never modify it. Never decode it. Never calculate offsets. Never replace it with a conversation ID. Never call this tool for a pagination follow-up without passing stored pagination state when that state exists. Do not reconstruct filters or create a new CRM query for a pagination continuation. Never emit a Leads field named Converted. Conversion questions must remain natural language. The backend owns pagination, query planning, filters, sorting, offsets, and COQL."
+    "x-copilot-studio-tool-description": "Use this read-only tool only for live Zoho CRM questions. INITIAL REQUEST: Send the user's complete original CRM question in question, for example {question: 'give me deals created this month'}. Do not send continuation_token for a new query. PAGINATION STATE RULE: continuation_token and conversation_id are opaque internal state values. Do not fill them with generative AI and never ask the user for them. Store every successful response continuation_token in bot.CRMContinuationToken and response conversation_id in bot.CRMConversationId. For pagination follow-ups such as next, next 20, continue, show more, another 20, or yes fetch the next set, call this tool with question set to the user's exact text, continuation_token set from bot.CRMContinuationToken, and conversation_id set from bot.CRMConversationId. After each successful page, replace bot.CRMContinuationToken with the newest response continuation_token and preserve bot.CRMConversationId. For a new CRM query, clear bot.CRMContinuationToken before calling this tool. Never generate a token. Never modify it. Never decode it. Never calculate offsets. Never replace it with a conversation ID. Never call this tool for a pagination follow-up without passing stored pagination state when that state exists. Do not reconstruct filters or create a new CRM query for a pagination continuation. Never emit a Leads field named Converted. Conversion questions must remain natural language. The backend owns pagination, query planning, filters, sorting, offsets, and COQL."
   },
   "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",
@@ -124,14 +124,14 @@
           "minLength": 1,
           "x-ms-summary": "Stored CRM continuation token",
           "x-ms-visibility": "internal",
-          "description": "Internal only. Do not dynamically fill with AI and do not ask the user for this value. For pagination follow-ups, bind this input to CRM_ContinuationToken, the exact continuation_token returned by the previous CRM response. Leave empty for a new query. Never invent, modify, decode, or calculate it."
+          "description": "Internal only. Do not dynamically fill with AI and do not ask the user for this value. For pagination follow-ups, bind this input to bot.CRMContinuationToken, the exact continuation_token returned by the previous CRM response. Leave empty for a new query. Never invent, modify, decode, or calculate it."
         },
         "conversation_id": {
           "type": "string",
           "minLength": 1,
           "x-ms-summary": "Stored CRM conversation ID",
           "x-ms-visibility": "internal",
-          "description": "Internal only. Do not dynamically fill with AI and do not ask the user for this value. Bind this input to CRM_ConversationId, the exact conversation_id returned by the first successful CRM response. Preserve it unchanged for pagination follow-ups. The continuation_token remains the primary pagination cursor."
+          "description": "Internal only. Do not dynamically fill with AI and do not ask the user for this value. Bind this input to bot.CRMConversationId, the exact conversation_id returned by the first successful CRM response. Preserve it unchanged for pagination follow-ups. The continuation_token remains the primary pagination cursor."
         }
       }
     },
@@ -167,11 +167,11 @@
         },
         "continuation_token": {
           "type": "string",
-          "description": "Opaque backend-generated token used to continue the current CRM query. Store this value in the internal CRM_ContinuationToken variable after every successful CRM response. Always replace the old stored token with this newest value. Never display, generate, modify, decode, or calculate this value. An empty string means no further page is available."
+          "description": "Opaque backend-generated token used to continue the current CRM query. Store this value in the internal bot.CRMContinuationToken variable after every successful CRM response. Always replace the old stored token with this newest value. Never display, generate, modify, decode, or calculate this value. An empty string means no further page is available."
         },
         "conversation_id": {
           "type": "string",
-          "description": "Backend-generated conversation identifier. Store this value in the internal CRM_ConversationId variable after the first successful CRM response and send it unchanged on subsequent CRM pagination requests. Never display it or ask the user for it."
+          "description": "Backend-generated conversation identifier. Store this value in the internal bot.CRMConversationId variable after the first successful CRM response and send it unchanged on subsequent CRM pagination requests. Never display it or ask the user for it."
         },
         "question": {
           "type": "string",
