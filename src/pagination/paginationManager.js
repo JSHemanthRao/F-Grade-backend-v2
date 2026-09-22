@@ -64,7 +64,7 @@ class PaginationManager {
     if (!this.redis) return this.getByToken(token);
     const state = await this.readRedis(`token:${token}`);
     if (!state) return this.getByToken(token);
-    this.remember(state);
+    this.remember(state, token);
     return this.getByToken(token);
   }
 
@@ -102,7 +102,6 @@ class PaginationManager {
       conversation_id: conversationId,
       continuation_token: continuationToken,
       canonical_plan: { ...canonicalPlan, pagination },
-      canonical_plan_without_pagination: stripPagination(canonicalPlan),
       pagination,
       last_offset: pagination.offset,
       last_returned: pagination.returned,
@@ -143,10 +142,11 @@ class PaginationManager {
     return state;
   }
 
-  remember(state) {
+  remember(state, token = null) {
     if (!state) return;
     if (state.conversation_id) this.states.set(state.conversation_id, state);
     if (state.continuation_token) this.tokenStates.set(state.continuation_token, state);
+    if (token) this.tokenStates.set(token, state);
   }
 
   async connectRedis() {
@@ -187,9 +187,4 @@ function extractRecordIds(result) {
   return records.map((record) => String(record?.id || record?.ID || '')).filter(Boolean);
 }
 
-function stripPagination(plan) {
-  const { pagination: _pagination, limit: _limit, offset: _offset, ...withoutPagination } = plan || {};
-  return withoutPagination;
-}
-
-module.exports = { PaginationManager, stripPagination };
+module.exports = { PaginationManager };
