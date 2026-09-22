@@ -722,6 +722,16 @@ test('OpenAPI exposes one assistant operation with optional conversation state',
   assert.ok(openApi.securityDefinitions.api_key);
 });
 
+test('OpenAPI marks CRM pagination state inputs as internal connector state', () => {
+  const request = openApi.definitions.AssistantRequest;
+  assert.equal(request.properties.continuation_token['x-ms-visibility'], 'internal');
+  assert.equal(request.properties.conversation_id['x-ms-visibility'], 'internal');
+  assert.match(request.properties.continuation_token.description, /Do not dynamically fill with AI/i);
+  assert.match(request.properties.conversation_id.description, /Do not dynamically fill with AI/i);
+  assert.match(openApi.info['x-copilot-studio-tool-description'], /CRM_ContinuationToken/);
+  assert.match(openApi.info['x-copilot-studio-tool-description'], /CRM_ConversationId/);
+});
+
 test('module-specific CRM routes remain unavailable', async () => {
   const response = await requestJson(createApp(), '/api/crm/deals', 'GET');
   assert.equal(response.status, 404);

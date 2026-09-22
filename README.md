@@ -47,7 +47,7 @@ The layers have distinct responsibilities:
 | `POST` | `/api/books/query` | Structured, read-only Books query |
 | `GET` | `/api/skills` | Available local skill folders |
 
-For assistant follow-ups such as `next page`, `continue`, or `proceed`, include the same `conversation_id` on every request. A conversation ID is optional for a standalone request and required only when the request needs prior pagination state.
+For assistant follow-ups such as `next page`, `continue`, or `proceed`, pass the latest `continuation_token` returned by the previous assistant response. Also pass the same `conversation_id` on every request when available. In Copilot Studio these values must be bound from internal variables, not filled by generative AI and not requested from the user. See [docs/copilot-crm-pagination-state.md](docs/copilot-crm-pagination-state.md).
 
 ## Local development
 

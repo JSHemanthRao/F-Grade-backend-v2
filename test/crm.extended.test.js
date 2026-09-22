@@ -82,6 +82,45 @@ test('propagates conversation_id and continuation_token across connector paginat
   assert.equal(second.body.diagnostics.new_offset, 20);
 });
 
+test('supports the Copilot CRM pagination acceptance flow with internal token rotation', async () => {
+  const calls = [];
+  const sentState = [];
+  const app = createApp({ crmService: makeMockService((input) => {
+    calls.push({ offset: input.offset || 0, limit: input.limit || 20 });
+    const offset = input.offset || 0;
+    return {
+      module: 'Deals',
+      request_type: 'records',
+      data: Array.from({ length: 20 }, (_, index) => ({ id: `deal-${offset + index + 1}` })),
+      pagination: { limit: input.limit || 20, offset, returned: 20, more_records: true }
+    };
+  }) });
+
+  let crmContinuationToken = '';
+  let crmConversationId = '';
+
+  const first = await request(app, { question: 'Give me deals created this month' });
+  crmContinuationToken = first.body.continuation_token;
+  crmConversationId = first.body.conversation_id;
+
+  for (let index = 0; index < 4; index += 1) {
+    sentState.push({ continuation_token: crmContinuationToken, conversation_id: crmConversationId });
+    const next = await request(app, {
+      question: 'next 20',
+      continuation_token: crmContinuationToken,
+      conversation_id: crmConversationId
+    });
+    crmContinuationToken = next.body.continuation_token;
+    crmConversationId = next.body.conversation_id;
+  }
+
+  assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40, 60, 80]);
+  assert.deepEqual(calls.map((call) => call.limit), [20, 20, 20, 20, 20]);
+  assert.equal(new Set(sentState.map((state) => state.conversation_id)).size, 1);
+  assert.equal(new Set(sentState.map((state) => state.continuation_token)).size, 4);
+  assert.ok(sentState.every((state) => state.continuation_token && state.conversation_id));
+});
+
 test('uses conversation_id as pagination fallback when continuation_token is absent', async () => {
   const offsets = [];
   const app = createApp({ crmService: makeMockService((input) => {
