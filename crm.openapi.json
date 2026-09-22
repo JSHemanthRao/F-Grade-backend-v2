@@ -35,7 +35,7 @@
         "operationId": "askCrmAssistant",
         "summary": "Ask Zoho CRM",
         "x-ms-summary": "Ask Zoho CRM",
-        "description": "Pass the user's complete original natural-language CRM request exactly as written in question. For example: 'give me next 20 contacts'. Never map a conversation ID, request ID, activity ID, UUID, module, fields, filters, limit, or offset into question. For pagination follow-ups, pass the exact continuation_token returned by the previous CRM response. Never invent, modify, decode, or calculate the token. The backend owns module resolution, query planning, filtering, sorting, and offsets.",
+        "description": "Pass the user's complete original natural-language CRM request exactly as written in question. For example: 'give me next 20 contacts'. Never map a conversation ID, request ID, activity ID, UUID, module, fields, filters, limit, or offset into question. For pagination follow-ups, pass only the exact continuation_token returned by the previous CRM response. Never invent, modify, decode, or calculate the token. The backend owns all state, module resolution, query planning, filtering, sorting, and offsets.",
         "security": [
           {
             "api_key": []
@@ -119,10 +119,6 @@
           "maxLength": 2000,
           "description": "Pass the user's complete original natural-language CRM request exactly as written. This must be the user's text, such as 'give me next 20 deals'; never pass a conversation ID, request ID, UUID, module, fields, filters, limit, or offset. Do not rewrite, summarize, translate, interpret, construct structured CRM parameters, calculate pagination, or construct COQL."
         },
-        "conversation_id": {
-          "type": "string",
-          "description": "Optional backend conversation identifier used to maintain conversational state for follow-up requests. This is managed by the backend; callers should not synthesize or mutate it."
-        },
         "continuation_token": {
           "type": "string",
           "minLength": 1,
@@ -138,7 +134,6 @@
         "request_id",
         "question",
         "answer",
-        "conversation_id",
         "continuation_token",
         "module",
         "module_api_name",
@@ -159,10 +154,6 @@
         "request_id": {
           "type": "string",
           "description": "Backend request identifier for tracing and diagnostics."
-        },
-        "conversation_id": {
-          "type": "string",
-          "description": "Backend-owned conversation state identifier. Pass this exact value back as conversation_id on follow-up requests when continuation_token is unavailable. Never generate or modify it."
         },
         "continuation_token": {
           "type": "string",
