@@ -88,8 +88,14 @@ class PaginationManager {
       request_id: requestId,
       question
     };
+    // Keep prior tokens as aliases to the newest state so connector retries do
+    // not restart or fail a conversation after a token rotation.
+    if (previous) {
+      for (const [token, tokenState] of this.tokenStates.entries()) {
+        if (tokenState === previous) this.tokenStates.set(token, state);
+      }
+    }
     this.tokenStates.set(continuationToken, state);
-    if (previousToken) this.tokenStates.delete(previousToken);
     if (conversationId) this.states.set(conversationId, state);
     if (this.tokenStates.size > this.maxConversations) this.tokenStates.delete(this.tokenStates.keys().next().value);
     if (this.states.size > this.maxConversations) this.states.delete(this.states.keys().next().value);

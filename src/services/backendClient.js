@@ -81,7 +81,7 @@ class BackendClient {
     try {
       // If the caller provided a structured request, forward it directly to the backend
       const payload = isObject
-        ? { ...questionOrRequest, ...(questionOrRequest.continuation_token ? {} : this.continuationToken ? { continuation_token: this.continuationToken } : {}), ...(questionOrRequest.conversation_id || questionOrRequest.conversationId ? {} : this.conversationId ? { conversation_id: this.conversationId } : {}) }
+        ? { ...questionOrRequest, ...(questionOrRequest.continuation_token || questionOrRequest.continuationToken ? {} : this.continuationToken ? { continuation_token: this.continuationToken } : {}), ...(questionOrRequest.conversation_id || questionOrRequest.conversationId ? {} : this.conversationId ? { conversation_id: this.conversationId } : {}) }
         : { question: questionText, ...(this.continuationToken ? { continuation_token: this.continuationToken } : {}), ...(this.conversationId ? { conversation_id: this.conversationId } : {}) };
       const response = await this.httpClient.post(endpoint, booksRequest || payload, {
         headers: this.buildHeaders(),

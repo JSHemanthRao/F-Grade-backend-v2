@@ -68,6 +68,21 @@ test('BackendClient reuses and rotates continuation tokens', async () => {
   ]);
 });
 
+test('BackendClient does not overwrite a caller-provided camel-case continuation token', async () => {
+  const bodies = [];
+  const client = new BackendClient({
+    post: async (_url, body) => {
+      bodies.push(body);
+      return { status: 200, data: { success: true, continuation_token: 'server-token' } };
+    }
+  }, { backendApiUrl: 'https://example.test', backendApiPath: '/api/crm/assistant', backendRequestTimeoutMs: 1000, backendDiagnostics: false });
+
+  await client.ask('show me deals');
+  await client.ask({ question: 'next 20', continuationToken: 'caller-token' });
+
+  assert.deepEqual(bodies[1], { question: 'next 20', continuationToken: 'caller-token' });
+});
+
 test('BackendClient routes bare Quotes to Books Estimates without changing explicit CRM Quotes', async () => {
   let captured = null;
   const client = new BackendClient({ post: async (url, body) => { captured = { url, body }; return { status: 200, data: { success: true } }; } }, {

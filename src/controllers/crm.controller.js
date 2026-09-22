@@ -85,7 +85,7 @@ function createCrmController(crmService = new CrmService()) {
           throw createAppError('QUESTION_TOO_LONG', `Question must not exceed ${MAX_QUESTION_LENGTH} characters.`, 400);
         }
         const providedConversationId = resolveConversationId(req) || (questionIsConversationId ? submittedQuestion.trim() : null);
-        const continuationToken = typeof req.body?.continuation_token === 'string' ? req.body.continuation_token.trim() : null;
+        const continuationToken = resolveContinuationToken(req);
         const conversationId = providedConversationId || (isPaginationContinuation(question) || isExplicitPageRequest(question) ? null : randomUUID());
         recordCrmEvent('CONVERSATION_RESOLVED', diagnostics, {
           conversation_id: conversationId,
@@ -202,6 +202,17 @@ function resolveConversationId(req) {
     req.get?.('x-ms-client-conversation-id'),
     req.get?.('conversation-id'),
     req.get?.('session-id')
+  ];
+  const value = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+  return value ? value.trim() : null;
+}
+
+function resolveContinuationToken(req) {
+  const candidates = [
+    req.body?.continuation_token,
+    req.body?.continuationToken,
+    req.get?.('x-continuation-token'),
+    req.get?.('continuation-token')
   ];
   const value = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
   return value ? value.trim() : null;
