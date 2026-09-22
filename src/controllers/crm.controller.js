@@ -7,6 +7,8 @@ const { env } = require('../config/env');
 const { createCrmQueryPlanner } = require('../planners/crmQueryPlanner');
 const { CrmAssistantService } = require('../services/crmAssistant.service');
 const { PaginationManager } = require('../pagination/paginationManager');
+const { PaginationEngine } = require('../pagination/paginationEngine');
+const { normalizeStructuredCrmRequest } = require('../validators/structuredCrmRequest.validator');
 const { createHash, randomUUID } = require('node:crypto');
 const { isPaginationContinuation, isExplicitPageRequest } = require('../query/pagination');
 
@@ -15,6 +17,7 @@ const MAX_QUESTION_LENGTH = 2000;
 const planCrmQuestion = createCrmQueryPlanner(planQuestion);
 
 function createCrmController(crmService = new CrmService()) {
+  const paginationEngine = new PaginationEngine();
   const assistantService = new CrmAssistantService({
     crmService,
     planner: planCrmQuestion,
@@ -59,8 +62,11 @@ function createCrmController(crmService = new CrmService()) {
     },
     query: async (req, res, next) => {
       try {
-        const naturalQuestion = extractNaturalQuestion(req.body);
-        const input = naturalQuestion ? planCrmQuestion(naturalQuestion) : req.body;
+        const input = isStructuredCrmJson(req.body)
+          ? normalizeStructuredCrmRequest(req.body, { paginationEngine }).plan
+          : extractNaturalQuestion(req.body)
+            ? planCrmQuestion(extractNaturalQuestion(req.body))
+            : req.body;
         const result = await crmService.query(input);
         // Ensure structured summary objects are serialized to strings for connector compatibility
         const safe = stringifySummary(Object.assign({}, result));
@@ -75,6 +81,12 @@ function createCrmController(crmService = new CrmService()) {
       recordCrmEvent('REQUEST_RECEIVED', diagnostics, { method: req.method, path: req.originalUrl });
       return runWithCrmDiagnostics(diagnostics, async () => {
        try {
+        if (isStructuredCrmJson(req.body)) {
+          const executed = await executeStructuredCrmJson(req.body, crmService, diagnostics, paginationEngine);
+          const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
+          res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, diagnostics: publicDiagnostics, ...executed });
+          return;
+        }
         const submittedQuestion = req.body?.question;
         if (typeof submittedQuestion !== 'string' || submittedQuestion.trim().length === 0) {
           throw createAppError('QUESTION_REQUIRED', 'One of question, prompt, or message is required.', 400);
@@ -150,6 +162,49 @@ function createCrmController(crmService = new CrmService()) {
       } catch (error) {
         next(error);
       }
+    }
+  };
+}
+
+function isStructuredCrmJson(body) {
+  return body?.schema_version === '1.0' && body?.request && body?.query;
+}
+
+async function executeStructuredCrmJson(body, crmService, diagnostics, paginationEngine) {
+  const normalized = normalizeStructuredCrmRequest(body, { paginationEngine });
+  updateDiagnostics(diagnostics, {
+    structured_json_request: true,
+    resolved_module: normalized.plan.module,
+    request_type: normalized.plan.request_type,
+    query_fingerprint: normalized.query_fingerprint,
+    new_offset: normalized.plan.offset,
+    stage: 'structured_query_validated'
+  });
+  const result = await crmService.query(normalized.plan, undefined, diagnostics);
+  const records = Array.isArray(result.data) ? result.data : Array.isArray(result.records) ? result.records : [];
+  const pagination = paginationEngine.buildPaginationMetadata({
+    offset: normalized.plan.offset,
+    limit: normalized.plan.limit,
+    returned: result.pagination?.returned ?? result.returned ?? records.length,
+    hasMore: result.pagination?.has_more ?? result.pagination?.more_records ?? result.more_records ?? false
+  });
+  return {
+    schema_version: normalized.schema_version,
+    request: {
+      module: result.module || normalized.plan.module,
+      module_api_name: result.module_api_name || normalized.plan.module_api_name || null,
+      operation: body.request.operation
+    },
+    data: records,
+    records,
+    count: result.count ?? records.length,
+    pagination,
+    page: { number: paginationEngine.calculatePageNumber(pagination) },
+    query: {
+      fingerprint: normalized.query_fingerprint,
+      fields: result.fields || normalized.plan.fields,
+      filters: result.filters || normalized.plan.filters,
+      sort: result.sort || normalized.plan.sort
     }
   };
 }

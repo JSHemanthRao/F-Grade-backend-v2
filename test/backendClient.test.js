@@ -25,7 +25,7 @@ test('BackendClient forwards the natural-language question to the configured ass
   assert.equal(calls[0][2].headers['Content-Type'], 'application/json');
 });
 
-test('BackendClient reuses the backend conversation ID for pagination follow-ups', async () => {
+test('BackendClient does not inject conversation IDs into pagination follow-ups', async () => {
   const bodies = [];
   const client = new BackendClient({
     post: async (_url, body) => {
@@ -44,11 +44,11 @@ test('BackendClient reuses the backend conversation ID for pagination follow-ups
 
   assert.deepEqual(bodies, [
     { question: 'give me leads' },
-    { question: 'give me next set of records', conversation_id: 'conversation-1' }
+    { question: 'give me next set of records' }
   ]);
 });
 
-test('BackendClient reuses and rotates continuation tokens', async () => {
+test('BackendClient does not inject continuation tokens into pagination follow-ups', async () => {
   const bodies = [];
   let page = 0;
   const client = new BackendClient({
@@ -63,12 +63,12 @@ test('BackendClient reuses and rotates continuation tokens', async () => {
   await client.ask('next 20');
   assert.deepEqual(bodies, [
     { question: 'show me deals' },
-    { question: 'next 20', continuation_token: 'token-1' },
-    { question: 'next 20', continuation_token: 'token-2' }
+    { question: 'next 20' },
+    { question: 'next 20' }
   ]);
 });
 
-test('BackendClient does not overwrite a caller-provided camel-case continuation token', async () => {
+test('BackendClient forwards structured JSON requests without hidden state fields', async () => {
   const bodies = [];
   const client = new BackendClient({
     post: async (_url, body) => {
@@ -77,10 +77,17 @@ test('BackendClient does not overwrite a caller-provided camel-case continuation
     }
   }, { backendApiUrl: 'https://example.test', backendApiPath: '/api/crm/assistant', backendRequestTimeoutMs: 1000, backendDiagnostics: false });
 
-  await client.ask('show me deals');
-  await client.ask({ question: 'next 20', continuationToken: 'caller-token' });
+  const structured = {
+    schema_version: '1.0',
+    request: { module: 'Deals', operation: 'list' },
+    query: { fields: ['id'], filters: {}, sort: [{ field: 'Created_Time', order: 'desc' }] },
+    pagination: { limit: 20, offset: 20 }
+  };
+  await client.ask(structured);
 
-  assert.deepEqual(bodies[1], { question: 'next 20', continuationToken: 'caller-token' });
+  assert.deepEqual(bodies[0], structured);
+  assert.ok(!Object.prototype.hasOwnProperty.call(bodies[0], 'continuation_token'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(bodies[0], 'conversation_id'));
 });
 
 test('BackendClient routes bare Quotes to Books Estimates without changing explicit CRM Quotes', async () => {

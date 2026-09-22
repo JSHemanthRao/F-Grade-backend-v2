@@ -1,299 +1,182 @@
 {
   "swagger": "2.0",
   "info": {
-    "title": "Zoho CRM Natural Language Assistant",
+    "title": "Zoho CRM Structured Query Assistant",
     "version": "1.0.0",
-    "description": "Read-only natural-language access to live Zoho CRM data. The backend resolves module, metadata, field names, dates, filters, sorting, aggregation, comparisons, relationships, activities, pagination, and continuation. The user sends only a natural-language CRM question. Copilot Studio must store continuation_token and conversation_id in internal variables and pass them back on pagination follow-ups.",
-    "x-copilot-studio-tool-description": "Use this read-only tool only for live Zoho CRM questions. INITIAL REQUEST: Send the user's complete original CRM question in question, for example {question: 'give me deals created this month'}. Do not send continuation_token for a new query. PAGINATION STATE RULE: continuation_token and conversation_id are opaque internal state values. Do not fill them with generative AI and never ask the user for them. Store every successful response continuation_token in bot.CRMContinuationToken and response conversation_id in bot.CRMConversationId. For pagination follow-ups such as next, next 20, continue, show more, another 20, or yes fetch the next set, call this tool with question set to the user's exact text, continuation_token set from bot.CRMContinuationToken, and conversation_id set from bot.CRMConversationId. After each successful page, replace bot.CRMContinuationToken with the newest response continuation_token and preserve bot.CRMConversationId. For a new CRM query, clear bot.CRMContinuationToken before calling this tool. Never generate a token. Never modify it. Never decode it. Never calculate offsets. Never replace it with a conversation ID. Never call this tool for a pagination follow-up without passing stored pagination state when that state exists. Do not reconstruct filters or create a new CRM query for a pagination continuation. Never emit a Leads field named Converted. Conversion questions must remain natural language. The backend owns pagination, query planning, filters, sorting, offsets, and COQL."
+    "description": "Read-only structured JSON access to live Zoho CRM data. Copilot Studio must translate natural language into the versioned CRM JSON request contract and send pagination as offset plus limit. No continuation token, conversation ID, Redis token, or internal state ID is required for normal pagination.",
+    "x-copilot-studio-tool-description": "Use this read-only tool only for live Zoho CRM questions. Always send a complete structured JSON request. For an initial records request, set pagination.offset to 0 and pagination.limit to the requested page size or 20. For continuation requests such as next, next 20, next page, show more, or continue, preserve the previous module, fields, filters, sort, grouping, and query semantics exactly. Only change pagination. For next, reuse the previous limit. For next N, set limit to N. Set offset from the previous response pagination.next_offset. Never restart at offset 0 for a continuation. Never use continuation_token. Never use conversation_id for pagination. Never ask the user for pagination state. Never invent filters or sorting during continuation. Always include deterministic sort for offset pagination; the backend also adds id desc when needed."
   },
   "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",
-  "schemes": [
-    "https"
-  ],
-  "consumes": [
-    "application/json"
-  ],
-  "produces": [
-    "application/json"
-  ],
+  "schemes": ["https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
   "securityDefinitions": {
-    "api_key": {
-      "type": "apiKey",
-      "in": "header",
-      "name": "x-api-key"
-    }
+    "api_key": { "type": "apiKey", "in": "header", "name": "x-api-key" }
   },
-  "security": [
-    {
-      "api_key": []
-    }
-  ],
+  "security": [{ "api_key": [] }],
   "paths": {
     "/api/crm/assistant": {
       "post": {
         "operationId": "askCrmAssistant",
         "summary": "Ask Zoho CRM",
         "x-ms-summary": "Ask Zoho CRM",
-        "description": "Pass the user's complete original natural-language CRM request exactly as written in question. For example: 'give me next 20 contacts'. Never map a conversation ID, request ID, activity ID, UUID, module, fields, filters, limit, or offset into question. For pagination follow-ups, pass the exact continuation_token and conversation_id returned by the immediately previous CRM response when available. Never invent, modify, decode, replace, or calculate either value. The backend owns all state, module resolution, query planning, filtering, sorting, and offsets.",
-        "security": [
-          {
-            "api_key": []
-          }
-        ],
-        "parameters": [
-          {
-            "in": "body",
-            "name": "body",
-            "required": true,
-            "description": "Natural-language CRM request payload.",
-            "schema": {
-              "$ref": "#/definitions/AssistantRequest"
-            }
-          }
-        ],
+        "description": "Executes a complete structured CRM JSON request. Pagination is stateless and uses pagination.offset plus pagination.limit.",
+        "security": [{ "api_key": [] }],
+        "parameters": [{
+          "in": "body",
+          "name": "body",
+          "required": true,
+          "description": "Versioned structured CRM JSON request.",
+          "schema": { "$ref": "#/definitions/StructuredCrmRequest" }
+        }],
         "responses": {
-          "200": {
-            "description": "Successful CRM response.",
-            "schema": {
-              "$ref": "#/definitions/CrmResponse"
-            }
-          },
-          "400": {
-            "description": "Invalid CRM request.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "401": {
-            "description": "Missing or invalid API key.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "403": {
-            "description": "Access denied by the CRM provider.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "409": {
-            "description": "Pagination or continuation conflict.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "429": {
-            "description": "Rate limit exceeded.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "500": {
-            "description": "Unexpected backend error.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "502": {
-            "description": "Upstream CRM or dependency failure.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
+          "200": { "description": "Successful CRM response.", "schema": { "$ref": "#/definitions/StructuredCrmResponse" } },
+          "400": { "description": "Invalid CRM request.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "401": { "description": "Missing or invalid API key.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "403": { "description": "Access denied by the CRM provider.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "409": { "description": "Query context or pagination conflict.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "429": { "description": "Rate limit exceeded.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "500": { "description": "Unexpected backend error.", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "502": { "description": "Upstream CRM or dependency failure.", "schema": { "$ref": "#/definitions/ErrorResponse" } }
         }
       }
     }
   },
   "definitions": {
-    "AssistantRequest": {
+    "StructuredCrmRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "question"
-      ],
+      "required": ["schema_version", "request", "query", "pagination"],
       "properties": {
-        "question": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 2000,
-          "description": "Pass the user's complete original natural-language CRM request exactly as written. This must be the user's text, such as 'give me next 20 deals'; never pass a conversation ID, request ID, UUID, module, fields, filters, limit, or offset. Do not rewrite, summarize, translate, interpret, construct structured CRM parameters, calculate pagination, or construct COQL."
-        },
-        "continuation_token": {
-          "type": "string",
-          "minLength": 1,
-          "x-ms-summary": "Stored CRM continuation token",
-          "x-ms-visibility": "internal",
-          "description": "Internal only. Do not dynamically fill with AI and do not ask the user for this value. For pagination follow-ups, bind this input to bot.CRMContinuationToken, the exact continuation_token returned by the previous CRM response. Leave empty for a new query. Never invent, modify, decode, or calculate it."
-        },
-        "conversation_id": {
-          "type": "string",
-          "minLength": 1,
-          "x-ms-summary": "Stored CRM conversation ID",
-          "x-ms-visibility": "internal",
-          "description": "Internal only. Do not dynamically fill with AI and do not ask the user for this value. Bind this input to bot.CRMConversationId, the exact conversation_id returned by the first successful CRM response. Preserve it unchanged for pagination follow-ups. The continuation_token remains the primary pagination cursor."
-        }
+        "schema_version": { "type": "string", "enum": ["1.0"] },
+        "request": { "$ref": "#/definitions/RequestDescriptor" },
+        "query": { "$ref": "#/definitions/QueryDescriptor" },
+        "pagination": { "$ref": "#/definitions/PaginationRequest" },
+        "query_context": { "$ref": "#/definitions/QueryContext" }
       }
     },
-    "CrmResponse": {
+    "RequestDescriptor": {
       "type": "object",
-      "required": [
-        "success",
-        "status",
-        "request_id",
-        "conversation_id",
-        "question",
-        "answer",
-        "continuation_token",
-        "module",
-        "module_api_name",
-        "request_type",
-        "count",
-        "records",
-        "pagination"
-      ],
+      "additionalProperties": false,
+      "required": ["module", "operation"],
       "properties": {
-        "success": {
-          "type": "boolean",
-          "description": "Whether the CRM request completed successfully."
-        },
-        "status": {
-          "type": "string",
-          "description": "Backend status string such as ok or error."
-        },
-        "request_id": {
-          "type": "string",
-          "description": "Backend request identifier for tracing and diagnostics."
-        },
-        "continuation_token": {
-          "type": "string",
-          "description": "Opaque backend-generated token used to continue the current CRM query. Store this value in the internal bot.CRMContinuationToken variable after every successful CRM response. Always replace the old stored token with this newest value. Never display, generate, modify, decode, or calculate this value. An empty string means no further page is available."
-        },
-        "conversation_id": {
-          "type": "string",
-          "description": "Backend-generated conversation identifier. Store this value in the internal bot.CRMConversationId variable after the first successful CRM response and send it unchanged on subsequent CRM pagination requests. Never display it or ask the user for it."
-        },
-        "question": {
-          "type": "string",
-          "description": "The original natural-language CRM question submitted by the user."
-        },
-        "answer": {
-          "type": "string",
-          "description": "Natural-language answer produced from the CRM results."
-        },
-        "module": {
-          "type": "string",
-          "description": "Canonical CRM module resolved by the backend."
-        },
-        "module_api_name": {
-          "type": "string",
-          "description": "Exact Zoho CRM API module name used by the backend."
-        },
-        "request_type": {
-          "type": "string",
-          "description": "Normalized read-only CRM operation type executed by the backend."
-        },
-        "count": {
-          "type": "integer",
-          "format": "int32",
-          "description": "Total number of matching CRM records for this query."
-        },
-        "records": {
-          "type": "array",
-          "description": "Returned CRM record payloads for the current page.",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          }
-        },
-        "pagination": {
-          "$ref": "#/definitions/Pagination"
-        },
-        "error": {
-          "$ref": "#/definitions/ErrorDetail"
-        }
+        "module": { "type": "string", "description": "CRM module such as Deals, Leads, Contacts, Accounts, Calls, Meetings, Tasks, Products, Quotes, Sales Orders, Purchase Orders, or Invoices." },
+        "operation": { "type": "string", "enum": ["list", "count"] }
       }
     },
-    "Pagination": {
+    "QueryDescriptor": {
       "type": "object",
-      "required": [
-        "limit",
-        "offset",
-        "returned",
-        "more_records"
-      ],
+      "additionalProperties": false,
+      "required": ["fields", "filters", "sort"],
       "properties": {
-        "limit": {
-          "type": "integer",
-          "format": "int32",
-          "description": "Maximum number of records requested for this page."
-        },
-        "offset": {
-          "type": "integer",
-          "format": "int32",
-          "description": "Current result offset in the overall CRM result set. This is calculated by the backend. Copilot must never calculate offset values."
-        },
-        "returned": {
-          "type": "integer",
-          "format": "int32",
-          "description": "Number of records returned in this page."
-        },
-        "more_records": {
-          "type": "boolean",
-          "description": "Indicates whether additional CRM records remain after this page."
-        }
+        "fields": { "type": "array", "items": { "type": "string" }, "description": "Zoho CRM API field names to return." },
+        "filters": { "type": "object", "additionalProperties": { "$ref": "#/definitions/FilterDescriptor" }, "description": "Object keyed by field API name. Semantic date operators such as this_month are allowed." },
+        "sort": { "type": "array", "items": { "$ref": "#/definitions/SortDescriptor" }, "description": "Stable sort list. Include id desc as a tie-breaker when possible." },
+        "grouping": { "type": "string" }
+      }
+    },
+    "FilterDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operator"],
+      "properties": {
+        "operator": { "type": "string", "description": "CRM filter operator such as equals, between, greater_than, less_than, is_not_null, or semantic date operators such as this_month." },
+        "value": { "description": "Required for value-based operators." }
+      }
+    },
+    "SortDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "order"],
+      "properties": {
+        "field": { "type": "string" },
+        "order": { "type": "string", "enum": ["asc", "desc"] }
+      }
+    },
+    "PaginationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limit", "offset"],
+      "properties": {
+        "limit": { "type": "integer", "format": "int32", "minimum": 1, "maximum": 200, "default": 20 },
+        "offset": { "type": "integer", "format": "int32", "minimum": 0, "default": 0 }
+      }
+    },
+    "QueryContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fingerprint": { "type": "string", "description": "Optional deterministic query fingerprint from the previous response. This is an integrity check, not a continuation token." }
+      }
+    },
+    "StructuredCrmResponse": {
+      "type": "object",
+      "required": ["success", "status", "request_id", "request", "data", "pagination", "query"],
+      "properties": {
+        "success": { "type": "boolean" },
+        "status": { "type": "string" },
+        "request_id": { "type": "string" },
+        "request": { "$ref": "#/definitions/ResponseRequestDescriptor" },
+        "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "records": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "pagination": { "$ref": "#/definitions/PaginationResponse" },
+        "page": { "$ref": "#/definitions/PageDescriptor" },
+        "query": { "$ref": "#/definitions/ResponseQueryDescriptor" }
+      }
+    },
+    "ResponseRequestDescriptor": {
+      "type": "object",
+      "properties": {
+        "module": { "type": "string" },
+        "module_api_name": { "type": "string" },
+        "operation": { "type": "string" }
+      }
+    },
+    "PaginationResponse": {
+      "type": "object",
+      "required": ["offset", "limit", "returned", "next_offset", "has_more"],
+      "properties": {
+        "offset": { "type": "integer", "format": "int32" },
+        "limit": { "type": "integer", "format": "int32" },
+        "returned": { "type": "integer", "format": "int32" },
+        "next_offset": { "type": "integer", "format": "int32", "x-nullable": true },
+        "has_more": { "type": "boolean" }
+      }
+    },
+    "PageDescriptor": {
+      "type": "object",
+      "properties": {
+        "number": { "type": "integer", "format": "int32" }
+      }
+    },
+    "ResponseQueryDescriptor": {
+      "type": "object",
+      "required": ["fingerprint"],
+      "properties": {
+        "fingerprint": { "type": "string" },
+        "fields": { "type": "array", "items": { "type": "string" } },
+        "filters": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "sort": { "type": "array", "items": { "$ref": "#/definitions/SortDescriptor" } }
       }
     },
     "ErrorResponse": {
       "type": "object",
-      "required": [
-        "success",
-        "status",
-        "request_id",
-        "error"
-      ],
+      "required": ["success", "status", "request_id", "error"],
       "properties": {
-        "success": {
-          "type": "boolean",
-          "enum": [
-            false
-          ]
-        },
-        "status": {
-          "type": "string",
-          "enum": [
-            "error"
-          ]
-        },
-        "request_id": {
-          "type": "string",
-          "description": "Backend request identifier for tracing."
-        },
-        "error": {
-          "$ref": "#/definitions/ErrorDetail"
-        }
+        "success": { "type": "boolean", "enum": [false] },
+        "status": { "type": "string", "enum": ["error"] },
+        "request_id": { "type": "string" },
+        "error": { "$ref": "#/definitions/ErrorDetail" }
       }
     },
     "ErrorDetail": {
       "type": "object",
-      "required": [
-        "code",
-        "message"
-      ],
+      "required": ["code", "message"],
       "properties": {
-        "code": {
-          "type": "string",
-          "description": "Stable backend error code."
-        },
-        "message": {
-          "type": "string",
-          "description": "Human-readable error message."
-        },
-        "details": {
-          "type": "object",
-          "additionalProperties": true,
-          "description": "Additional structured error context when available."
-        }
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "details": { "type": "object", "additionalProperties": true }
       }
     }
   }

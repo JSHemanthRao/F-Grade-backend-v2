@@ -695,41 +695,41 @@ test('rejects unsupported Converted Lead fields with the exact field error', () 
   );
 });
 
-test('Copilot schema treats conversion as an operation, not the invalid Converted field', () => {
+test('Copilot schema keeps conversion guidance out of structured field lists', () => {
   const guidance = openApi.info['x-copilot-studio-tool-description'];
-  assert.match(guidance, /never emit a Leads field named Converted/i);
-  assert.match(guidance, /conversion questions must remain natural language/i);
+  assert.match(guidance, /structured JSON request/i);
+  assert.doesNotMatch(guidance, /Converted/);
   assert.equal(openApi.info['x-copilot-studio-field-mappings'], undefined);
 });
 
-test('OpenAPI exposes one assistant operation with optional conversation state', () => {
+test('OpenAPI exposes one assistant operation with structured JSON pagination', () => {
   const operation = openApi.paths['/api/crm/assistant'].post;
-  const request = openApi.definitions.AssistantRequest;
-  const response = openApi.definitions.CrmResponse;
+  const request = openApi.definitions.StructuredCrmRequest;
+  const response = openApi.definitions.StructuredCrmResponse;
 
   assert.equal(operation.operationId, 'askCrmAssistant');
-  assert.deepEqual(Object.keys(request.properties), ['question', 'continuation_token', 'conversation_id']);
-  assert.deepEqual(request.required, ['question']);
-  assert.deepEqual(request.required, ['question']);
+  assert.deepEqual(Object.keys(request.properties), ['schema_version', 'request', 'query', 'pagination', 'query_context']);
+  assert.deepEqual(request.required, ['schema_version', 'request', 'query', 'pagination']);
   assert.equal(request.additionalProperties, false);
-  assert.ok(Object.keys(response.properties).includes('module_api_name'));
-  assert.ok(response.required.includes('continuation_token'));
-  assert.ok(response.required.includes('conversation_id'));
-  assert.ok(Object.keys(response.properties).includes('conversation_id'));
+  assert.ok(Object.keys(response.properties).includes('query'));
+  assert.ok(Object.keys(response.properties).includes('pagination'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(request.properties, 'continuation_token'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(request.properties, 'conversation_id'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(response.properties, 'continuation_token'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(response.properties, 'conversation_id'));
   assert.equal(Object.keys(openApi.paths).length, 1);
   assert.equal(openApi.swagger, '2.0');
   assert.equal(openApi.components, undefined);
   assert.ok(openApi.securityDefinitions.api_key);
 });
 
-test('OpenAPI marks CRM pagination state inputs as internal connector state', () => {
-  const request = openApi.definitions.AssistantRequest;
-  assert.equal(request.properties.continuation_token['x-ms-visibility'], 'internal');
-  assert.equal(request.properties.conversation_id['x-ms-visibility'], 'internal');
-  assert.match(request.properties.continuation_token.description, /Do not dynamically fill with AI/i);
-  assert.match(request.properties.conversation_id.description, /Do not dynamically fill with AI/i);
-  assert.match(openApi.info['x-copilot-studio-tool-description'], /CRM_ContinuationToken/);
-  assert.match(openApi.info['x-copilot-studio-tool-description'], /CRM_ConversationId/);
+test('OpenAPI marks CRM pagination as explicit offset and limit', () => {
+  const pagination = openApi.definitions.PaginationRequest;
+  assert.deepEqual(Object.keys(pagination.properties), ['limit', 'offset']);
+  assert.equal(pagination.properties.limit.minimum, 1);
+  assert.equal(pagination.properties.offset.minimum, 0);
+  assert.match(openApi.info['x-copilot-studio-tool-description'], /Never use continuation_token/i);
+  assert.match(openApi.info['x-copilot-studio-tool-description'], /pagination\.next_offset/i);
 });
 
 test('module-specific CRM routes remain unavailable', async () => {

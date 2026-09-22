@@ -12,6 +12,9 @@ const { getCurrentCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, updateD
 const { createCanonicalPlan } = require('../query/canonicalPlan');
 const { materializeMetadataRequest: materializeMetadataRequestFromLiveMetadata, collectExpressionFields: collectMetadataExpressionFields, isForbiddenInternalFieldName: isForbiddenMetadataFieldName } = require('../metadata/fieldResolver');
 const { selectRetrievalStrategy } = require('../query/retrievalStrategy');
+const { PaginationEngine, createQueryFingerprint } = require('../pagination/paginationEngine');
+
+const paginationEngine = new PaginationEngine();
 
 class CrmService {
   constructor(zohoService = new ZohoCrmService()) {
@@ -274,7 +277,25 @@ class CrmService {
         limit: request.limit,
         offset: request.offset,
         returned: data.length,
+        next_offset: Boolean(info.more_records) ? request.offset + data.length : null,
+        has_more: Boolean(info.more_records),
         more_records: Boolean(info.more_records)
+      },
+      page: {
+        number: paginationEngine.calculatePageNumber({ offset: request.offset, limit: request.limit })
+      },
+      query: {
+        fingerprint: createQueryFingerprint({
+          module: request.module,
+          module_api_name: request.module_api_name,
+          request_type: request.request_type,
+          fields: request.response_fields || request.fields,
+          filters: request.filters,
+          filter_expression: request.filter_expression,
+          sort: request.sort,
+          group_by: request.group_by,
+          aggregate: request.aggregate
+        })
       }
     };
     this.logExecution(executionId, startedAt, statsAtStart, request.request_type);

@@ -174,7 +174,7 @@ function validateCrmQuery(body) {
       normalizedSort = undefined;
     }
   } else if (sort !== undefined) {
-    if (!sort || typeof sort !== 'object' || Array.isArray(sort)) addError('sort', 'sort must be an object.');
+    if (!sort || typeof sort !== 'object') addError('sort', 'sort must be an object or array.');
     else {
       const sorts = Array.isArray(sort) ? sort : [sort];
       sorts.forEach((sortItem, index) => {
