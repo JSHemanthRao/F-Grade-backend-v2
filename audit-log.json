@@ -115,18 +115,14 @@
     "AuditLogRequestBody": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "operation",
-        "time_range",
-        "pagination"
-      ],
+      "description": "Optional fields are resolved by the backend. If the caller omits operation, time_range, or pagination, the backend defaults to an audit-log query for the most recent relevant date window and applies standard paging.",
       "properties": {
         "operation": {
           "type": "string",
           "enum": [
             "audit_log"
           ],
-          "description": "Audit log operation requested by the caller."
+          "description": "Audit log operation requested by the caller. Defaults to audit_log when omitted."
         },
         "time_range": {
           "$ref": "#/definitions/TimeRange"
@@ -142,10 +138,7 @@
     "TimeRange": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "start",
-        "end"
-      ],
+      "description": "The backend resolves relative periods like today or yesterday when start/end are omitted or partial. If a caller supplies start/end, those exact timestamps are used.",
       "properties": {
         "start": {
           "type": "string",
@@ -194,21 +187,18 @@
     "PaginationRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "limit",
-        "offset"
-      ],
+      "description": "Pagination defaults to { limit: 20, offset: 0 } when omitted.",
       "properties": {
         "limit": {
           "type": "integer",
           "minimum": 1,
           "maximum": 200,
-          "description": "Maximum number of audit records to return in this page."
+          "description": "Maximum number of audit records to return in this page. Defaults to 20 when omitted."
         },
         "offset": {
           "type": "integer",
           "minimum": 0,
-          "description": "Zero-based offset for deterministic pagination."
+          "description": "Zero-based offset for deterministic pagination. Defaults to 0 when omitted."
         }
       }
     },

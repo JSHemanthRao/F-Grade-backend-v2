@@ -5,7 +5,8 @@ const createApp = require('../src/app').createApp;
 const { CRM_MODULES } = require('../src/constants/crmModules');
 const { validateCrmQuery } = require('../src/validators/crmQuery.validator');
 const { CrmService } = require('../src/services/crm.service');
-const openApi = require('../crm.openapi.json');
+const crmOpenApi = require('../crm.openapi.json');
+const auditLogOpenApi = require('../audit-log.json');
 
 function requestJson(app, path, method, body) {
   return new Promise((resolve, reject) => {
@@ -112,6 +113,14 @@ test('POST /api/crm/audit-log accepts the structured audit-log request contract'
   assert.equal(response.body.operation, 'audit_log');
   assert.equal(response.body.data.length, 1);
   assert.equal(response.body.pagination.limit, 20);
+});
+
+test('audit-log OpenAPI contract does not force manual operation/date fields for natural-language prompts', () => {
+  const requestBody = auditLogOpenApi.definitions.AuditLogRequestBody;
+  assert.equal(requestBody.properties.operation.type, 'string');
+  assert.equal(requestBody.required, undefined);
+  assert.equal(auditLogOpenApi.definitions.TimeRange.required, undefined);
+  assert.equal(auditLogOpenApi.definitions.PaginationRequest.required, undefined);
 });
 
 test('POST /api/crm/query prefers the natural-language question over stale connector hints', async () => {
@@ -800,16 +809,16 @@ test('rejects unsupported Converted Lead fields with the exact field error', () 
 });
 
 test('Copilot schema keeps conversion guidance out of structured field lists', () => {
-  const guidance = openApi.info['x-copilot-studio-tool-description'];
+  const guidance = crmOpenApi.info['x-copilot-studio-tool-description'];
   assert.match(guidance, /structured JSON request/i);
   assert.doesNotMatch(guidance, /Converted/);
-  assert.equal(openApi.info['x-copilot-studio-field-mappings'], undefined);
+  assert.equal(crmOpenApi.info['x-copilot-studio-field-mappings'], undefined);
 });
 
 test('OpenAPI exposes one assistant operation with a single nested CRM request contract', () => {
-  const operation = openApi.paths['/api/crm/assistant'].post;
-  const request = openApi.definitions.StructuredCrmRequest;
-  const response = openApi.definitions.StructuredCrmResponse;
+  const operation = crmOpenApi.paths['/api/crm/assistant'].post;
+  const request = crmOpenApi.definitions.StructuredCrmRequest;
+  const response = crmOpenApi.definitions.StructuredCrmResponse;
 
   assert.equal(operation.operationId, 'askCrmAssistant');
   assert.deepEqual(Object.keys(request.properties), ['request']);
@@ -823,19 +832,19 @@ test('OpenAPI exposes one assistant operation with a single nested CRM request c
   assert.ok(!Object.prototype.hasOwnProperty.call(request.properties, 'conversation_id'));
   assert.ok(!Object.prototype.hasOwnProperty.call(response.properties, 'continuation_token'));
   assert.ok(!Object.prototype.hasOwnProperty.call(response.properties, 'conversation_id'));
-  assert.equal(Object.keys(openApi.paths).length, 1);
-  assert.equal(openApi.swagger, '2.0');
-  assert.equal(openApi.components, undefined);
-  assert.ok(openApi.securityDefinitions.api_key);
+  assert.equal(Object.keys(crmOpenApi.paths).length, 1);
+  assert.equal(crmOpenApi.swagger, '2.0');
+  assert.equal(crmOpenApi.components, undefined);
+  assert.ok(crmOpenApi.securityDefinitions.api_key);
 });
 
 test('OpenAPI marks CRM pagination as explicit offset and limit', () => {
-  const pagination = openApi.definitions.PaginationRequest;
+  const pagination = crmOpenApi.definitions.PaginationRequest;
   assert.deepEqual(Object.keys(pagination.properties), ['limit', 'offset']);
   assert.equal(pagination.properties.limit.minimum, 1);
   assert.equal(pagination.properties.offset.minimum, 0);
-  assert.match(openApi.info['x-copilot-studio-tool-description'], /Never use continuation_token/i);
-  assert.match(openApi.info['x-copilot-studio-tool-description'], /pagination\.next_offset/i);
+  assert.match(crmOpenApi.info['x-copilot-studio-tool-description'], /Never use continuation_token/i);
+  assert.match(crmOpenApi.info['x-copilot-studio-tool-description'], /pagination\.next_offset/i);
 });
 
 test('module-specific CRM routes remain unavailable', async () => {
