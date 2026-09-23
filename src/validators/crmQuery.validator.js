@@ -1,6 +1,7 @@
 const { CRM_MODULES, CRM_API_NAMES } = require('../constants/crmModules');
 const { CRM_OPERATORS } = require('../constants/crmOperators');
 const { createAppError } = require('../utils/errors');
+const { resolveCrmField } = require('../metadata/crmFieldCatalog');
 
 const OPERATOR_SET = new Set(CRM_OPERATORS);
 const NULL_OPERATORS = new Set(['is_null', 'is_not_null', 'is_empty', 'is_not_empty']);

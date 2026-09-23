@@ -371,7 +371,17 @@ function isTodayActivityQuestion(lowerText) {
 function isAuditLogQuestion(lowerText) {
   if (/\b(?:what|who|which)\s+is\s+activity\b/.test(lowerText)) return false;
   if (/\b(?:task|tasks|call|calls|meeting|meetings|event|events)\b/.test(lowerText)) return false;
-  return /\bactivity\b|\bactivities\b|\baudit\s+log|\baudit\s+trail|\bwhat changes?\b|\bwhat did\b|\bwhat was (?:added|updated|deleted)\b|\byesterday\b/.test(lowerText);
+  if (/\b(?:today'?s activity|today activity|activity for today|daily activity|today's crm activity)\b/.test(lowerText)) return true;
+  if (/\b(?:what\s+activity\s+(?:was|did)\s+(?:done\s+)?(?:today|yesterday|on|from|between)|give\s+me\s+(?:today'?s|today)\s+activity|show\s+(?:today'?s|today)\s+activity)\b/.test(lowerText)) return true;
+  if (/\bwhat\s+happened\b/.test(lowerText) && /\b(?:today|todays|today's|yesterday|this\s+week|last\s+week|this\s+month|last\s+month|this\s+quarter|last\s+quarter|this\s+year|last\s+year)\b/.test(lowerText)) return false;
+  if (/\b(?:history|activity\s+history|what\s+happened)\b/.test(lowerText) && !/\b(?:audit\s+log|audit\s+trail|change\s+log|what\s+changed|what\s+did|done\s+by|performed\s+by|show\s+.*activity|give\s+me\s+.*activity)\b/.test(lowerText)) return false;
+  const hasAuditIntent = /\b(?:audit\s+(?:log|trail)|activity\s+history|recent\s+activity|change\s+log|what\s+changed|what\s+did|what\s+was\s+(?:added|updated|deleted)|who\s+changed|changes?\s+(?:to|for)|history|logs?)\b/.test(lowerText);
+  const hasDateOrEntityContext = /\b(?:today|todays|today's|yesterday|tomorrow|this\s+week|last\s+week|next\s+week|this\s+month|last\s+month|next\s+month|this\s+quarter|last\s+quarter|next\s+quarter|this\s+year|last\s+year|next\s+year|since|until|between|on|from|for|by|done\s+by|performed\s+by|lead|deals?|contacts?|accounts?|january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/.test(lowerText);
+  const hasChangeAction = /\b(?:add|added|update|updated|delete|deleted|modify|modified|create|created|changed|done)\b/.test(lowerText);
+  const hasGenericActivitySignal = /\b(?:activity|activities|audit)\b/.test(lowerText);
+  const hasRelativeActivityDate = /\b(?:today|todays|today's|yesterday|tomorrow|this\s+week|last\s+week|next\s+week|this\s+month|last\s+month|next\s+month|this\s+quarter|last\s+quarter|next\s+quarter|this\s+year|last\s+year|next\s+year|since|between|on|from|for|january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/.test(lowerText);
+  const genericActivityRequest = /\b(?:give\s+me|show|what\s+activity\s+(?:was|did)|what\s+did|show\s+.*activity|activity\s+(?:from|on|today|yesterday|since|between))\b/.test(lowerText);
+  return (hasAuditIntent && (hasDateOrEntityContext || hasChangeAction)) || (hasGenericActivitySignal && hasRelativeActivityDate && (genericActivityRequest || /\b(?:logs?|audit|what\s+did|what\s+was|show\s+.*activity|activity\s+today|activity\s+from)\b/.test(lowerText)));
 }
 
 function buildAuditLogPlan(text, lowerText) {
@@ -1572,7 +1582,7 @@ function detectDateFilter(lowerText, module) {
 }
 
 function detectPeriodComparison(lowerText) {
-  const periods = [...lowerText.matchAll(/\b(today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)\b/g)].map((match) => match[1]);
+  const periods = [...lowerText.matchAll(/\b(?:today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)\b/g)].map((match) => match[0]);
   if (periods.length >= 2 && /\b(?:vs|versus|compared? with|than|against)\b/.test(lowerText)) return { current: periods[0], previous: periods[1] };
   if (/(increase|decrease|more|less|compare)/.test(lowerText) && periods.length >= 2) return { current: periods[0], previous: periods[1] };
   return null;
