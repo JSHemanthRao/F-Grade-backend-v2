@@ -327,6 +327,42 @@ test('plans today activity requests as a multi-module analysis', () => {
   assert.equal(request.module, null);
 });
 
+test('plans yesterday audit activity as an audit_log request with a date window', () => {
+  const { planQuestion } = require('../src/controllers/crm.controller');
+  const request = planQuestion("Give me yesterday's activity");
+  assert.equal(request.request_type, 'audit_log');
+  assert.equal(request.intent, 'audit_log');
+  assert.equal(request.module, null);
+  assert.equal(request.audit_log.date_range.field, 'audited_time');
+  assert.ok(request.audit_log.date_range.start);
+  assert.ok(request.audit_log.date_range.end);
+});
+
+test('renders audit log responses as a table with person, change, and structured details', () => {
+  const { buildAssistantAnswer } = require('../src/controllers/crm.controller');
+  const answer = buildAssistantAnswer("Give me yesterday's activity", {
+    module: 'Audit Logs',
+    request_type: 'audit_log',
+    data: [
+      {
+        user_name: 'Laya Nair',
+        action: 'Updated',
+        module: 'Deals',
+        field_name: 'Stage',
+        record_name: 'Deal 123',
+        old_value: 'Qualification',
+        new_value: 'Closed Won',
+        audited_time: '2026-09-22T15:00:00+05:30'
+      }
+    ]
+  });
+  assert.match(answer, /\| Name \| Changed \| Structured change \|/);
+  assert.match(answer, /Laya Nair/);
+  assert.match(answer, /Updated.*Stage.*Deal 123/i);
+  assert.match(answer, /"module":\s*"Deals"/);
+  assert.match(answer, /"new_value":\s*"Closed Won"/);
+});
+
 test('classifies scheduled today activity as SCHEDULED_ACTIVITY and history as ACTIVITY_HISTORY', () => {
   const { planQuestion } = require('../src/controllers/crm.controller');
   const history = planQuestion("What happened today in CRM");

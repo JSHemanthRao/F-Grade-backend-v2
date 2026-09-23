@@ -371,7 +371,7 @@ function isTodayActivityQuestion(lowerText) {
 function isAuditLogQuestion(lowerText) {
   if (/\b(?:what|who|which)\s+is\s+activity\b/.test(lowerText)) return false;
   if (/\b(?:task|tasks|call|calls|meeting|meetings|event|events)\b/.test(lowerText)) return false;
-  return /\bactivity\b|\bactivities\b|\baudit\s+log|\baudit\s+trail|\bwhat changes?\b|\bwhat did\b|\bwhat was (?:added|updated|deleted)\b/.test(lowerText);
+  return /\bactivity\b|\bactivities\b|\baudit\s+log|\baudit\s+trail|\bwhat changes?\b|\bwhat did\b|\bwhat was (?:added|updated|deleted)\b|\byesterday\b/.test(lowerText);
 }
 
 function buildAuditLogPlan(text, lowerText) {
@@ -1020,6 +1020,40 @@ function buildAssistantAnswer(question, result) {
   const summary = result?.summary || {};
   const module = result?.module || 'CRM';
 
+  if (result?.request_type === 'audit_log' || result?.module === 'Audit Logs' || result?.analysis === 'audit_logs') {
+    const rows = Array.isArray(result?.data) ? result.data : [];
+    if (rows.length === 0) {
+      return `| Name | Changed | Structured change |\n| --- | --- | --- |\n| — | — | — |`;
+    }
+
+    const lines = [
+      '| Name | Changed | Structured change |',
+      '| --- | --- | --- |'
+    ];
+
+    for (const row of rows) {
+      const name = row?.user_name || row?.user || row?.user_name__s || row?.done_by || 'Unknown user';
+      const change = [
+        row?.action || 'Changed',
+        row?.module || row?.entity || 'CRM record',
+        row?.field_name || row?.field || row?.field_label || 'record'
+      ].filter(Boolean).join(' ');
+      const detail = {
+        module: row?.module || row?.entity || null,
+        record: row?.record_name || row?.record || row?.record_id || null,
+        action: row?.action || row?.operation || null,
+        field: row?.field_name || row?.field || row?.field_label || null,
+        old_value: row?.old_value ?? row?.previous_value ?? null,
+        new_value: row?.new_value ?? row?.updated_value ?? null,
+        audited_time: row?.audited_time || row?.audit_time || row?.time || null,
+        user: name
+      };
+      lines.push(`| ${escapeTableCell(name)} | ${escapeTableCell(change)} | ${escapeTableCell(JSON.stringify(detail, null, 2))} |`);
+    }
+
+    return lines.join('\n');
+  }
+
   if (result?.analysis === 'closed_won_summary') {
     const range = result.filters?.find((filter) => filter.field === 'Closing_Date')?.value || [];
     return `Closed Won Deals for ${range[0] || 'the selected period'} through ${range[1] || 'the selected period'}: ${result.count} deals, ${formatAmount(result.total_amount, result.currency)} total amount, and ${formatAmount(result.average_amount, result.currency)} average deal value.`;
@@ -1141,6 +1175,11 @@ if (result?.analysis === 'today_activity') {
   }
 
   return `CRM summary: I reviewed the live ${module} data for "${text}" and did not find any records that match the exact filters applied. Key metric: zero matching results. Explanation: the query was executed using the backend’s CRM filters, and no verified data was returned for that request.`;
+}
+
+function escapeTableCell(value) {
+  const text = value == null ? '—' : String(value).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  return text.length > 200 ? `${text.slice(0, 197)}...` : text;
 }
 
 function formatPercent(value) {
@@ -1664,4 +1703,4 @@ function extractGroupBy(lowerText) {
   return { field: 'Stage', label };
 }
 
-module.exports = { createCrmController, planQuestion };
+module.exports = { createCrmController, planQuestion, buildAssistantAnswer };

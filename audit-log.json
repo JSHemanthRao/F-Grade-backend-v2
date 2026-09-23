@@ -150,12 +150,12 @@
         "start": {
           "type": "string",
           "format": "date-time",
-          "description": "Inclusive start datetime in ISO-8601 format."
+          "description": "Inclusive start date and time for the audit-log search in ISO-8601 format. The backend dynamically resolves relative periods such as today, yesterday, this morning, this evening, this week, last month, or a specific date into an exact timestamp, then fetches the matching Zoho audit-log records from that point forward."
         },
         "end": {
           "type": "string",
           "format": "date-time",
-          "description": "Inclusive end datetime in ISO-8601 format."
+          "description": "Inclusive end date and time for the audit-log search in ISO-8601 format. The backend dynamically resolves relative periods such as today, yesterday, this morning, this evening, this week, last month, or a specific date into an exact timestamp, then fetches the matching Zoho audit-log records up to that point."
         }
       }
     },
