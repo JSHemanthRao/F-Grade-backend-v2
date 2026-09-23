@@ -9,7 +9,7 @@ const { CircuitBreaker, isTransientFailure } = require('../utils/circuitBreaker'
 const { CRM_API_NAMES } = require('../constants/crmModules');
 const { validateModuleFieldScope } = require('../validators/crmQuery.validator');
 const { getCurrentCrmDiagnostics, recordCrmEvent, updateDiagnostics } = require('../utils/crmDiagnostics');
-const { resolveModuleReference, assertResolvedModule, buildModuleRegistry, normalizeModuleReference } = require('../resolvers/moduleResolver');
+const { resolveModuleReference, assertResolvedModule, buildModuleRegistry, normalizeModuleReference, resolveModuleCapabilities } = require('../resolvers/moduleResolver');
 const { buildCoqlPagination } = require('../coql/coqlPagination');
 const { buildExecutableCoqlPlan } = require('../coql/coqlBuilder');
 const { ZohoAuditLogService } = require('./zohoAuditLog.service');
@@ -746,32 +746,37 @@ function parseCsvLine(line) {
     try {
       metadata = await this.getModulesMetadata({ forceRefresh });
     } catch (error) {
-      if (expectedApiName && typeof this.httpClient.get !== 'function') return expectedApiName;
-      if (!expectedApiName) {
-        throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is unavailable for read operations.`, 400, {
-          requested_module: normalized,
-          resolved_api_name: null,
-          reason: 'The requested module is not a recognized semantic module and could not be verified in live metadata.'
-        });
+      if (expectedApiName) {
+        log('warn', `[CRM MODULE METADATA] requested_module=${normalized} fallback_static_api_name=${expectedApiName} reason=${error.code || error.message}`);
+        return expectedApiName;
       }
-      throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is unavailable for read operations.`, 400, {
+      throw createAppError('ZOHO_METADATA_ERROR', 'Unable to verify Zoho CRM module metadata.', 502, {
         requested_module: normalized,
         resolved_api_name: null,
-        reason: 'Live Zoho module metadata could not verify this module.'
+        reason: 'Live Zoho module metadata is currently unavailable.'
       });
     }
-    let resolution = resolveModuleReference(normalized, metadata.registry || metadata.modules, { staticAliases: CRM_API_NAMES });
-    if (!resolution.matched && !resolution.ambiguous && !forceRefresh) {
-      const refreshed = await this.getModulesMetadata({ forceRefresh: true });
-      resolution = resolveModuleReference(normalized, refreshed.registry || refreshed.modules, { staticAliases: CRM_API_NAMES });
+    const capability = resolveModuleCapabilities(normalized, metadata.registry || metadata.modules, { staticAliases: CRM_API_NAMES });
+    if (!capability.api_name) {
+      throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is not available for read operations.`, 400, {
+        requested_module: normalized,
+        resolved_api_name: null,
+        reason: 'The requested module was not found in metadata or static CRM aliases.'
+      });
     }
-    const resolved = assertResolvedModule(resolution, normalized);
-    if (resolved.metadata.api_supported === false || resolved.metadata.viewable === false) {
-      throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is not available for read operations.`, 400, { requested_module: normalized, resolved_api_name: resolved.api_name, reason: 'Zoho metadata marks the module as unsupported or not viewable.', api_supported: resolved.metadata.api_supported, viewable: resolved.metadata.viewable });
+    const metadataMatch = Array.isArray(metadata.modules) ? metadata.modules.find((item) => item?.api_name === capability.api_name) : null;
+    if (metadataMatch && (metadataMatch.api_supported === false || metadataMatch.viewable === false)) {
+      throw createAppError('MODULE_UNAVAILABLE', `Zoho CRM module '${normalized}' is not available for read operations.`, 400, {
+        requested_module: normalized,
+        resolved_api_name: capability.api_name,
+        reason: 'Zoho metadata marks the module as unsupported or not viewable.',
+        api_supported: metadataMatch.api_supported,
+        viewable: metadataMatch.viewable
+      });
     }
-    log('info', `[CRM MODULE ROUTING] requested=${normalized} semantic=${resolved.semantic_name} resolved=${resolved.api_name} match_type=${resolved.match_type}`);
-    log('info', `[CRM MODULE METADATA] requested_module=${normalized} lookup=complete module_api_name=${resolved.api_name} elapsed_ms=${Date.now() - startedAt}`);
-    return resolved.api_name;
+    log('info', `[CRM MODULE ROUTING] requested=${normalized} resolved=${capability.api_name} source=${capability.source}`);
+    log('info', `[CRM MODULE METADATA] requested_module=${normalized} lookup=complete module_api_name=${capability.api_name} elapsed_ms=${Date.now() - startedAt}`);
+    return capability.api_name;
   }
 
   async resolveModuleReference(moduleReference, { forceRefresh = false } = {}) {

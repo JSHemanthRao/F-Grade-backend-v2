@@ -154,23 +154,36 @@ function createCrmController(crmService = new CrmService()) {
         if (question.length > MAX_QUESTION_LENGTH) {
           throw createAppError('QUESTION_TOO_LONG', `Question must not exceed ${MAX_QUESTION_LENGTH} characters.`, 400);
         }
-        const providedConversationId = resolveConversationId(req) || (questionIsConversationId ? submittedQuestion.trim() : null);
+        const conversationId = resolveConversationId(req);
         const continuationToken = resolveContinuationToken(req);
-        const conversationId = providedConversationId || (isPaginationContinuation(question) || isExplicitPageRequest(question) ? null : randomUUID());
-        updateDiagnostics(diagnostics, {
-          conversation_id_present: Boolean(conversationId),
-          conversation_id: conversationId,
-          continuation_token_present: Boolean(continuationToken),
-          continuation_token_hash: continuationToken ? createHash('sha256').update(continuationToken).digest('hex') : null
-        });
-        recordCrmEvent('CONVERSATION_RESOLVED', diagnostics, {
-          conversation_id: conversationId,
-          source: providedConversationId ? 'request' : 'server_generated',
-          continuation: isPaginationContinuation(question) || isExplicitPageRequest(question)
-        });
-        const executed = await assistantService.execute({ question, conversationId, continuationToken, diagnostics });
+        const assistantResponse = await assistantService.execute({ question, conversationId, continuationToken, diagnostics });
+        const result = assistantResponse?.result || {};
         const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
-        res.status(200).json({ success: true, status: 'ok', request_id: diagnostics.request_id, conversation_id: conversationId, continuation_token: executed.continuation_token || '', question, answer: executed.answer, diagnostics: publicDiagnostics, ...executed.result });
+        const records = Array.isArray(result.data) ? result.data : Array.isArray(result.records) ? result.records : [];
+        const responsePagination = assistantResponse?.pagination || paginationEngine.buildPaginationMetadata({
+          offset: Number.isInteger(result.offset) ? result.offset : 0,
+          limit: Number.isInteger(result.limit) ? result.limit : 20,
+          returned: result.pagination?.returned ?? result.returned ?? records.length,
+          hasMore: result.pagination?.has_more ?? result.pagination?.more_records ?? result.more_records ?? false
+        });
+        const payload = {
+          success: true,
+          status: 'ok',
+          request_id: diagnostics.request_id,
+          question: assistantResponse?.question || submittedQuestion,
+          request: { question: submittedQuestion },
+          ...result,
+          data: records,
+          records,
+          count: result.count ?? records.length,
+          pagination: responsePagination,
+          query: { module: result.module || null, request_type: result.request_type || 'records', filters: result.filters || [] },
+          answer: assistantResponse?.answer || (Array.isArray(records) && records.length ? `Retrieved ${records.length} ${result.module || 'CRM'} records.` : 'No CRM records matched the request.'),
+          diagnostics: publicDiagnostics
+        };
+        if (conversationId) payload.conversation_id = conversationId;
+        if (assistantResponse?.continuation_token) payload.continuation_token = assistantResponse.continuation_token;
+        res.status(200).json(payload);
         return;
         } catch (error) {
         diagnosticsFromError(error, diagnostics);
@@ -226,10 +239,11 @@ function createCrmController(crmService = new CrmService()) {
 
 function isStructuredCrmJson(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
-  if (body.schema_version === '1.0' && body.request && typeof body.request === 'object') {
-    return Boolean(body.request.module || body.request.operation || body.request.query || body.request.pagination);
+  if (!body.request || typeof body.request !== 'object') return false;
+  if (body.schema_version === '2.0' || body.schema_version === '1.0') {
+    return Boolean(body.request.question || body.request.module || body.request.operation || body.request.query || body.request.pagination);
   }
-  return Boolean(body.request && typeof body.request === 'object' && (body.request.query || body.request.pagination || body.request.module || body.request.operation));
+  return Boolean(body.request.question || body.request.module || body.request.operation || body.request.query || body.request.pagination);
 }
 
 async function executeStructuredCrmJson(body, crmService, diagnostics, paginationEngine) {

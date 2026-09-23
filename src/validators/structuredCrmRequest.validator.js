@@ -5,10 +5,11 @@ const { resolveRelativePeriod } = require('../utils/relativeDate');
 const { createAppError } = require('../utils/errors');
 const { PaginationEngine, createQueryFingerprint } = require('../pagination/paginationEngine');
 const { ensureStableSort } = require('../coql/coqlBuilder');
+const { createCanonicalPlan } = require('../query/canonicalPlan');
 
-const SUPPORTED_SCHEMA_VERSION = '1.0';
+const SUPPORTED_SCHEMA_VERSIONS = new Set(['1.0', '2.0']);
 const ALLOWED_TOP_LEVEL_KEYS = new Set(['schema_version', 'request', 'query', 'pagination', 'query_context']);
-const ALLOWED_REQUEST_KEYS = new Set(['module', 'operation', 'query', 'pagination', 'query_context']);
+const ALLOWED_REQUEST_KEYS = new Set(['module', 'operation', 'query', 'pagination', 'query_context', 'question']);
 const ALLOWED_QUERY_KEYS = new Set(['fields', 'filters', 'sort', 'grouping']);
 const ALLOWED_PAGINATION_KEYS = new Set(['limit', 'offset']);
 const ALLOWED_QUERY_CONTEXT_KEYS = new Set(['fingerprint']);
@@ -33,9 +34,10 @@ function normalizeStructuredCrmRequest(body, { paginationEngine = new Pagination
   const requestQueryContext = requestBody.query_context ?? legacyQueryContext;
   const moduleValue = requestBody.module ?? body.module;
   const operationValue = requestBody.operation ?? body.operation;
+  const semanticQuestion = typeof requestBody.question === 'string' ? requestBody.question.trim() : (typeof body.question === 'string' ? body.question.trim() : null);
 
   rejectUnknownKeys(body, ALLOWED_TOP_LEVEL_KEYS, '', addError);
-  if (body.schema_version !== undefined && body.schema_version !== SUPPORTED_SCHEMA_VERSION) addError('schema_version', `schema_version must be ${SUPPORTED_SCHEMA_VERSION}.`);
+  if (body.schema_version !== undefined && !SUPPORTED_SCHEMA_VERSIONS.has(String(body.schema_version))) addError('schema_version', `schema_version must be one of: ${[...SUPPORTED_SCHEMA_VERSIONS].join(', ')}.`);
   if (!isPlainObject(requestBody) && (!body.query || !isPlainObject(body.query)) && (!body.pagination || !isPlainObject(body.pagination))) {
     addError('request', 'request must be an object.');
   }
@@ -48,6 +50,33 @@ function normalizeStructuredCrmRequest(body, { paginationEngine = new Pagination
   rejectUnknownKeys(requestQuery || {}, ALLOWED_QUERY_KEYS, 'request.query', addError);
   rejectUnknownKeys(requestPagination || {}, ALLOWED_PAGINATION_KEYS, 'request.pagination', addError);
   rejectUnknownKeys(requestQueryContext || {}, ALLOWED_QUERY_CONTEXT_KEYS, 'request.query_context', addError);
+
+  if (semanticQuestion) {
+    const { planQuestion } = require('../controllers/crm.controller');
+    const planned = planQuestion(semanticQuestion);
+    const normalizedPagination = paginationEngine.normalizePagination(requestPagination || planned.pagination || { limit: 20, offset: 0 });
+    const plan = {
+      ...planned,
+      ...createCanonicalPlan({ ...planned, pagination: { ...(planned.pagination || {}), ...normalizedPagination }, original_question: semanticQuestion }),
+      limit: normalizedPagination.limit,
+      offset: normalizedPagination.offset,
+      pagination: normalizedPagination
+    };
+    const logicalQuery = {
+      module: plan.module,
+      request_type: plan.request_type,
+      fields: plan.fields || [],
+      filters: Array.isArray(plan.filters) ? plan.filters : [],
+      sort: plan.sort || null,
+      grouping: plan.group_by && plan.group_by.length ? plan.group_by[0] : null
+    };
+    return {
+      schema_version: String(body.schema_version || '2.0'),
+      logical_query: logicalQuery,
+      query_fingerprint: createQueryFingerprint(logicalQuery),
+      plan
+    };
+  }
 
   const module = normalizeModule(moduleValue);
   const operation = operationValue;
@@ -81,7 +110,7 @@ function normalizeStructuredCrmRequest(body, { paginationEngine = new Pagination
   paginationEngine.validateQueryContinuity(logicalQuery, requestQueryContext || {});
 
   return {
-    schema_version: SUPPORTED_SCHEMA_VERSION,
+    schema_version: String(body.schema_version || '1.0'),
     logical_query: logicalQuery,
     query_fingerprint: fingerprint,
     plan: {

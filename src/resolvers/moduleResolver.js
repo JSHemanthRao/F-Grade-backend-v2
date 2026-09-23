@@ -125,14 +125,67 @@ function ambiguous(entries) {
   };
 }
 
+function resolveModuleCapabilities(moduleName, metadata = [], options = {}) {
+  const staticAliases = options.staticAliases || CRM_API_NAMES;
+  const registry = Array.isArray(metadata) ? buildModuleRegistry(metadata, staticAliases) : metadata;
+  const normalized = normalizeModuleReference(moduleName);
+  const exactMatch = registry.find((entry) => entry.keys.has(normalized));
+  if (exactMatch) {
+    return {
+      api_name: exactMatch.api_name,
+      readable: true,
+      searchable: true,
+      queryable: true,
+      metadata_available: true,
+      source: 'metadata'
+    };
+  }
+
+  const staticEntry = Object.entries(staticAliases).find(([label, apiName]) => {
+    const names = [label, apiName].map(normalizeModuleReference);
+    return names.some((name) => name === normalized || normalizeModuleReference(name) === normalized);
+  });
+  if (staticEntry) {
+    return {
+      api_name: staticEntry[1],
+      readable: true,
+      searchable: true,
+      queryable: true,
+      metadata_available: false,
+      source: 'static_alias'
+    };
+  }
+
+  const semanticAlias = SEMANTIC_ALIASES.get(normalized);
+  if (semanticAlias && registry.some((entry) => entry.api_name === semanticAlias)) {
+    return {
+      api_name: semanticAlias,
+      readable: true,
+      searchable: true,
+      queryable: true,
+      metadata_available: false,
+      source: 'semantic_alias'
+    };
+  }
+
+  return {
+    api_name: null,
+    readable: false,
+    searchable: false,
+    queryable: false,
+    metadata_available: false,
+    source: 'missing'
+  };
+}
+
 function assertResolvedModule(result, userText) {
   if (result?.matched) return result;
   if (result?.ambiguous) throw createAppError('MODULE_AMBIGUOUS', `CRM module reference '${userText}' is ambiguous.`, 400, { requested_module: userText, candidates: result.candidates });
-  throw createAppError('MODULE_UNAVAILABLE', `CRM module '${userText}' is unavailable for read operations.`, 400, { requested_module: userText, candidates: [] });
+  throw createAppError('MODULE_NOT_FOUND', `CRM module '${userText}' was not found.`, 404, { requested_module: userText, candidates: [] });
 }
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-module.exports = { normalizeModuleReference, singularize, buildModuleRegistry, resolveModuleReference, assertResolvedModule };
+module.exports = { normalizeModuleReference, singularize, buildModuleRegistry, resolveModuleReference, resolveModuleCapabilities, assertResolvedModule };

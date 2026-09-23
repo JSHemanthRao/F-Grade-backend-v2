@@ -4,6 +4,7 @@ const { createCrmController } = require('../src/controllers/crm.controller');
 const { normalizeStructuredCrmRequest } = require('../src/validators/structuredCrmRequest.validator');
 const { PaginationEngine } = require('../src/pagination/paginationEngine');
 const { buildCoqlPagination } = require('../src/coql/coqlPagination');
+const { resolveModuleCapabilities } = require('../src/resolvers/moduleResolver');
 
 function crmJson({ module = 'Deals', limit = 20, offset = 0, fields = ['Deal_Name', 'Account_Name', 'Stage', 'Amount', 'Created_Time'], fingerprint } = {}) {
   return {
@@ -106,6 +107,31 @@ test('single nested CRM request object is the canonical schema contract', () => 
   assert.equal(normalized.plan.offset, 0);
   assert.equal(normalized.plan.limit, 20);
   assert.deepEqual(normalized.plan.sort.map((item) => [item.field, item.order]), [['Created_Time', 'desc'], ['id', 'desc']]);
+});
+
+test('semantic CRM request accepts natural-language question as the authoritative contract', () => {
+  const normalized = normalizeStructuredCrmRequest({
+    schema_version: '2.0',
+    request: {
+      question: 'Give me leads created today.',
+      pagination: { limit: 20, offset: 0 }
+    }
+  });
+
+  assert.equal(normalized.plan.module, 'Leads');
+  assert.equal(normalized.plan.request_type, 'records');
+  assert.equal(normalized.plan.limit, 20);
+  assert.equal(normalized.plan.offset, 0);
+  assert.equal(normalized.plan.filters[0].field, 'Created_Time');
+  assert.equal(normalized.plan.filters[0].operator, 'between');
+});
+
+test('module capability resolver distinguishes metadata unavailable from missing module', () => {
+  const capabilities = resolveModuleCapabilities('Leads', [{ api_name: 'Leads', module_name: 'Leads', api_supported: true, viewable: true, readable: true, searchable: true, queryable: true }]);
+  assert.equal(capabilities.api_name, 'Leads');
+  assert.equal(capabilities.readable, true);
+  assert.equal(capabilities.queryable, true);
+  assert.equal(capabilities.metadata_available, true);
 });
 
 test('pagination engine advances from actual returned count for short pages and limit changes', () => {

@@ -3,8 +3,8 @@
   "info": {
     "title": "Zoho CRM Structured Query Assistant",
     "version": "1.0.0",
-    "description": "Read-only structured JSON access to live Zoho CRM data. The API accepts one complete CRM request object. Backend logic applies deterministic sorting and stateless offset/limit pagination; users do not provide continuation tokens, conversation IDs, or internal pagination state.",
-    "x-copilot-studio-tool-description": "Executes a complete structured JSON request for Zoho CRM. Accepts one CRM request containing the module, operation, filters, fields, deterministic sorting, and stateless limit/offset pagination. For continuation requests, preserve the previous query and advance only pagination. Never request continuation tokens, conversation IDs, offsets, or sort fields from the user unless the user explicitly requests a custom sort or page size. Never use continuation_token. Never use conversation_id for pagination. Always use pagination.next_offset to advance offset for continuation, never reset to 0."
+    "description": "Read-only structured JSON access to live Zoho CRM data. The backend resolves the CRM module, fields, filters, dates, operators, relationships, and execution strategy from the natural-language question. Pagination is stateless using only limit and offset.",
+    "x-copilot-studio-tool-description": "This tool accepts a structured JSON request that is built from a natural-language Zoho CRM request. The backend determines the CRM module, fields, filters, operators, dates, relationships, sorting, aggregation, and execution strategy. The caller must not provide Zoho API field names unless explicitly required. Pagination uses only limit and offset; Never use continuation_token or conversation_id. For pagination metadata, use pagination.next_offset and do not ask the user for conversation IDs or continuation tokens."
   },
   "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",
@@ -122,26 +122,12 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "module",
-        "operation",
-        "query",
-        "pagination"
+        "question"
       ],
       "properties": {
-        "module": {
+        "question": {
           "type": "string",
-          "description": "CRM module. This tool is CRM-only and allows Zoho CRM modules only."
-        },
-        "operation": {
-          "type": "string",
-          "enum": [
-            "list",
-            "count"
-          ],
-          "description": "The CRM operation to execute."
-        },
-        "query": {
-          "$ref": "#/definitions/QueryDescriptor"
+          "description": "Natural-language Zoho CRM request. The backend resolves the CRM module, fields, filters, operators, dates, relationships, and execution strategy."
         },
         "pagination": {
           "$ref": "#/definitions/PaginationRequest"
@@ -239,9 +225,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "fingerprint": {
-          "type": "string",
-          "description": "Optional deterministic query fingerprint from the previous response. This is an integrity check, not a continuation token."
+        "previous_query": {
+          "type": "object",
+          "description": "Optional previous canonical semantic query for follow-up context. The backend may use it for follow-up questions without exposing internal identifiers."
         }
       }
     },
@@ -297,6 +283,9 @@
     "ResponseRequestDescriptor": {
       "type": "object",
       "properties": {
+        "question": {
+          "type": "string"
+        },
         "module": {
           "type": "string"
         },
@@ -351,11 +340,11 @@
     },
     "ResponseQueryDescriptor": {
       "type": "object",
-      "required": [
-        "fingerprint"
-      ],
       "properties": {
-        "fingerprint": {
+        "module": {
+          "type": "string"
+        },
+        "request_type": {
           "type": "string"
         },
         "fields": {
