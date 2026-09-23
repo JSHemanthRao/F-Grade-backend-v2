@@ -1,5 +1,6 @@
 const { CRM_API_NAMES } = require('../constants/crmModules');
 const { CRM_OPERATORS } = require('../constants/crmOperators');
+const { resolveCrmField, normalizeCrmOperator, normalizeCrmFilters } = require('../metadata/crmFieldCatalog');
 const { resolveRelativePeriod } = require('../utils/relativeDate');
 const { createAppError } = require('../utils/errors');
 const { PaginationEngine, createQueryFingerprint } = require('../pagination/paginationEngine');
@@ -54,7 +55,7 @@ function normalizeStructuredCrmRequest(body, { paginationEngine = new Pagination
   if (!['list', 'count'].includes(operation)) addError('request.operation', 'operation must be list or count.');
 
   const fields = normalizeFields(requestQuery.fields, addError);
-  const filters = normalizeFilters(requestQuery.filters, addError);
+  const filters = normalizeFilters(requestQuery.filters, addError, module);
   const sort = normalizeSort(requestQuery.sort, addError);
   const grouping = requestQuery.grouping;
   if (grouping !== undefined && typeof grouping !== 'string') addError('query.grouping', 'grouping must be a string when provided.');
@@ -117,42 +118,58 @@ function normalizeFields(value, addError) {
   });
 }
 
-function normalizeFilters(value, addError) {
+function normalizeFilters(value, addError, moduleName) {
   if (value === undefined) return [];
   if (!isPlainObject(value) && !Array.isArray(value)) {
     addError('query.filters', 'filters must be an object or array.');
     return [];
   }
-  if (Array.isArray(value)) return value.map((filter, index) => normalizeFilterObject(filter, `query.filters[${index}]`, addError)).filter(Boolean);
-  return Object.entries(value).map(([field, definition]) => normalizeFilterObject({ field, ...definition }, `query.filters.${field}`, addError)).filter(Boolean);
+  const entries = Array.isArray(value)
+    ? value.map((filter, index) => normalizeFilterObject(filter, `query.filters[${index}]`, addError, moduleName)).filter(Boolean)
+    : Object.entries(value).map(([field, definition]) => normalizeFilterObject({ field, ...definition }, `query.filters.${field}`, addError, moduleName)).filter(Boolean);
+  return entries.map((filter) => ({
+    ...filter,
+    field: resolveCrmField(moduleName, filter.field)
+  }));
 }
 
-function normalizeFilterObject(filter, path, addError) {
+function normalizeFilterObject(filter, path, addError, moduleName) {
   if (!isPlainObject(filter)) {
     addError(path, 'filter must be an object.');
     return null;
   }
   rejectUnknownKeys(filter, ALLOWED_FILTER_KEYS, path, addError);
-  const field = typeof filter.field === 'string' ? filter.field.trim() : '';
-  const operator = typeof filter.operator === 'string' ? filter.operator.trim() : '';
-  if (!field) addError(`${path}.field`, 'field must be a non-empty string.');
+  const rawField = typeof filter.field === 'string' ? filter.field.trim() : '';
+  const rawOperator = typeof filter.operator === 'string' ? filter.operator.trim() : '';
+  const value = Object.prototype.hasOwnProperty.call(filter, 'value') ? filter.value : undefined;
+  if (!rawField) addError(`${path}.field`, 'field must be a non-empty string.');
+
+  let operator = rawOperator ? normalizeCrmOperator(rawOperator) : '';
+  if (!operator && value !== undefined) {
+    if (Array.isArray(value) && value.length === 2) operator = 'between';
+    else if (Array.isArray(value) && value.length > 0) operator = 'in';
+    else operator = 'equals';
+  }
+  if (!operator && value === undefined) operator = 'is_not_null';
+
   if (!operator) addError(`${path}.operator`, 'operator must be a non-empty string.');
   const semantic = normalizeSemanticOperator(operator);
   if (semantic) {
     const range = resolveRelativePeriod(semantic);
     if (!range) addError(`${path}.operator`, `Unsupported semantic date operator '${operator}'.`);
     return {
-      field,
+      field: rawField,
       operator: 'between',
       value: [range.start, range.end],
       exclusive_end: true,
       date_range: { semantic: range.period, timezone: range.timeZone, start: range.start, end: range.end }
     };
   }
-  if (!OPERATOR_SET.has(operator)) addError(`${path}.operator`, `operator must be one of: ${CRM_OPERATORS.join(', ')}.`);
+  if (operator && !OPERATOR_SET.has(operator)) addError(`${path}.operator`, `operator must be one of: ${CRM_OPERATORS.join(', ')}.`);
   const nullOperator = operator === 'is_null' || operator === 'is_not_null' || operator === 'is_empty' || operator === 'is_not_empty';
-  if (!nullOperator && !Object.prototype.hasOwnProperty.call(filter, 'value')) addError(`${path}.value`, `operator '${operator}' requires a value.`);
-  return nullOperator ? { field, operator } : { field, operator, value: filter.value };
+  if (!nullOperator && value === undefined) addError(`${path}.value`, `operator '${operator}' requires a value.`);
+  if (!rawField) return null;
+  return nullOperator ? { field: rawField, operator } : { field: rawField, operator, value };
 }
 
 function normalizeSort(value, addError) {

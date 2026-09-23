@@ -8,6 +8,7 @@ function createCrmRoutes(crmService) {
 	router.post('/query', controller.query);
 	router.get('/diagnostics', controller.diagnostics);
 	router.post('/assistant', controller.assistant);
+	router.post('/audit-log', controller.auditLog);
 	router.post('/audit-log/assistant', controller.assistant);
 	router.post('/assistant/fast-summary', controller.fastSummary);
 	router.get('/metadata', controller.metadata);

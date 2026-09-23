@@ -60,6 +60,64 @@ function createCrmController(crmService = new CrmService()) {
         next(err);
       }
     },
+    auditLog: async (req, res, next) => {
+      try {
+        const payload = req.body && typeof req.body === 'object' && req.body.request ? req.body : { request: req.body || {} };
+        const request = payload.request || {};
+        if (!request || typeof request !== 'object') {
+          throw createAppError('INVALID_AUDIT_LOG_REQUEST', 'Audit-log requests require a structured request object.', 400);
+        }
+        const timeRange = request.time_range || { start: null, end: null };
+        const filters = request.filters || {};
+        const pagination = request.pagination || { limit: 20, offset: 0 };
+        const auditInput = {
+          intent: 'audit_log',
+          request_type: 'audit_log',
+          limit: Number.isInteger(Number(pagination.limit)) ? Number(pagination.limit) : 20,
+          offset: Number.isInteger(Number(pagination.offset)) ? Number(pagination.offset) : 0,
+          audit_log: {
+            date_range: timeRange.start && timeRange.end ? { field: 'audited_time', start: timeRange.start, end: timeRange.end } : null,
+            action: Array.isArray(filters.action) && filters.action.length ? filters.action[0] : null,
+            module: Array.isArray(filters.module) && filters.module.length ? filters.module[0] : null,
+            user: Array.isArray(filters.done_by) && filters.done_by.length ? { name: filters.done_by[0] } : null,
+            filters: filters || {}
+          }
+        };
+        const result = typeof crmService.queryAuditLog === 'function'
+          ? await crmService.queryAuditLog(auditInput)
+          : await crmService.query(auditInput);
+        const records = Array.isArray(result?.data) ? result.data : Array.isArray(result?.records) ? result.records : [];
+        const responsePagination = result?.pagination || {};
+        const limit = Number.isInteger(Number(responsePagination.limit)) ? Number(responsePagination.limit) : Number(auditInput.limit) || 20;
+        const offset = Number.isInteger(Number(responsePagination.offset)) ? Number(responsePagination.offset) : Number(auditInput.offset) || 0;
+        const returned = Number(result?.returned ?? result?.count ?? records.length);
+        const nextOffset = returned > 0 ? offset + returned : offset;
+        res.status(200).json({
+          success: true,
+          operation: 'audit_log',
+          time_range: {
+            start: timeRange.start || null,
+            end: timeRange.end || null
+          },
+          filters: filters || {},
+          pagination: {
+            limit,
+            offset,
+            returned,
+            next_offset: nextOffset,
+            has_more: Boolean(responsePagination.has_more ?? responsePagination.more_records ?? false)
+          },
+          data: records,
+          execution: {
+            jobs_created: 1,
+            jobs_completed: 1,
+            source: 'Zoho CRM Audit Log'
+          }
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
     query: async (req, res, next) => {
       try {
         const input = isStructuredCrmJson(req.body)

@@ -1,35 +1,374 @@
 {
-  "openapi": "3.0.3",
+  "swagger": "2.0",
   "info": {
-    "title": "Zoho CRM Audit Log Assistant",
+    "title": "Zoho CRM Audit Log Export",
     "version": "1.0.0",
-    "description": "Natural-language access to CRM Audit Log activity. The backend resolves dates, users, actions, and entities."
+    "description": "Read-only CRM audit-log export workflow for Microsoft Copilot Studio. The backend resolves the time range, user filters, action filters, and module filters before scheduling and polling the Zoho CRM audit-export job.",
+    "x-copilot-studio-tool-description": "Executes a CRM audit-log query with a deterministic date range, optional action/module/user filters, and stateless pagination. The backend owns export job creation, polling, CSV/ZIP downloads, and result normalization; users never provide job IDs or download URLs."
   },
+  "host": "f-grade-backend-v2.onrender.com",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "securityDefinitions": {
+    "api_key": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "x-api-key"
+    }
+  },
+  "security": [
+    {
+      "api_key": []
+    }
+  ],
   "paths": {
-    "/api/crm/audit-log/assistant": {
+    "/api/crm/audit-log": {
       "post": {
-        "operationId": "askCrmAuditLog",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["question"],
-                "properties": {
-                  "question": { "type": "string", "minLength": 1, "maxLength": 2000 }
-                }
-              }
+        "operationId": "getCRMAuditLogs",
+        "summary": "Get CRM audit logs",
+        "x-ms-summary": "Get CRM audit logs",
+        "description": "Returns normalized Zoho CRM audit events for the requested time range and filters. The backend resolves date ranges, validates the 180-day limit, handles export job creation and polling, downloads the completed export, normalizes CSV/ZIP results, and applies app-level pagination.",
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "description": "Structured CRM audit-log request. The backend owns Zoho job IDs, token management, and upload/download handling.",
+            "schema": {
+              "$ref": "#/definitions/AuditLogRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful audit-log response.",
+            "schema": {
+              "$ref": "#/definitions/AuditLogResponse"
+            }
+          },
+          "400": {
+            "description": "Invalid audit-log request or date range.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "403": {
+            "description": "Access denied or the configured Zoho identity cannot read audit logs.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Unexpected backend error.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "502": {
+            "description": "Upstream Zoho audit-log export or download failure.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "AuditLogRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request"
+      ],
+      "properties": {
+        "request": {
+          "$ref": "#/definitions/AuditLogRequestBody"
+        }
+      }
+    },
+    "AuditLogRequestBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "time_range",
+        "pagination"
+      ],
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "audit_log"
+          ],
+          "description": "Audit log operation requested by the caller."
+        },
+        "time_range": {
+          "$ref": "#/definitions/TimeRange"
+        },
+        "filters": {
+          "$ref": "#/definitions/AuditLogFilters"
+        },
+        "pagination": {
+          "$ref": "#/definitions/PaginationRequest"
+        }
+      }
+    },
+    "TimeRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Inclusive start datetime in ISO-8601 format."
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Inclusive end datetime in ISO-8601 format."
+        }
+      }
+    },
+    "AuditLogFilters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "added",
+              "updated",
+              "deleted"
+            ]
+          },
+          "description": "Action filters, such as added, updated, or deleted."
+        },
+        "module": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "CRM module filter values, such as Deals or Leads."
+        },
+        "done_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "CRM user names or user IDs resolved server-side before the Zoho export job is created."
+        }
+      }
+    },
+    "PaginationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit",
+        "offset"
+      ],
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum number of audit records to return in this page."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based offset for deterministic pagination."
+        }
+      }
+    },
+    "AuditLogResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "success",
+        "operation",
+        "time_range",
+        "filters",
+        "pagination",
+        "data"
+      ],
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "audit_log"
+          ]
+        },
+        "time_range": {
+          "$ref": "#/definitions/TimeRange"
+        },
+        "filters": {
+          "$ref": "#/definitions/AuditLogFilters"
+        },
+        "pagination": {
+          "$ref": "#/definitions/PaginationResponse"
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AuditLogRecord"
+          }
+        },
+        "execution": {
+          "$ref": "#/definitions/ExecutionMetadata"
+        }
+      }
+    },
+    "PaginationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit",
+        "offset",
+        "returned",
+        "next_offset",
+        "has_more"
+      ],
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "returned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "next_offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      }
+    },
+    "AuditLogRecord": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "action": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "record_name": {
+          "type": "string"
+        },
+        "performed_by": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
             }
           }
         },
-        "responses": {
-          "200": { "description": "Audit Log activity response." },
-          "400": { "description": "Invalid question." },
-          "401": { "description": "Unauthorized." },
-          "403": { "description": "Zoho Audit Log permission denied." },
-          "502": { "description": "Zoho Audit Log failure." }
+        "description": {
+          "type": "string"
+        },
+        "raw": {
+          "type": "object"
+        }
+      }
+    },
+    "ExecutionMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobs_created",
+        "jobs_completed",
+        "source"
+      ],
+      "properties": {
+        "jobs_created": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "jobs_completed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "Zoho CRM Audit Log"
+          ]
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "default": false
+        },
+        "error": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
         }
       }
     }

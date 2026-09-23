@@ -46,6 +46,74 @@ test('POST /api/crm/query returns the CRM service response', async () => {
   assert.equal(response.body.count, 1);
 });
 
+test('normalizes AI-shaped deal filters during structured CRM request parsing', () => {
+  const { normalizeStructuredCrmRequest } = require('../src/validators/structuredCrmRequest.validator');
+  const request = normalizeStructuredCrmRequest({
+    schema_version: '1.0',
+    request: {
+      module: 'Deals',
+      operation: 'list',
+      query: {
+        fields: ['id'],
+        filters: [{ field: 'closing date', value: ['2026-09-15', '2026-09-30'] }]
+      }
+    }
+  });
+  assert.equal(request.plan.filters[0].field, 'Closing_Date');
+  assert.equal(request.plan.filters[0].operator, 'between');
+  assert.deepEqual(request.plan.filters[0].value, ['2026-09-15', '2026-09-30']);
+});
+
+test('accepts structured CRM JSON with filter objects keyed by display labels and empty operators', () => {
+  const { normalizeStructuredCrmRequest } = require('../src/validators/structuredCrmRequest.validator');
+  const request = normalizeStructuredCrmRequest({
+    schema_version: '1.0',
+    request: {
+      module: 'Deals',
+      operation: 'list',
+      query: {
+        fields: ['id'],
+        filters: {
+          'Closing Date': { value: ['2026-09-15', '2026-09-30'] }
+        }
+      }
+    }
+  });
+  assert.equal(request.plan.filters[0].field, 'Closing_Date');
+  assert.equal(request.plan.filters[0].operator, 'between');
+  assert.deepEqual(request.plan.filters[0].value, ['2026-09-15', '2026-09-30']);
+});
+
+test('POST /api/crm/audit-log accepts the structured audit-log request contract', async () => {
+  const app = createApp({
+    crmService: {
+      queryAuditLog: async (input) => ({
+        intent: 'audit_log',
+        request_type: 'audit_log',
+        audit_log: input.audit_log,
+        count: 1,
+        returned: 1,
+        records: [{ timestamp: '2026-09-23T10:00:00+05:30', action: 'updated', module: 'Deals', record_id: '1' }],
+        data: [{ timestamp: '2026-09-23T10:00:00+05:30', action: 'updated', module: 'Deals', record_id: '1' }],
+        pagination: { limit: 20, offset: 0, returned: 1, more_records: false }
+      })
+    }
+  });
+  const response = await requestJson(app, '/api/crm/audit-log', 'POST', {
+    request: {
+      operation: 'audit_log',
+      time_range: { start: '2026-09-23T00:00:00+05:30', end: '2026-09-23T23:59:59+05:30' },
+      filters: { action: ['updated'], module: ['Deals'] },
+      pagination: { limit: 20, offset: 0 }
+    }
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.operation, 'audit_log');
+  assert.equal(response.body.data.length, 1);
+  assert.equal(response.body.pagination.limit, 20);
+});
+
 test('POST /api/crm/query prefers the natural-language question over stale connector hints', async () => {
   let captured;
   const app = createApp({ crmService: { query: async (input) => {
