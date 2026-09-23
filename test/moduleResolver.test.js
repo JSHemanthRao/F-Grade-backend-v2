@@ -38,13 +38,13 @@ test('returns ambiguity instead of guessing overlapping order modules', () => {
   assert.deepEqual(result.candidates.map((item) => item.api_name).sort(), ['Purchase_Orders', 'Sales_Orders']);
 });
 
-test('uses Zoho’s actual Deal API key, Potentials, despite the user-facing label being Deals', () => {
+test('keeps the documented Zoho API name for Deals', () => {
   const { CRM_API_NAMES } = require('../src/constants/crmModules');
-  assert.equal(CRM_API_NAMES.Deals, 'Potentials');
+  assert.equal(CRM_API_NAMES.Deals, 'Deals');
   const result = resolveModuleReference('show me deals', [
-    { api_name: 'Potentials', module_name: 'Deals', plural_label: 'Deals', singular_label: 'Deal', viewable: true, api_supported: true }
+    { api_name: 'Deals', module_name: 'Deals', plural_label: 'Deals', singular_label: 'Deal', viewable: true, api_supported: true }
   ]);
-  assert.equal(result.api_name, 'Potentials');
+  assert.equal(result.api_name, 'Deals');
   assert.equal(result.semantic_name, 'Deals');
 });
 
