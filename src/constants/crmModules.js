@@ -21,7 +21,7 @@ const CRM_API_NAMES = Object.freeze({
   Leads: 'Leads',
   Contacts: 'Contacts',
   Accounts: 'Accounts',
-  Deals: 'Deals',
+  Deals: 'Potentials',
   Tasks: 'Tasks',
   Calls: 'Calls',
   Meetings: 'Events',
