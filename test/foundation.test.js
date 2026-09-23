@@ -85,6 +85,26 @@ test('accepts structured CRM JSON with filter objects keyed by display labels an
   assert.deepEqual(request.plan.filters[0].value, ['2026-09-15', '2026-09-30']);
 });
 
+test('accepts AI-generated array filters keyed by field name instead of filter objects', () => {
+  const { normalizeStructuredCrmRequest } = require('../src/validators/structuredCrmRequest.validator');
+  const request = normalizeStructuredCrmRequest({
+    schema_version: '1.0',
+    request: {
+      module: 'Deals',
+      operation: 'list',
+      query: {
+        fields: ['id'],
+        filters: {
+          Created_Time: ['2026-09-22', '2026-09-23']
+        }
+      }
+    }
+  });
+  assert.equal(request.plan.filters[0].field, 'Created_Time');
+  assert.equal(request.plan.filters[0].operator, 'between');
+  assert.deepEqual(request.plan.filters[0].value, ['2026-09-22', '2026-09-23']);
+});
+
 test('POST /api/crm/audit-log accepts the structured audit-log request contract', async () => {
   const app = createApp({
     crmService: {

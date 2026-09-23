@@ -126,7 +126,18 @@ function normalizeFilters(value, addError, moduleName) {
   }
   const entries = Array.isArray(value)
     ? value.map((filter, index) => normalizeFilterObject(filter, `query.filters[${index}]`, addError, moduleName)).filter(Boolean)
-    : Object.entries(value).map(([field, definition]) => normalizeFilterObject({ field, ...definition }, `query.filters.${field}`, addError, moduleName)).filter(Boolean);
+    : Object.entries(value).flatMap(([field, definition]) => {
+      if (Array.isArray(definition) || definition === null || definition === undefined || typeof definition === 'string' || typeof definition === 'number' || typeof definition === 'boolean') {
+        const normalized = normalizeFilterObject({ field, value: definition }, `query.filters.${field}`, addError, moduleName);
+        return normalized ? [normalized] : [];
+      }
+      if (isPlainObject(definition)) {
+        const normalized = normalizeFilterObject({ field, ...definition }, `query.filters.${field}`, addError, moduleName);
+        return normalized ? [normalized] : [];
+      }
+      const normalized = normalizeFilterObject({ field, value: definition }, `query.filters.${field}`, addError, moduleName);
+      return normalized ? [normalized] : [];
+    });
   return entries.map((filter) => ({
     ...filter,
     field: resolveCrmField(moduleName, filter.field)
