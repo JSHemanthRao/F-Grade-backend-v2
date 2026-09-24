@@ -1,12 +1,70 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { planQuestion, createCrmController } = require('../src/controllers/crm.controller');
+const { analyzeCrmQuestion } = require('../src/query/questionAnalyzer');
 const { CrmService } = require('../src/services/crm.service');
 const { validateCrmQuery } = require('../src/validators/crmQuery.validator');
 const { createCrmDiagnostics } = require('../src/utils/crmDiagnostics');
 const { buildCoqlQuery, buildLogicalFilterClause } = require('../src/services/coql.service');
 
 const periods = ['today', 'yesterday', 'tomorrow', 'this week', 'last week', 'next week', 'this month', 'last month', 'next month', 'this quarter', 'last quarter', 'next quarter', 'this year', 'last year', 'next year'];
+
+test('analyzes the required canonical CRM query before execution', () => {
+  const query = analyzeCrmQuestion('Get all deals where Stage is Closed Won, sorted by Closing_Date descending', { limit: 20, offset: 0 });
+  assert.deepEqual(query, {
+    module: 'Deals',
+    operation: 'list',
+    filters: [{ field: 'Stage', operator: 'equals', value: 'Closed Won' }],
+    sort: [{ field: 'Closing_Date', order: 'desc' }],
+    pagination: { limit: 20, offset: 0 }
+  });
+  assert.doesNotThrow(() => validateCrmQuery({ module: 'Deals', request_type: 'records', filters: query.filters, sort: query.sort, limit: query.pagination.limit, offset: query.pagination.offset }));
+});
+
+test('analyzes the required natural-language examples into canonical CRM queries', () => {
+  const cases = [
+    {
+      question: 'Give me leads created yesterday',
+      expected: { module: 'Leads', operation: 'list', filters: [{ field: 'Created_Time', operator: 'between' }], sort: [], pagination: { limit: 20, offset: 0 } }
+    },
+    {
+      question: 'Show open deals above 50000',
+      expected: { module: 'Deals', operation: 'list', filters: [{ field: 'Stage', operator: 'equals', value: 'Open' }, { field: 'Amount', operator: 'greater_than', value: 50000 }], sort: [], pagination: { limit: 20, offset: 0 } }
+    },
+    {
+      question: 'How many leads were created today?',
+      expected: { module: 'Leads', operation: 'count', filters: [{ field: 'Created_Time', operator: 'between' }], sort: [], pagination: { limit: 20, offset: 0 } }
+    },
+    {
+      question: 'Give me the top 5 deals by amount',
+      expected: { module: 'Deals', operation: 'list', filters: [], sort: [{ field: 'Amount', order: 'desc' }], pagination: { limit: 5, offset: 0 } }
+    },
+    {
+      question: 'Show contacts not updated in the last 30 days',
+      expected: { module: 'Contacts', operation: 'list', filters: [{ field: 'Modified_Time', operator: 'between' }], sort: [], pagination: { limit: 20, offset: 0 } }
+    },
+    {
+      question: 'Show tasks due next week',
+      expected: { module: 'Tasks', operation: 'list', filters: [{ field: 'Due_Date', operator: 'between' }], sort: [], pagination: { limit: 20, offset: 0 } }
+    }
+  ];
+
+  for (const { question, expected } of cases) {
+    const actual = analyzeCrmQuestion(question, { limit: expected.pagination.limit, offset: expected.pagination.offset });
+    assert.equal(actual.module, expected.module, question);
+    assert.equal(actual.operation, expected.operation, question);
+    assert.equal(actual.pagination.limit, expected.pagination.limit, question);
+    assert.equal(actual.pagination.offset, expected.pagination.offset, question);
+    if (expected.filters.length) {
+      assert.equal(actual.filters.length, expected.filters.length, question);
+      assert.equal(actual.filters[0].field, expected.filters[0].field, question);
+      if (expected.filters[0].operator) assert.equal(actual.filters[0].operator, expected.filters[0].operator, question);
+    }
+    if (expected.sort.length) {
+      assert.deepEqual(actual.sort, expected.sort, question);
+    }
+  }
+});
 
 test('plans every relative period with a dynamic exclusive end', () => {
   for (const period of periods) {

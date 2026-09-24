@@ -52,8 +52,8 @@ function normalizeStructuredCrmRequest(body, { paginationEngine = new Pagination
   rejectUnknownKeys(requestQueryContext || {}, ALLOWED_QUERY_CONTEXT_KEYS, 'request.query_context', addError);
 
   if (semanticQuestion) {
-    const { planQuestion } = require('../controllers/crm.controller');
-    const planned = planQuestion(semanticQuestion);
+    const { analyzeCrmQuestion } = require('../query/questionAnalyzer');
+    const planned = analyzeCrmQuestion(semanticQuestion, { limit: requestPagination?.limit ?? requestBody?.limit ?? body.limit ?? 20, offset: requestPagination?.offset ?? requestBody?.offset ?? body.offset ?? 0 });
     const normalizedPagination = paginationEngine.normalizePagination(requestPagination || planned.pagination || { limit: 20, offset: 0 });
     const plan = {
       ...planned,

@@ -1,4 +1,5 @@
 const { createAppError } = require('../utils/errors');
+const { analyzeCrmQuestion } = require('../query/questionAnalyzer');
 const { createQueryIdentity, extractPageSize, isExplicitPageRequest, isPaginationAffirmation, isPaginationDecline } = require('../query/pagination');
 const { PaginationManager } = require('../pagination/paginationManager');
 const { updateDiagnostics, recordCrmEvent } = require('../utils/crmDiagnostics');
@@ -33,7 +34,7 @@ class CrmAssistantService {
     this.diagnostics = diagnostics;
   }
 
-  async execute({ question, conversationId, continuationToken, diagnostics }) {
+  async execute({ question, conversationId, continuationToken, diagnostics, canonicalRequest = null }) {
     const tokenHash = continuationToken ? createHash('sha256').update(continuationToken).digest('hex') : null;
     updateDiagnostics(diagnostics, { question, conversation_id_present: Boolean(conversationId), conversation_id: conversationId, continuation_token_present: Boolean(continuationToken), continuation_token_hash: tokenHash });
     const tokenState = continuationToken ? await this.paginationManager.getByTokenAsync(continuationToken) : null;
@@ -48,13 +49,26 @@ class CrmAssistantService {
     if (continuationDetected && previous && previous.more_records === false) return paginationTerminalResponse(previous, conversationId, question, 'No more CRM records are available.');
 
     const resolvedQuestion = this.resolveFollowUpQuestion(question, previous);
-    const plannedRequest = continuationDetected
-      ? isExplicitPageRequest(question)
-        ? this.paginationManager.planContinuation(question, previous)
-        : buildContinuationPlan(previous, this.paginationManager.advance(previous, extractPageSize(question)))
-      : detailsFollowUp
-        ? convertToDetailPlan(previous.canonical_plan)
-      : this.planner(resolvedQuestion);
+    const continuationPrompt = this.paginationManager.isContinuation(question) || isPaginationAffirmation(question) || isPaginationDecline(question);
+    const plannedRequest = canonicalRequest || (
+      continuationDetected
+        ? isExplicitPageRequest(question)
+          ? this.paginationManager.planContinuation(question, previous)
+          : buildContinuationPlan(previous, this.paginationManager.advance(previous, extractPageSize(question)))
+        : detailsFollowUp
+          ? convertToDetailPlan(previous.canonical_plan)
+          : this.planner(resolvedQuestion)
+    );
+    const specializedIntent = plannedRequest?.module === 'CRM' && (plannedRequest?.analysis?.type === 'today_activity' || plannedRequest?.request_type === 'analysis');
+    const specializedAuditIntent = plannedRequest?.intent === 'audit_log' || plannedRequest?.request_type === 'audit_log';
+    if (!canonicalRequest && !continuationDetected && !continuationPrompt && typeof resolvedQuestion === 'string' && !specializedIntent && !specializedAuditIntent) {
+      try {
+        const analyzed = analyzeCrmQuestion(resolvedQuestion, { limit: plannedRequest?.pagination?.limit || plannedRequest?.limit || 20, offset: plannedRequest?.pagination?.offset || plannedRequest?.offset || 0 });
+        if (analyzed && analyzed.module) Object.assign(plannedRequest, analyzed, { pagination: analyzed.pagination || plannedRequest.pagination || { limit: 20, offset: 0 } });
+      } catch (error) {
+        // Keep the legacy planner path only when the direct analyzer cannot build a valid canonical plan.
+      }
+    }
     updateDiagnostics(diagnostics, {
       continuation_detected: continuationDetected,
       previous_state_found: Boolean(previous),

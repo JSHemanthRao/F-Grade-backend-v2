@@ -5,6 +5,7 @@ const { resolveRelativePeriod, relativePeriodFromText } = require('../utils/rela
 const { createCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, diagnosticsFromError, publicCrmDiagnostics, updateDiagnostics } = require('../utils/crmDiagnostics');
 const { env } = require('../config/env');
 const { createCrmQueryPlanner } = require('../planners/crmQueryPlanner');
+const { analyzeCrmQuestion } = require('../query/questionAnalyzer');
 const { CrmAssistantService } = require('../services/crmAssistant.service');
 const { PaginationManager } = require('../pagination/paginationManager');
 const { PaginationEngine } = require('../pagination/paginationEngine');
@@ -123,7 +124,10 @@ function createCrmController(crmService = new CrmService()) {
         const input = isStructuredCrmJson(req.body)
           ? normalizeStructuredCrmRequest(req.body, { paginationEngine }).plan
           : extractNaturalQuestion(req.body)
-            ? planCrmQuestion(extractNaturalQuestion(req.body))
+            ? analyzeCrmQuestion(extractNaturalQuestion(req.body), {
+                limit: Number.isInteger(Number(req.body?.limit)) ? Number(req.body.limit) : Number(req.body?.pagination?.limit || 20),
+                offset: Number.isInteger(Number(req.body?.offset)) ? Number(req.body.offset) : Number(req.body?.pagination?.offset || 0)
+              })
             : req.body;
         const result = await crmService.query(input);
         // Ensure structured summary objects are serialized to strings for connector compatibility
@@ -154,7 +158,7 @@ function createCrmController(crmService = new CrmService()) {
         if (question.length > MAX_QUESTION_LENGTH) {
           throw createAppError('QUESTION_TOO_LONG', `Question must not exceed ${MAX_QUESTION_LENGTH} characters.`, 400);
         }
-        const conversationId = resolveConversationId(req);
+        const conversationId = resolveConversationId(req) || randomUUID();
         const continuationToken = resolveContinuationToken(req);
         const assistantResponse = await assistantService.execute({ question, conversationId, continuationToken, diagnostics });
         const result = assistantResponse?.result || {};
@@ -327,7 +331,7 @@ function resolveFollowUpQuestion(question, previous) {
 }
 
 function resolveConversationId(req) {
-  const candidates = [
+  const directCandidates = [
     req.body?.conversation_id,
     req.body?.conversationId,
     req.body?.session_id,
@@ -340,8 +344,11 @@ function resolveConversationId(req) {
     req.get?.('conversation-id'),
     req.get?.('session-id')
   ];
-  const value = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
-  return value ? value.trim() : null;
+  const directValue = directCandidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+  if (directValue) return directValue.trim();
+
+  const questionValue = typeof req.body?.question === 'string' ? req.body.question.trim() : '';
+  return isLikelyIdentifier(questionValue) ? questionValue : null;
 }
 
 function resolveContinuationToken(req) {
@@ -376,16 +383,21 @@ function isDashboardRequest(question) {
 }
 
 function isTodayActivityQuestion(lowerText) {
-  if (/\b(?:meeting|meetings|event|events|call|calls|task|tasks)\b/.test(lowerText)
-    && !/(activity|activities|logs?|audit|history|what happened)/.test(lowerText)) return false;
-  return /(today'?s activity|today activity|activity for today|what happened today|today's logs|today logs|audit logs?|audit trail|daily activity|daily logs?|history for today|today's crm activity|crm activity today)/.test(lowerText)
-    || (/(?:today|toda)\b/.test(lowerText) && /(activity|activities|history|log|logs|audit)/.test(lowerText));
+  const hasScheduledActivityWords = /\b(?:meeting|meetings|event|events|call|calls|task|tasks)\b/.test(lowerText);
+  const hasActivityWords = /(activity|activities|logs?|audit|history|what happened)/.test(lowerText);
+  const hasGenericTodayActivity = /\b(?:today'?s activity|today activity|activity for today|daily activity|today's crm activity|crm activity today|what happened today)\b/.test(lowerText);
+  const hasScheduledGrouping = /\b(?:including|with|and)\b/.test(lowerText) && hasScheduledActivityWords;
+  if (hasGenericTodayActivity && !hasScheduledActivityWords && !hasScheduledGrouping) return false;
+  if (hasScheduledActivityWords && !hasActivityWords) return false;
+  return /(today'?s activity|today activity|activity for today|what happened today|today's logs|today logs|audit logs?|audit trail|daily activity|daily logs?|history for today|today's crm activity|crm activity today|including tasks, calls, and meetings|including tasks, calls and meetings)/.test(lowerText)
+    || (/\b(?:today|todays?)\b/.test(lowerText) && (/(activity|activities|history|log|logs|audit)/.test(lowerText) || (hasScheduledActivityWords && /\b(?:including|with|and)\b/.test(lowerText))));
 }
 
 function isAuditLogQuestion(lowerText) {
+  const hasScheduledActivityWords = /\b(?:task|tasks|call|calls|meeting|meetings|event|events)\b/.test(lowerText);
+  if (hasScheduledActivityWords) return false;
   if (/\b(?:what|who|which)\s+is\s+activity\b/.test(lowerText)) return false;
-  if (/\b(?:task|tasks|call|calls|meeting|meetings|event|events)\b/.test(lowerText)) return false;
-  if (/\b(?:today'?s activity|today activity|activity for today|daily activity|today's crm activity)\b/.test(lowerText)) return true;
+  if (/\b(?:today'?s activity|today activity|activity for today|daily activity|today's crm activity|crm activity today)\b/.test(lowerText)) return true;
   if (/\b(?:what\s+activity\s+(?:was|did)\s+(?:done\s+)?(?:today|yesterday|on|from|between)|give\s+me\s+(?:today'?s|today)\s+activity|show\s+(?:today'?s|today)\s+activity)\b/.test(lowerText)) return true;
   if (/\bwhat\s+happened\b/.test(lowerText) && /\b(?:today|todays|today's|yesterday|this\s+week|last\s+week|this\s+month|last\s+month|this\s+quarter|last\s+quarter|this\s+year|last\s+year)\b/.test(lowerText)) return false;
   if (/\b(?:history|activity\s+history|what\s+happened)\b/.test(lowerText) && !/\b(?:audit\s+log|audit\s+trail|change\s+log|what\s+changed|what\s+did|done\s+by|performed\s+by|show\s+.*activity|give\s+me\s+.*activity)\b/.test(lowerText)) return false;
@@ -617,12 +629,6 @@ function planQuestion(question) {
     return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'organization' }, fields: ['id'], filters: [], limit: 20, offset: 0 };
   }
   if (isAuditLogQuestion(lower)) return buildAuditLogPlan(text, lower);
-  if (/\b(?:audit logs?|audit trail)\b/.test(lower)) {
-    return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'audit_logs' }, audit: {}, fields: ['id'], filters: [], limit: 200, offset: 0 };
-  }
-  if (/\b(?:files?|documents?)\b/.test(lower) && /\b(?:show|list|get|read|find)\b/.test(lower)) {
-    return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'files' }, files: {}, fields: ['id'], filters: [], limit: 200, offset: 0 };
-  }
   if (isTodayActivityQuestion(lower)) {
     const activityType = detectActivityType(lower) || 'ACTIVITY_HISTORY';
     return {
@@ -636,6 +642,12 @@ function planQuestion(question) {
       limit: 200,
       offset: 0
     };
+  }
+  if (/\b(?:audit logs?|audit trail)\b/.test(lower)) {
+    return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'audit_logs' }, audit: {}, fields: ['id'], filters: [], limit: 200, offset: 0 };
+  }
+  if (/\b(?:files?|documents?)\b/.test(lower) && /\b(?:show|list|get|read|find)\b/.test(lower)) {
+    return { module: 'CRM', complexity: 'MODERATE', request_type: 'analysis', analysis: { type: 'files' }, files: {}, fields: ['id'], filters: [], limit: 200, offset: 0 };
   }
   const module = detectedModule;
   const requestedLimit = extractRecordLimit(lower);
@@ -947,7 +959,9 @@ function planQuestion(question) {
 }
 
 function extractRecordLimit(lowerText) {
-  const match = lowerText.match(/(?:first|latest|last|oldest|top|show(?:\s+me)?|give me)\s+(\d+)\b/i);
+  const hasDayWindow = /\b(?:last|past|previous|next|for the last|for the previous)\s+\d+\s+days?\b|\b\d+\s+days?\s+ago\b/i.test(lowerText);
+  if (hasDayWindow) return 20;
+  const match = lowerText.match(/(?:first|latest|last|oldest|top|show(?:\s+me)?|give me)\s+(\d+)\b(?!\s+days?\b)/i);
   if (!match) return 20;
   return Math.min(Math.max(Number(match[1]), 1), 200);
 }
