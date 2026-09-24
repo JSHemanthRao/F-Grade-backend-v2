@@ -402,25 +402,27 @@ function isAuditLogQuestion(lowerText) {
   if (/\bwhat\s+happened\b/.test(lowerText) && /\b(?:today|todays|today's|yesterday|this\s+week|last\s+week|this\s+month|last\s+month|this\s+quarter|last\s+quarter|this\s+year|last\s+year)\b/.test(lowerText)) return false;
   if (/\b(?:history|activity\s+history|what\s+happened)\b/.test(lowerText) && !/\b(?:audit\s+log|audit\s+trail|change\s+log|what\s+changed|what\s+did|done\s+by|performed\s+by|show\s+.*activity|give\s+me\s+.*activity)\b/.test(lowerText)) return false;
   const hasAuditIntent = /\b(?:audit\s+(?:log|trail)|activity\s+history|recent\s+activity|change\s+log|what\s+changed|what\s+did|what\s+was\s+(?:added|updated|deleted)|who\s+changed|changes?\s+(?:to|for)|history|logs?)\b/.test(lowerText);
-  const hasDateOrEntityContext = /\b(?:today|todays|today's|yesterday|tomorrow|this\s+week|last\s+week|next\s+week|this\s+month|last\s+month|next\s+month|this\s+quarter|last\s+quarter|next\s+quarter|this\s+year|last\s+year|next\s+year|since|until|between|on|from|for|by|done\s+by|performed\s+by|lead|deals?|contacts?|accounts?|january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/.test(lowerText);
-  const hasChangeAction = /\b(?:add|added|update|updated|delete|deleted|modify|modified|create|created|changed|done)\b/.test(lowerText);
+  const hasDateOrEntityContext = /\b(?:today|todays|today's|yesterday|tomorrow|this\s+week|last\s+week|next\s+week|this\s+month|last\s+month|next\s+month|this\s+quarter|last\s+quarter|next\s+quarter|this\s+year|last\s+year|next\s+year|since|until|between|on|from|for|by|done\s+by|performed\s+by|lead|deals?|contacts?|accounts?|records?|january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/.test(lowerText);
+  const hasChangeAction = /\b(?:add|added|update|updated|delete|deleted|modify|modified|create|created|changed|done|edit|edited)\b/.test(lowerText);
   const hasGenericActivitySignal = /\b(?:activity|activities|audit)\b/.test(lowerText);
   const hasRelativeActivityDate = /\b(?:today|todays|today's|yesterday|tomorrow|this\s+week|last\s+week|next\s+week|this\s+month|last\s+month|next\s+month|this\s+quarter|last\s+quarter|next\s+quarter|this\s+year|last\s+year|next\s+year|since|between|on|from|for|january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/.test(lowerText);
   const genericActivityRequest = /\b(?:give\s+me|show|what\s+activity\s+(?:was|did)|what\s+did|show\s+.*activity|activity\s+(?:from|on|today|yesterday|since|between))\b/.test(lowerText);
-  return (hasAuditIntent && (hasDateOrEntityContext || hasChangeAction)) || (hasGenericActivitySignal && hasRelativeActivityDate && (genericActivityRequest || /\b(?:logs?|audit|what\s+did|what\s+was|show\s+.*activity|activity\s+today|activity\s+from)\b/.test(lowerText)));
+  const genericUpdatedRecordsRequest = /\b(?:what|who)\s+(?:records?|deals?|leads?|contacts?|accounts?)\s+(?:were|was)\s+(?:added|updated|deleted|modified|created|changed)\b/.test(lowerText);
+  const explicitUpdatedEntityRequest = /\b(?:who|what)\s+(?:updated|modified|deleted|added|created|changed)\s+(?:the\s+)?(?:deals?|leads?|contacts?|accounts?|records?)\b/.test(lowerText);
+  return (hasAuditIntent && (hasDateOrEntityContext || hasChangeAction))
+    || (hasGenericActivitySignal && hasRelativeActivityDate && (genericActivityRequest || /\b(?:logs?|audit|what\s+did|what\s+was|show\s+.*activity|activity\s+today|activity\s+from)\b/.test(lowerText)))
+    || genericUpdatedRecordsRequest
+    || explicitUpdatedEntityRequest;
 }
 
 function buildAuditLogPlan(text, lowerText) {
   const dateRange = detectAuditDateRange(lowerText);
-  const action = /\b(?:update|updated|updating|modify|modified|changed)\b/.test(lowerText)
-    ? 'Updated'
-    : /\b(?:add|added|create|created)\b/.test(lowerText)
-      ? 'Added'
-      : /\b(?:delete|deleted|remove|removed)\b/.test(lowerText) ? 'Deleted' : null;
+  const action = detectAuditAction(lowerText);
   const userMatch = text.match(/\b(?:what did|what activity did|activity done by|done by|performed by)\s+([a-z][a-z .'-]*?)(?=\s+(?:update|updated|add|added|delete|deleted|today|yesterday|this|last|on|in|between)\b|[?.!]|$)/i);
+  const explicitAuditModule = detectAuditModule(lowerText);
   const entityMatch = lowerText.match(/\b(deal|deals|lead|leads|contact|contacts|account|accounts)\s+(?:activity|activities|changes?|updates?)\b/i);
   return {
-    module: null,
+    module: explicitAuditModule,
     intent: 'audit_log',
     request_type: 'audit_log',
     complexity: 'MODERATE',
@@ -430,13 +432,31 @@ function buildAuditLogPlan(text, lowerText) {
       date_range: dateRange,
       user: userMatch ? { name: userMatch[1].trim(), id: null } : null,
       action,
-      entity: entityMatch ? normalizeAuditEntity(entityMatch[1]) : null
+      entity: explicitAuditModule || (entityMatch ? normalizeAuditEntity(entityMatch[1]) : null)
     },
     date_range: dateRange,
     limit: 200,
     offset: 0,
     original_question: text
   };
+}
+
+function detectAuditAction(lowerText) {
+  if (/\b(?:update|updated|updating|modify|modified|changed|change|edit|edited)\b/.test(lowerText)) return 'Updated';
+  if (/\b(?:add|added|create|created|inserted|new)\b/.test(lowerText)) return 'Added';
+  if (/\b(?:delete|deleted|remove|removed)\b/.test(lowerText)) return 'Deleted';
+  return null;
+}
+
+function detectAuditModule(lowerText) {
+  const explicitEntityMatch = lowerText.match(/\b(?:who|what)\s+(?:updated|modified|deleted|added|created|changed)\s+(?:the\s+)?(deals?|leads?|contacts?|accounts?|calls?|meetings?|tasks?|records?)\b/i)
+    || lowerText.match(/\b(Deals?|Leads?|Contacts?|Accounts?|Calls?|Meetings?|Tasks?|Records?)\s+(?:were|was|have|has|been)\s+(?:updated|modified|deleted|added|created|changed)\b/i)
+    || lowerText.match(/\b(?:for|on|about)\s+(deals?|leads?|contacts?|accounts?|calls?|meetings?|tasks?)\b/i);
+  const candidate = explicitEntityMatch ? explicitEntityMatch[1] || explicitEntityMatch[0] : null;
+  if (!candidate) return null;
+  const normalized = String(candidate).trim();
+  if (/^records?$/i.test(normalized)) return null;
+  return normalizeAuditEntity(normalized);
 }
 
 function normalizeAuditEntity(value) {
@@ -585,6 +605,21 @@ function planQuestion(question) {
   const lower = text.toLowerCase();
   if (!/\bprice\s+books?\b/.test(lower) && /\b(?:zoho\s+books?|books?|bills?|expenses?|payments?|banking|books?\s+invoices?|books?\s+items?)\b/.test(lower)) {
     throw createAppError('DOMAIN_AMBIGUOUS', 'This backend handles Zoho CRM only. Books resources must use the Books integration.', 400, { requested_domain: 'Books', supported_domain: 'CRM' });
+  }
+  if (isAuditLogQuestion(lower)) return buildAuditLogPlan(text, lower);
+  if (isTodayActivityQuestion(lower)) {
+    const activityType = detectActivityType(lower) || 'ACTIVITY_HISTORY';
+    return {
+      module: 'CRM',
+      complexity: 'MULTI-STEP',
+      request_type: 'analysis',
+      analysis: { type: 'today_activity', activity_type: activityType },
+      activity_type: activityType,
+      fields: ['id'],
+      filters: [],
+      limit: 200,
+      offset: 0
+    };
   }
   const detectedModule = extractExplicitModule(lower) || detectModule(lower);
   const comparedModules = extractComparedModules(lower);

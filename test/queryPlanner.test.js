@@ -311,6 +311,25 @@ test('routes generic activity to the canonical audit_log intent', () => {
   assert.equal(planQuestion('Show Deal activity today.').audit_log.entity, 'Deals');
 });
 
+test('routes cross-module updated-record questions to the audit log before module resolution', () => {
+  const request = planQuestion('Show me what records were updated yesterday');
+  assert.equal(request.request_type, 'audit_log');
+  assert.equal(request.intent, 'audit_log');
+  assert.equal(request.module, null);
+  assert.equal(request.audit_log.action, 'Updated');
+  assert.equal(request.audit_log.date_range.field, 'audited_time');
+});
+
+test('keeps module-specific audit log questions on the audit path without forcing a generic module', () => {
+  const request = planQuestion('Who updated deals yesterday?');
+  assert.equal(request.request_type, 'audit_log');
+  assert.equal(request.intent, 'audit_log');
+  assert.equal(request.module, 'Deals');
+  assert.equal(request.audit_log.action, 'Updated');
+  assert.equal(request.audit_log.entity, 'Deals');
+  assert.equal(request.audit_log.date_range.field, 'audited_time');
+});
+
 test('keeps explicit activity modules out of audit_log', () => {
   for (const [question, module] of [["Show today's tasks.", 'Tasks'], ["Show today's calls.", 'Calls'], ["Show today's meetings.", 'Meetings'], ["Show today's events.", 'Meetings']]) {
     const request = planQuestion(question);
