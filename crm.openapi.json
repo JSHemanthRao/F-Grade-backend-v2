@@ -3,8 +3,8 @@
   "info": {
     "title": "Zoho CRM Structured Query Assistant",
     "version": "1.0.0",
-    "description": "Read-only structured JSON access to live Zoho CRM data. The backend resolves the CRM module, fields, filters, dates, operators, relationships, and execution strategy from the natural-language question. Pagination is stateless using only limit and offset.",
-    "x-copilot-studio-tool-description": "This tool accepts a structured JSON request that is built from a natural-language Zoho CRM request. The backend determines the CRM module, fields, filters, operators, dates, relationships, sorting, aggregation, and execution strategy. The caller must not provide Zoho API field names unless explicitly required. Pagination uses only limit and offset; Never use continuation_token or conversation_id. For pagination metadata, use pagination.next_offset and do not ask the user for conversation IDs or continuation tokens."
+    "description": "Read-only live Zoho CRM data access from a natural-language question. The backend resolves the CRM module, fields, filters, dates, operators, and sort order internally before executing the Zoho query. Pagination uses only limit and offset.",
+    "x-copilot-studio-tool-description": "This tool retrieves live Zoho CRM data from a natural-language request. Pass the user's CRM question as question. Do not construct Zoho CRM module names, API field names, filters, operators, sorting expressions, or provider-specific query JSON. The backend analyzes the natural-language request, creates the required CRM query, validates it, and retrieves the data from Zoho CRM. Pagination uses only limit and offset. Do not ask the user for conversation IDs or continuation tokens."
   },
   "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",
@@ -127,54 +127,10 @@
       "properties": {
         "question": {
           "type": "string",
-          "description": "Natural-language Zoho CRM request. The backend resolves the CRM module, fields, filters, operators, dates, relationships, and execution strategy."
+          "description": "Natural-language Zoho CRM request. The backend resolves the CRM module, fields, filters, operators, dates, relationships, and execution strategy internally."
         },
         "pagination": {
           "$ref": "#/definitions/PaginationRequest"
-        },
-        "query_context": {
-          "$ref": "#/definitions/QueryContext"
-        }
-      }
-    },
-    "QueryDescriptor": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Zoho CRM API field names to return."
-        },
-        "filters": {
-          "type": "object",
-          "description": "Object keyed by field API name. Semantic date operators such as this_month are allowed.",
-          "additionalProperties": true
-        },
-        "sort": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/SortDescriptor"
-          },
-          "description": "Deterministic stable sort list. If omitted, the backend applies Created_Time desc then id desc."
-        }
-      }
-    },
-    "FilterDescriptor": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "operator"
-      ],
-      "properties": {
-        "operator": {
-          "type": "string",
-          "description": "CRM filter operator such as equals, between, greater_than, less_than, is_not_null, or semantic date operators such as this_month."
-        },
-        "value": {
-          "description": "Required for value-based operators."
         }
       }
     },
@@ -218,16 +174,6 @@
           "format": "int32",
           "minimum": 0,
           "default": 0
-        }
-      }
-    },
-    "QueryContext": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "previous_query": {
-          "type": "object",
-          "description": "Optional previous canonical semantic query for follow-up context. The backend may use it for follow-up questions without exposing internal identifiers."
         }
       }
     },
