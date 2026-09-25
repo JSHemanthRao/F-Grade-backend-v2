@@ -7,7 +7,7 @@ const SEMANTIC_ALIASES = new Map([
   ['call', 'Calls'], ['calls', 'Calls'], ['task', 'Tasks'], ['tasks', 'Tasks'],
   ['deal', 'Deals'], ['deals', 'Deals'], ['lead', 'Leads'], ['leads', 'Leads'],
   ['contact', 'Contacts'], ['contacts', 'Contacts'], ['account', 'Accounts'], ['accounts', 'Accounts'],
-  ['product', 'Products'], ['products', 'Products'], ['quote', 'Quotes'], ['quotes', 'Quotes'],
+  ['product', 'Products'], ['products', 'Products'], 
   ['service provider', 'Service_Provider'], ['service providers', 'Service_Provider']
 ]);
 
