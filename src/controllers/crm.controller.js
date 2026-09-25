@@ -1356,7 +1356,6 @@ function extractExplicitModule(lowerText) {
     ['Accounts', /\b(?:account|accounts)\b/i],
     ['Deals', /\b(?:deal|deals)\b/i],
     ['Vendors', /\b(?:vendor|vendors)\b/i],
-    ['Quotes', /\b(?:quote|quotes)\b/i],
     ['Campaigns', /\b(?:campaign|campaigns)\b/i],
     ['Renewal Accounts', /\brenewal accounts?\b/i],
     ['Service Providers', /\bservice providers?\b/i],
