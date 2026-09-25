@@ -385,8 +385,11 @@ function isDashboardRequest(question) {
 function isTodayActivityQuestion(lowerText) {
   const hasScheduledActivityWords = /\b(?:meeting|meetings|event|events|call|calls|task|tasks)\b/.test(lowerText);
   const hasActivityWords = /(activity|activities|logs?|audit|history|what happened)/.test(lowerText);
-  const hasGenericTodayActivity = /\b(?:today'?s activity|today activity|activity for today|daily activity|today's crm activity|crm activity today|what happened today)\b/.test(lowerText);
+  const hasGenericTodayActivity = /\b(?:today'?s activity|today activity|activity for today|daily activity|today's crm activity|crm activity today|what happened today|give me update of yesterday|update of yesterday|today's update|yesterday's update|update for today)\b/.test(lowerText);
+  const hasUpdateSummary = /\b(?:give me|show me|what's|what is|what was)\s+(?:the\s+)?(?:latest\s+)?(?:update|updates|summary|status)\s+(?:of|for)?\s*(?:today|yesterday|this\s+week|last\s+week|this\s+month|last\s+month)\b/.test(lowerText)
+    || /\b(?:update|updates|summary|status)\s+(?:of|for)\s*(?:today|yesterday|this\s+week|last\s+week|this\s+month|last\s+month)\b/.test(lowerText);
   const hasScheduledGrouping = /\b(?:including|with|and)\b/.test(lowerText) && hasScheduledActivityWords;
+  if (hasUpdateSummary) return true;
   if (hasGenericTodayActivity && !hasScheduledActivityWords && !hasScheduledGrouping) return false;
   if (hasScheduledActivityWords && !hasActivityWords) return false;
   return /(today'?s activity|today activity|activity for today|what happened today|today's logs|today logs|audit logs?|audit trail|daily activity|daily logs?|history for today|today's crm activity|crm activity today|including tasks, calls, and meetings|including tasks, calls and meetings)/.test(lowerText)
@@ -395,7 +398,10 @@ function isTodayActivityQuestion(lowerText) {
 
 function isAuditLogQuestion(lowerText) {
   const hasScheduledActivityWords = /\b(?:task|tasks|call|calls|meeting|meetings|event|events)\b/.test(lowerText);
+  const hasGenericUpdateSummary = /\b(?:give me|show me|what's|what is|what was)\s+(?:the\s+)?(?:latest\s+)?(?:update|updates|summary|status)\s+(?:of|for)?\s*(?:today|yesterday|this\s+week|last\s+week|this\s+month|last\s+month)\b/.test(lowerText)
+    || /\b(?:update|updates|summary|status)\s+(?:of|for)\s*(?:today|yesterday|this\s+week|last\s+week|this\s+month|last\s+month)\b/.test(lowerText);
   if (hasScheduledActivityWords) return false;
+  if (hasGenericUpdateSummary) return false;
   if (/\b(?:what|who|which)\s+is\s+activity\b/.test(lowerText)) return false;
   if (/\b(?:today'?s activity|today activity|activity for today|daily activity|today's crm activity|crm activity today)\b/.test(lowerText)) return true;
   if (/\b(?:what\s+activity\s+(?:was|did)\s+(?:done\s+)?(?:today|yesterday|on|from|between)|give\s+me\s+(?:today'?s|today)\s+activity|show\s+(?:today'?s|today)\s+activity)\b/.test(lowerText)) return true;
@@ -1273,6 +1279,8 @@ function detectModule(lowerText) {
   const aliases = [
     ['Renewal Accounts', /\brenewal accounts?\b/],
     ['Price Books', /\bprice books?\b/],
+    ['Service Providers', /\bservice providers?\b/],
+    ['Service Provider', /\bservice provider\b/],
     ['Remote Assist', /\bremote assist\b/],
     ['ZohoSign Documents', /\bzohosign documents?\b/],
     ['ZohoSign Recipients', /\bzohosign recipients?\b/],
@@ -1351,6 +1359,8 @@ function extractExplicitModule(lowerText) {
     ['Quotes', /\b(?:quote|quotes)\b/i],
     ['Campaigns', /\b(?:campaign|campaigns)\b/i],
     ['Renewal Accounts', /\brenewal accounts?\b/i],
+    ['Service Providers', /\bservice providers?\b/i],
+    ['Service Provider', /\bservice provider\b/i],
     ['Sales Orders', /\bsales orders?\b/i],
     ['Purchase Orders', /\bpurchase orders?\b/i]
   ];

@@ -56,6 +56,7 @@ const CRM_API_NAMES = Object.freeze({
   'Renewal Accounts': 'Renewal_Accounts',
   Projects: 'Projects',
   'Service Provider': 'Service_Provider',
+  'Service Providers': 'Service_Provider',
   'Co-operative Banks': 'Co_operative_Banks',
   'Zoho Finance': 'Zoho_Books',
   'Voice of the Customer': 'Voice_of_the_Customer__s'

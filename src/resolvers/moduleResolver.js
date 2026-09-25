@@ -7,7 +7,8 @@ const SEMANTIC_ALIASES = new Map([
   ['call', 'Calls'], ['calls', 'Calls'], ['task', 'Tasks'], ['tasks', 'Tasks'],
   ['deal', 'Deals'], ['deals', 'Deals'], ['lead', 'Leads'], ['leads', 'Leads'],
   ['contact', 'Contacts'], ['contacts', 'Contacts'], ['account', 'Accounts'], ['accounts', 'Accounts'],
-  ['product', 'Products'], ['products', 'Products'], ['quote', 'Quotes'], ['quotes', 'Quotes']
+  ['product', 'Products'], ['products', 'Products'], ['quote', 'Quotes'], ['quotes', 'Quotes'],
+  ['service provider', 'Service_Provider'], ['service providers', 'Service_Provider']
 ]);
 
 function normalizeModuleReference(value) {
@@ -104,13 +105,14 @@ function resolveModuleReference(userText, metadata = [], options = {}) {
 }
 
 function resolved(entry, confidence, matchType) {
-  const semanticName = entry.item.module_name || entry.item.plural_label || entry.label;
+  const semanticName = entry.item.plural_label || entry.item.module_name || entry.label;
+  const label = entry.item.plural_label || entry.item.module_name || entry.label;
   return {
     matched: true,
     ambiguous: false,
     semantic_name: semanticName === 'Events' ? 'Meetings' : semanticName,
     api_name: entry.api_name,
-    label: semanticName === 'Events' ? 'Meetings' : entry.label,
+    label: label === 'Events' ? 'Meetings' : label,
     confidence,
     match_type: matchType,
     metadata: entry.item

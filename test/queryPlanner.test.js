@@ -282,6 +282,26 @@ test('plans today deals with a negated Stage filter and created-date filter', ()
   assert.ok(!request.filters.some((filter) => ['__semantic__', 'semantic'].includes(filter.field)));
 });
 
+test('keeps custom CRM module phrases on the record path instead of forcing Accounts', () => {
+  const request = planQuestion('give me service providers');
+  assert.equal(request.module, 'Service Providers');
+  assert.equal(request.request_type, 'records');
+  assert.notEqual(request.module, 'Accounts');
+});
+
+test('separates generic activity questions from audit-log questions', () => {
+  const activityRequest = planQuestion('Give me update of yesterday');
+  assert.equal(activityRequest.request_type, 'analysis');
+  assert.equal(activityRequest.analysis.type, 'today_activity');
+  assert.equal(activityRequest.module, 'CRM');
+  assert.notEqual(activityRequest.request_type, 'audit_log');
+
+  const auditRequest = planQuestion('Who changed deals yesterday?');
+  assert.equal(auditRequest.request_type, 'audit_log');
+  assert.equal(auditRequest.intent, 'audit_log');
+  assert.equal(auditRequest.audit_log.action, 'Updated');
+});
+
 test('routes today activity history through the CRM audit-log analysis path', () => {
   const request = planQuestion("today's activity?");
   assert.equal(request.module, null);
