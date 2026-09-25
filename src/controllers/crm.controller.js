@@ -1335,7 +1335,7 @@ function extractComparedModules(lowerText) {
     ['Contacts', /\b(?:contact|contacts)\b/],
     ['Accounts', /\b(?:account|accounts)\b/],
     ['Deals', /\b(?:deal|deals)\b/],
-    ['Quotes', /\b(?:quote|quotes)\b/]
+    // ['Quotes', /\b(?:quote|quotes)\b/]
   ];
   return candidates
     .map(([module, pattern]) => ({ module, index: lowerText.search(pattern) }))
