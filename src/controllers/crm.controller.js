@@ -388,9 +388,7 @@ function isTodayActivityQuestion(lowerText) {
   const hasGenericTodayActivity = /\b(?:today'?s activity|today activity|activity for today|daily activity|today's crm activity|crm activity today|what happened today|give me update of yesterday|update of yesterday|today's update|yesterday's update|update for today)\b/.test(lowerText);
   const hasUpdateSummary = /\b(?:give me|show me|what's|what is|what was)\s+(?:the\s+)?(?:latest\s+)?(?:update|updates|summary|status)\s+(?:of|for)?\s*(?:today|yesterday|this\s+week|last\s+week|this\s+month|last\s+month)\b/.test(lowerText)
     || /\b(?:update|updates|summary|status)\s+(?:of|for)\s*(?:today|yesterday|this\s+week|last\s+week|this\s+month|last\s+month)\b/.test(lowerText);
-  const hasScheduledGrouping = /\b(?:including|with|and)\b/.test(lowerText) && hasScheduledActivityWords;
   if (hasUpdateSummary) return true;
-  if (hasGenericTodayActivity && !hasScheduledActivityWords && !hasScheduledGrouping) return false;
   if (hasScheduledActivityWords && !hasActivityWords) return false;
   return /(today'?s activity|today activity|activity for today|what happened today|today's logs|today logs|audit logs?|audit trail|daily activity|daily logs?|history for today|today's crm activity|crm activity today|including tasks, calls, and meetings|including tasks, calls and meetings)/.test(lowerText)
     || (/\b(?:today|todays?)\b/.test(lowerText) && (/(activity|activities|history|log|logs|audit)/.test(lowerText) || (hasScheduledActivityWords && /\b(?:including|with|and)\b/.test(lowerText))));
@@ -789,8 +787,8 @@ function planQuestion(question) {
 
   const fieldComparison = extractFieldComparison(lower, module);
   if (fieldComparison && !filters.some((filter) => filter.field === fieldComparison.field)) filters.push(fieldComparison);
-  const amountThreshold = extractAmountThreshold(lower);
-  if (amountThreshold && !fieldComparison) filters.push({ field: 'Amount', operator: 'greater_than', value: amountThreshold.value });
+  const amountThreshold = extractAmountThreshold(lower, module);
+  if (amountThreshold && !fieldComparison) filters.push({ field: amountThreshold.field || 'Amount', operator: 'greater_than', value: amountThreshold.value });
   const excludedPicklist = extractExcludedPicklistFilter(lower);
   if (excludedPicklist) filters.push(excludedPicklist);
   const semanticFilter = extractSemanticFilter(lower);
@@ -967,9 +965,12 @@ function planQuestion(question) {
     };
   }
 
+  const crossModule = extractCrossModuleContext(lower, text, module);
+
   if (/(latest|recent|most recent|newest)/.test(lower)) {
     return {
       module,
+      complexity: crossModule ? 'MULTI-STEP' : 'SIMPLE',
       request_type: 'records',
       activity_type: scheduledActivityTypeForModule(module),
       fields: fieldLabels.length > 0 ? ['id'] : defaultFields(module),
@@ -977,6 +978,7 @@ function planQuestion(question) {
       ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
       filters,
       date_field_role: dateFieldRole,
+      ...(crossModule ? { cross_module: crossModule } : {}),
       ...(Array.isArray(sortPlan) ? { sort: sortPlan } : { sort_field: sortPlan.field, sort_order: sortPlan.order }),
       limit: requestedLimit,
       offset: 0
@@ -985,7 +987,7 @@ function planQuestion(question) {
 
   return {
     module,
-    complexity: 'SIMPLE',
+    complexity: crossModule ? 'MULTI-STEP' : 'SIMPLE',
     request_type: 'records',
     activity_type: scheduledActivityTypeForModule(module) || null,
     fields: fieldLabels.length > 0 ? ['id'] : defaultFields(module),
@@ -993,6 +995,7 @@ function planQuestion(question) {
     ...(fieldLabels.length > 0 ? { field_labels: fieldLabels } : {}),
     filters,
     date_field_role: dateFieldRole,
+    ...(crossModule ? { cross_module: crossModule } : {}),
     ...(Array.isArray(sortPlan) ? { sort: sortPlan } : { sort_field: sortPlan.field, sort_order: sortPlan.order }),
     limit: requestedLimit,
     offset: 0
@@ -1399,6 +1402,11 @@ function defaultFields(module) {
   if (module === 'Calls') return ['Subject', 'Call_Type', 'Call_Start_Time', 'Call_Result', 'Owner', 'Created_Time'];
   if (module === 'Tasks') return ['Subject', 'Status', 'Priority', 'Due_Date', 'Owner', 'Created_Time'];
   if (module === 'Products') return ['Product_Name', 'Product_Code', 'Unit_Price', 'Created_Time', 'Owner'];
+  if (module === 'Purchase Orders') return ['PO_Number', 'Subject', 'Grand_Total', 'Status', 'Vendor_Name', 'Created_Time'];
+  if (module === 'Sales Orders') return ['SO_Number', 'Subject', 'Grand_Total', 'Status', 'Account_Name', 'Created_Time'];
+  if (module === 'Vendors') return ['Vendor_Name', 'Email', 'Phone', 'Created_Time'];
+  if (module === 'Campaigns') return ['Campaign_Name', 'Type', 'Status', 'Expected_Revenue', 'Created_Time'];
+  if (module === 'Renewal Accounts') return ['Account_Name', 'Contract_Value', 'Renewal_Date', 'Status', 'Owner'];
   return ['id'];
 }
 
@@ -1409,7 +1417,62 @@ function defaultSortField(module) {
   if (module === 'Contacts') return 'Created_Time';
   if (module === 'Meetings') return 'Start_DateTime';
   if (module === 'Calls') return 'Call_Start_Time';
+  if (module === 'Tasks') return 'Due_Date';
+  if (module === 'Purchase Orders') return 'Created_Time';
+  if (module === 'Sales Orders') return 'Created_Time';
   return 'Created_Time';
+}
+
+function defaultMonetaryField(module) {
+  if (module === 'Purchase Orders' || module === 'Sales Orders') return 'Grand_Total';
+  if (module === 'Products') return 'Unit_Price';
+  if (module === 'Renewal Accounts') return 'Contract_Value';
+  return 'Amount';
+}
+
+function extractCrossModuleContext(lowerText, text, module) {
+  if (['Calls', 'Meetings', 'Tasks'].includes(module)) {
+    const knownIndustries = ['manufacturing', 'healthcare', 'technology', 'finance', 'financial services', 'retail', 'education', 'telecommunications', 'real estate', 'automotive', 'agriculture', 'energy', 'hospitality', 'construction'];
+    let industryName = null;
+    const industryMatch = lowerText.match(/\b(?:in\s+the\s+([a-z\s]+?)\s+(?:sector|industry)|([a-z\s]+?)\s+(?:sector|industry)|([a-z]+)\s+(?:contacts?|prospects?|accounts?|leads?))\b/i);
+    if (industryMatch) {
+      const candidate = (industryMatch[1] || industryMatch[2] || industryMatch[3] || '').trim().toLowerCase();
+      if (knownIndustries.includes(candidate)) {
+        industryName = candidate.charAt(0).toUpperCase() + candidate.slice(1);
+      }
+    }
+    if (!industryName) {
+      for (const ind of knownIndustries) {
+        if (new RegExp(`\\b${ind}\\b`, 'i').test(lowerText)) {
+          industryName = ind.charAt(0).toUpperCase() + ind.slice(1);
+          break;
+        }
+      }
+    }
+    if (industryName) {
+      return {
+        type: 'activity_with_industry',
+        industry: industryName,
+        target_entities: ['Leads', 'Contacts', 'Accounts']
+      };
+    }
+  }
+
+  if (['Meetings', 'Calls', 'Tasks'].includes(module)) {
+    const accountMatch = text.match(/\b(?:with\s+(?:the\s+)?account\s+([A-Za-z0-9\s&.-]+?)|scheduled\s+with\s+(?:account\s+)?([A-Za-z0-9\s&.-]+?)|with\s+([A-Z][A-Za-z0-9\s&.-]*?(?:Corp|Inc|LLC|Ltd|Partners|Technologies|Solutions|Group|Enterprises|Company|Co\b|[A-Z][a-z]+)))\s*(?:next|this|last|tomorrow|today|yesterday|on|\.|\?|$)/i);
+    if (accountMatch) {
+      const name = (accountMatch[1] || accountMatch[2] || accountMatch[3] || '').trim().replace(/\b(?:next|this|last|tomorrow|today|yesterday|on|for|at)\b.*$/i, '').trim();
+      if (name && name.length >= 2 && !/^(the|a|an|me|us|all|some)$/i.test(name)) {
+        return {
+          type: 'activity_with_account',
+          account_name: name,
+          target_module: 'Accounts'
+        };
+      }
+    }
+  }
+
+  return null;
 }
 
 function extractOwnerName(text) {
@@ -1430,10 +1493,10 @@ function extractOwnerName(text) {
   return null;
 }
 
-function extractAmountThreshold(lowerText) {
-  const match = lowerText.match(/(?:above|greater than|more than|over|at least|min(?:imum)?|>=)\s*₹?\s*([0-9][0-9,]*(?:\.\d+)?)/i);
+function extractAmountThreshold(lowerText, module = 'Deals') {
+  const match = lowerText.match(/(?:above|greater than|more than|over|at least|min(?:imum)?|>=)\s*[$₹]?\s*([0-9][0-9,]*(?:\.\d+)?)/i);
   if (match) {
-    return { field: 'Amount', operator: 'greater_than', value: Number(match[1].replace(/,/g, '')) };
+    return { field: defaultMonetaryField(module), operator: 'greater_than', value: Number(match[1].replace(/,/g, '')) };
   }
   return null;
 }

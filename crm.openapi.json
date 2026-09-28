@@ -4,7 +4,7 @@
     "title": "Zoho CRM Structured Query Assistant",
     "version": "1.0.0",
     "description": "Read-only live Zoho CRM data access from a natural-language question. The backend resolves the CRM module, fields, filters, dates, operators, and sort order internally before executing the Zoho query. Pagination uses only limit and offset.",
-    "x-copilot-studio-tool-description": "This tool retrieves live Zoho CRM data from a natural-language request. Pass the user's CRM question as question. Do not construct Zoho CRM module names, API field names, filters, operators, sorting expressions, or provider-specific query JSON. The backend analyzes the natural-language request, creates the required CRM query, validates it, and retrieves the data from Zoho CRM. Pagination uses only limit and offset. Do not ask the user for conversation IDs or continuation tokens."
+    "x-copilot-studio-tool-description": "This tool retrieves live Zoho CRM data from a natural-language request or structured JSON request. Pass the user's CRM question as question. Do not construct Zoho CRM module names, API field names, filters, operators, sorting expressions, or provider-specific query JSON. The backend analyzes the natural-language request, creates the required CRM query, validates it, and retrieves the data from Zoho CRM. Pagination uses only limit and offset. Never use continuation_token. For next pages use pagination.next_offset. Do not ask the user for conversation IDs or continuation tokens."
   },
   "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",

@@ -10,8 +10,13 @@ const MODULE_ALIASES = [
   ['account', 'Accounts'], ['accounts', 'Accounts'],
   ['task', 'Tasks'], ['tasks', 'Tasks'],
   ['call', 'Calls'], ['calls', 'Calls'],
-  ['meeting', 'Meetings'], ['meetings', 'Meetings'],
-  ['product', 'Products'], ['products', 'Products']
+  ['meeting', 'Meetings'], ['meetings', 'Meetings'], ['event', 'Meetings'], ['events', 'Meetings'],
+  ['product', 'Products'], ['products', 'Products'],
+  ['purchase order', 'Purchase Orders'], ['purchase orders', 'Purchase Orders'], ['po', 'Purchase Orders'],
+  ['sales order', 'Sales Orders'], ['sales orders', 'Sales Orders'], ['so', 'Sales Orders'],
+  ['vendor', 'Vendors'], ['vendors', 'Vendors'],
+  ['campaign', 'Campaigns'], ['campaigns', 'Campaigns'],
+  ['renewal account', 'Renewal Accounts'], ['renewal accounts', 'Renewal Accounts']
 ];
 
 function analyzeCrmQuestion(question, context = {}) {
@@ -26,10 +31,13 @@ function analyzeCrmQuestion(question, context = {}) {
   const filters = [];
   const sort = [];
 
+  const ownerFilter = detectOwnerFilter(lower, text);
+  if (ownerFilter) filters.push(ownerFilter);
+
   const stageFilter = detectStageFilter(lower);
   if (stageFilter) filters.push(stageFilter);
 
-  const amountFilter = detectAmountFilter(lower);
+  const amountFilter = detectAmountFilter(lower, module);
   if (amountFilter) filters.push(amountFilter);
 
   const dateFilter = detectDateFilter(lower, module);
@@ -72,13 +80,14 @@ function detectStageFilter(lower) {
   return null;
 }
 
-function detectAmountFilter(lower) {
-  const amountMatch = lower.match(/(?:amount|value|revenue)\s*(?:is\s+)?(?:greater than|above|over|more than|>=|>)\s*[$₹]?\s*(\d[\d,]*)/i);
-  if (amountMatch) return { field: 'Amount', operator: 'greater_than', value: Number(amountMatch[1].replace(/,/g, '')) };
+function detectAmountFilter(lower, module = 'Deals') {
+  const field = defaultMonetaryFieldForModule(module);
+  const amountMatch = lower.match(/(?:amount|value|revenue|grand\s+total|price|unit\s+price|cost)\s*(?:is\s+)?(?:greater than|above|over|more than|>=|>)\s*[$₹]?\s*(\d[\d,]*)/i);
+  if (amountMatch) return { field, operator: 'greater_than', value: Number(amountMatch[1].replace(/,/g, '')) };
 
   const bareThresholdMatch = lower.match(/(?:^|\s)(?:above|over|more than|greater than|>)\s*[$₹]?\s*(\d[\d,]*)\b/i);
-  if (bareThresholdMatch && /\bdeals?\b/.test(lower)) {
-    return { field: 'Amount', operator: 'greater_than', value: Number(bareThresholdMatch[1].replace(/,/g, '')) };
+  if (bareThresholdMatch && !/(?:days?|hours?|minutes?|months?|weeks?|years?)\b/i.test(lower.slice(lower.indexOf(bareThresholdMatch[0])))) {
+    return { field, operator: 'greater_than', value: Number(bareThresholdMatch[1].replace(/,/g, '')) };
   }
 
   const topMatch = lower.match(/(?:top|highest|largest|maximum)\s+(\d+)\b/i);
@@ -86,6 +95,13 @@ function detectAmountFilter(lower) {
     return null;
   }
   return null;
+}
+
+function defaultMonetaryFieldForModule(module) {
+  if (module === 'Purchase Orders' || module === 'Sales Orders') return 'Grand_Total';
+  if (module === 'Products') return 'Unit_Price';
+  if (module === 'Renewal Accounts') return 'Contract_Value';
+  return 'Amount';
 }
 
 function detectDateFilter(lower, module) {
@@ -102,27 +118,37 @@ function detectDateFilter(lower, module) {
   const datePeriod = relativePeriodFromText(lower);
   if (!datePeriod) return null;
 
-  if (/\b(?:created|added|new)\b/.test(lower)) {
-    return buildDateRangeFilter('Created_Time', datePeriod);
-  }
-
   if (/\b(?:modified|updated|not updated)\b/.test(lower)) {
     return buildDateRangeFilter('Modified_Time', datePeriod);
   }
 
-  if (/\b(?:due|deadline|due date)\b/.test(lower) || (/\btask(s)?\b/.test(lower) && /\bnext\s+week\b/.test(lower))) {
-    return buildDateRangeFilter('Due_Date', datePeriod);
+  if (module === 'Meetings') {
+    const dateField = /\b(?:created|added|entered)\b/.test(lower) ? 'Created_Time' : 'Start_DateTime';
+    return buildDateRangeFilter(dateField, datePeriod);
   }
 
-  if (/\b(?:closing|close)\b/.test(lower) && /\b(?:date|deadline)\b/.test(lower)) {
-    return buildDateRangeFilter('Closing_Date', datePeriod);
+  if (module === 'Calls') {
+    const dateField = /\b(?:created|added|entered)\b/.test(lower) ? 'Created_Time' : 'Call_Start_Time';
+    return buildDateRangeFilter(dateField, datePeriod);
   }
 
-  if (module === 'Leads' && /\bcreated\b/.test(lower)) {
-    return buildDateRangeFilter('Created_Time', datePeriod);
+  if (module === 'Tasks') {
+    const dateField = /\b(?:created|added|entered)\b/.test(lower) ? 'Created_Time' : 'Due_Date';
+    return buildDateRangeFilter(dateField, datePeriod);
   }
 
-  return null;
+  if (module === 'Purchase Orders' || module === 'Sales Orders') {
+    const dateField = /\b(?:due|deadline)\b/.test(lower) ? 'Due_Date' : 'Created_Time';
+    return buildDateRangeFilter(dateField, datePeriod);
+  }
+
+  if (module === 'Deals') {
+    const closeDatePhrase = /(closing\s+date|close\s+date|closed\s+date|closing|close)/i;
+    const dateField = closeDatePhrase.test(lower) || !/\b(?:created|added|new)\b/.test(lower) ? 'Closing_Date' : 'Created_Time';
+    return buildDateRangeFilter(dateField, datePeriod);
+  }
+
+  return buildDateRangeFilter('Created_Time', datePeriod);
 }
 
 function buildDateRangeFilter(field, period) {
@@ -132,6 +158,7 @@ function buildDateRangeFilter(field, period) {
     field,
     operator: 'between',
     value: [bounds.start, bounds.end],
+    exclusive_end: true,
     date_range: { field, start: bounds.start, end: bounds.end, period, timezone: bounds.timeZone || 'Asia/Kolkata' }
   };
 }
@@ -145,6 +172,7 @@ function buildRelativeDaysFilter(field, days, direction) {
     field,
     operator: 'between',
     value: [formatDate(start), formatDate(end)],
+    exclusive_end: true,
     date_range: { field, start: formatDate(start), end: formatDate(end), period: `${direction} ${days} days`, timezone: 'Asia/Kolkata' }
   };
 }
@@ -160,24 +188,28 @@ function detectSort(lower, module) {
     if (/closing[_\s-]*date|close date/i.test(phrase) && /(descending|desc|newest|latest|highest)/i.test(phrase)) {
       return { field: 'Closing_Date', order: 'desc' };
     }
-    if (/amount|value|revenue/i.test(phrase) && /(descending|desc|newest|latest|highest|largest|top)/i.test(phrase)) {
-      return { field: 'Amount', order: 'desc' };
+    if (/amount|value|revenue|price/i.test(phrase) && /(descending|desc|newest|latest|highest|largest|top)/i.test(phrase)) {
+      return { field: defaultMonetaryFieldForModule(module), order: 'desc' };
     }
-    if (/amount|value|revenue/i.test(phrase) && /(ascending|asc|lowest|oldest|smallest)/i.test(phrase)) {
-      return { field: 'Amount', order: 'asc' };
+    if (/amount|value|revenue|price/i.test(phrase) && /(ascending|asc|lowest|oldest|smallest)/i.test(phrase)) {
+      return { field: defaultMonetaryFieldForModule(module), order: 'asc' };
     }
   }
 
-  if (/\b(?:top|highest|largest|maximum|most expensive)\b/.test(lower) && /\b(?:amount|value|revenue)\b/.test(lower)) {
-    return { field: 'Amount', order: 'desc' };
+  if (/\b(?:top|highest|largest|maximum|most expensive)\b/.test(lower) && /\b(?:amount|value|revenue|price)\b/.test(lower)) {
+    return { field: defaultMonetaryFieldForModule(module), order: 'desc' };
   }
 
   if (/\b(?:sort(?:ed)? by|sorted by)\s+.*\b(?:closing[_\s-]*date|close date)\b/i.test(lower) && /(descending|desc|newest|latest)/i.test(lower)) {
     return { field: 'Closing_Date', order: 'desc' };
   }
 
-  if (/\b(?:latest|newest|most recent|recent)\b/.test(lower) && (module === 'Contacts' || module === 'Leads' || module === 'Deals')) {
-    return { field: module === 'Deals' ? 'Closing_Date' : 'Created_Time', order: 'desc' };
+  if (/\b(?:latest|newest|most recent|recent)\b/.test(lower)) {
+    if (module === 'Deals') return { field: 'Closing_Date', order: 'desc' };
+    if (module === 'Meetings') return { field: 'Start_DateTime', order: 'desc' };
+    if (module === 'Calls') return { field: 'Call_Start_Time', order: 'desc' };
+    if (module === 'Tasks') return { field: 'Due_Date', order: 'desc' };
+    return { field: 'Created_Time', order: 'desc' };
   }
 
   if (/\b(?:earliest|oldest|first)\b/.test(lower) && (/created\b|date\b|modified\b/).test(lower)) {
@@ -253,6 +285,23 @@ function validateCanonicalQuestion(canonical) {
     offset: canonical.pagination.offset,
     metadata_driven: true
   });
+}
+
+function detectOwnerFilter(lower, text) {
+  const patterns = [
+    /(?:owned by|owner is|assigned to|belongs to|assigned user|responsible person)\s+([A-Za-z][A-Za-z .'-]*?)(?=\s*(?:above|below|greater than|less than|more than|for|created|sorted|[?.!]|$))/i,
+    /(?:by)\s+([A-Za-z][A-Za-z .'-]*?)(?=\s+(?:above|below|greater than|less than|more than|for|\.|$))/i
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const value = match[1].trim();
+      if (!/^(this|that|these|those|next|latest|month|week|quarter|year|all|all persons|all owners|persons|owners|owner)$/i.test(value)) {
+        return { field: 'Owner', operator: 'equals', value };
+      }
+    }
+  }
+  return null;
 }
 
 function escapeRegExp(value) {

@@ -47,26 +47,36 @@ const CRM_FIELD_METADATA = Object.freeze({
   Tasks: {
     Subject: { aliases: ['subject', 'task subject', 'title'], data_type: 'text' },
     Status: { aliases: ['status', 'task status'], data_type: 'picklist' },
-    Due_Date: { aliases: ['due date', 'due on', 'due'], data_type: 'date' },
+    Due_Date: { aliases: ['due date', 'due on', 'due', 'deadline'], data_type: 'date' },
     Priority: { aliases: ['priority', 'task priority'], data_type: 'picklist' },
+    Who_Id: { aliases: ['who id', 'contact', 'lead', 'prospect', 'person'], data_type: 'lookup' },
+    What_Id: { aliases: ['what id', 'related to', 'account', 'deal'], data_type: 'lookup' },
     Owner: { aliases: ['owner', 'task owner'], data_type: 'lookup' },
     Created_Time: { aliases: ['created time', 'created date', 'created at'], data_type: 'datetime' },
     Modified_Time: { aliases: ['modified time', 'updated time'], data_type: 'datetime' }
   },
   Calls: {
     Subject: { aliases: ['subject', 'call subject', 'title'], data_type: 'text' },
-    Call_Start_Time: { aliases: ['call start time', 'start time', 'call time'], data_type: 'datetime' },
+    Call_Type: { aliases: ['call type', 'type'], data_type: 'picklist' },
+    Call_Start_Time: { aliases: ['call start time', 'start time', 'call time', 'date', 'call date'], data_type: 'datetime' },
     Call_Duration: { aliases: ['call duration', 'duration'], data_type: 'number' },
+    Call_Result: { aliases: ['call result', 'result', 'status'], data_type: 'picklist' },
     Description: { aliases: ['description', 'notes'], data_type: 'text' },
     Call_Status: { aliases: ['call status', 'status'], data_type: 'picklist' },
+    Who_Id: { aliases: ['who id', 'contact', 'lead', 'prospect', 'person'], data_type: 'lookup' },
+    What_Id: { aliases: ['what id', 'related to', 'account', 'deal'], data_type: 'lookup' },
     Owner: { aliases: ['owner', 'call owner'], data_type: 'lookup' },
     Created_Time: { aliases: ['created time', 'created date', 'created at'], data_type: 'datetime' },
     Modified_Time: { aliases: ['modified time', 'updated time'], data_type: 'datetime' }
   },
   Meetings: {
-    Event_Title: { aliases: ['event title', 'meeting title', 'title'], data_type: 'text' },
-    Start_DateTime: { aliases: ['start date time', 'start time', 'from', 'meeting start', 'scheduled start'], data_type: 'datetime' },
+    Event_Title: { aliases: ['event title', 'meeting title', 'title', 'subject'], data_type: 'text' },
+    Venue: { aliases: ['venue', 'location'], data_type: 'text' },
+    Start_DateTime: { aliases: ['start date time', 'start time', 'from', 'meeting start', 'scheduled start', 'date', 'scheduled date', 'meeting date'], data_type: 'datetime' },
     End_DateTime: { aliases: ['end date time', 'end time', 'to', 'meeting end'], data_type: 'datetime' },
+    Who_Id: { aliases: ['who id', 'contact', 'lead', 'prospect', 'person'], data_type: 'lookup' },
+    What_Id: { aliases: ['what id', 'related to', 'account', 'deal'], data_type: 'lookup' },
+    Participants: { aliases: ['participants', 'attendees'], data_type: 'multiselectpicklist' },
     Owner: { aliases: ['owner', 'meeting owner'], data_type: 'lookup' },
     Created_Time: { aliases: ['created time', 'created date', 'created at'], data_type: 'datetime' },
     Modified_Time: { aliases: ['modified time', 'updated time'], data_type: 'datetime' }
@@ -81,15 +91,64 @@ const CRM_FIELD_METADATA = Object.freeze({
   Products: {
     Product_Name: { aliases: ['product name', 'name'], data_type: 'text' },
     Product_Code: { aliases: ['product code', 'code'], data_type: 'text' },
+    Unit_Price: { aliases: ['unit price', 'price', 'amount', 'cost', 'value'], data_type: 'currency' },
+    Qty_in_Stock: { aliases: ['qty in stock', 'quantity in stock', 'quantity', 'stock', 'qty'], data_type: 'number' },
     Description: { aliases: ['description'], data_type: 'text' },
+    Product_Category: { aliases: ['product category', 'category'], data_type: 'picklist' },
     Owner: { aliases: ['owner', 'product owner'], data_type: 'lookup' },
     Created_Time: { aliases: ['created time', 'created date', 'created at'], data_type: 'datetime' },
     Modified_Time: { aliases: ['modified time', 'updated time'], data_type: 'datetime' }
   },
-  Accounts: {
-    Industry: { aliases: ['industry', 'business sector'], data_type: 'picklist' },
-    Account_Name: { aliases: ['account name', 'company name', 'name'], data_type: 'text' },
+  'Purchase Orders': {
+    PO_Number: { aliases: ['po number', 'purchase order number', 'number'], data_type: 'text' },
+    Subject: { aliases: ['subject', 'title', 'po title', 'name'], data_type: 'text' },
+    Grand_Total: { aliases: ['grand total', 'total', 'amount', 'po amount', 'total amount', 'value', 'price', 'cost'], data_type: 'currency' },
+    Status: { aliases: ['status', 'po status'], data_type: 'picklist' },
+    Due_Date: { aliases: ['due date', 'date', 'issue date', 'issued date', 'po date', 'issued'], data_type: 'date' },
+    Vendor_Name: { aliases: ['vendor name', 'vendor'], data_type: 'lookup' },
+    Owner: { aliases: ['owner', 'po owner'], data_type: 'lookup' },
+    Created_Time: { aliases: ['created time', 'created date', 'issue date', 'issued date', 'created at'], data_type: 'datetime' },
+    Modified_Time: { aliases: ['modified time', 'updated time'], data_type: 'datetime' }
+  },
+  'Sales Orders': {
+    SO_Number: { aliases: ['so number', 'sales order number', 'number'], data_type: 'text' },
+    Subject: { aliases: ['subject', 'title', 'so title', 'name'], data_type: 'text' },
+    Grand_Total: { aliases: ['grand total', 'total', 'amount', 'so amount', 'total amount', 'value', 'price', 'cost'], data_type: 'currency' },
+    Status: { aliases: ['status', 'so status'], data_type: 'picklist' },
+    Due_Date: { aliases: ['due date', 'date', 'order date'], data_type: 'date' },
+    Account_Name: { aliases: ['account name', 'account', 'customer'], data_type: 'lookup' },
+    Owner: { aliases: ['owner', 'so owner'], data_type: 'lookup' },
+    Created_Time: { aliases: ['created time', 'created date', 'created at'], data_type: 'datetime' },
+    Modified_Time: { aliases: ['modified time', 'updated time'], data_type: 'datetime' }
+  },
+  'Renewal Accounts': {
+    Account_Name: { aliases: ['account name', 'account', 'name'], data_type: 'lookup' },
+    Contract_Value: { aliases: ['contract value', 'value', 'amount', 'renewal value', 'price'], data_type: 'currency' },
+    Renewal_Date: { aliases: ['renewal date', 'date'], data_type: 'date' },
+    Renewal_Status: { aliases: ['renewal status', 'status'], data_type: 'picklist' },
     Owner: { aliases: ['owner', 'account owner'], data_type: 'lookup' },
+    Created_Time: { aliases: ['created time', 'created date', 'created at'], data_type: 'datetime' },
+    Modified_Time: { aliases: ['modified time', 'updated time'], data_type: 'datetime' }
+  },
+  Vendors: {
+    Vendor_Name: { aliases: ['vendor name', 'name', 'vendor'], data_type: 'text' },
+    Email: { aliases: ['email', 'email address'], data_type: 'email' },
+    Phone: { aliases: ['phone', 'mobile'], data_type: 'phone' },
+    Website: { aliases: ['website', 'url'], data_type: 'text' },
+    Category: { aliases: ['category', 'vendor category'], data_type: 'picklist' },
+    Owner: { aliases: ['owner', 'vendor owner'], data_type: 'lookup' },
+    Created_Time: { aliases: ['created time', 'created date', 'created at'], data_type: 'datetime' },
+    Modified_Time: { aliases: ['modified time', 'updated time'], data_type: 'datetime' }
+  },
+  Campaigns: {
+    Campaign_Name: { aliases: ['campaign name', 'name'], data_type: 'text' },
+    Campaign_Type: { aliases: ['campaign type', 'type'], data_type: 'picklist' },
+    Status: { aliases: ['status', 'campaign status'], data_type: 'picklist' },
+    Start_Date: { aliases: ['start date', 'start'], data_type: 'date' },
+    End_Date: { aliases: ['end date', 'end'], data_type: 'date' },
+    Budgeted_Cost: { aliases: ['budgeted cost', 'budget', 'cost', 'amount'], data_type: 'currency' },
+    Actual_Cost: { aliases: ['actual cost', 'spent', 'cost'], data_type: 'currency' },
+    Owner: { aliases: ['owner', 'campaign owner'], data_type: 'lookup' },
     Created_Time: { aliases: ['created time', 'created date', 'created at'], data_type: 'datetime' },
     Modified_Time: { aliases: ['modified time', 'updated time'], data_type: 'datetime' }
   }

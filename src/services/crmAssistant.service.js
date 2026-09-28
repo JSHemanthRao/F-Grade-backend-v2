@@ -59,9 +59,10 @@ class CrmAssistantService {
           ? convertToDetailPlan(previous.canonical_plan)
           : this.planner(resolvedQuestion)
     );
+    const hasSpecializedPlanning = Boolean(plannedRequest?.analysis || plannedRequest?.comparison || plannedRequest?.cross_module || plannedRequest?.request_type === 'analysis' || plannedRequest?.request_type === 'comparison' || (Array.isArray(plannedRequest?.filters) && plannedRequest.filters.length > 0));
     const specializedIntent = plannedRequest?.module === 'CRM' && (plannedRequest?.analysis?.type === 'today_activity' || plannedRequest?.request_type === 'analysis');
     const specializedAuditIntent = plannedRequest?.intent === 'audit_log' || plannedRequest?.request_type === 'audit_log';
-    if (!canonicalRequest && !continuationDetected && !continuationPrompt && typeof resolvedQuestion === 'string' && !specializedIntent && !specializedAuditIntent) {
+    if (!canonicalRequest && !continuationDetected && !continuationPrompt && typeof resolvedQuestion === 'string' && !specializedIntent && !specializedAuditIntent && !hasSpecializedPlanning) {
       try {
         const analyzed = analyzeCrmQuestion(resolvedQuestion, { limit: plannedRequest?.pagination?.limit || plannedRequest?.limit || 20, offset: plannedRequest?.pagination?.offset || plannedRequest?.offset || 0 });
         if (analyzed && analyzed.module) Object.assign(plannedRequest, analyzed, { pagination: analyzed.pagination || plannedRequest.pagination || { limit: 20, offset: 0 } });
