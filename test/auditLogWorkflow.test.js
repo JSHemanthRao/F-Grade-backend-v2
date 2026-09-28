@@ -357,4 +357,71 @@ describe('Audit Log Workflow – 7 Exact Verification Tests', () => {
     assert.ok(capturedCrmPlan);
     assert.equal(capturedCrmPlan.module, 'Calls');
   });
+
+  describe('Validation: rejects invalid client parameters with HTTP 400 (never 502)', () => {
+    it('rejects unsupported operation with HTTP 400 INVALID_OPERATION', async () => {
+      const mockCrmService = {
+        queryAuditLog: async () => { throw new Error('Upstream should not be reached'); }
+      };
+      const controller = createCrmController(mockCrmService);
+      const req = mockReq({ request: { operation: 'unsupported_op' } });
+      const res = mockRes();
+      await assert.rejects(
+        () => controller.auditLog(req, res, (err) => { throw err; }),
+        (err) => err.code === 'INVALID_OPERATION' && err.statusCode === 400
+      );
+    });
+
+    it('rejects inverted date range with HTTP 400 INVALID_DATE_RANGE', async () => {
+      const mockCrmService = {
+        queryAuditLog: async () => { throw new Error('Upstream should not be reached'); }
+      };
+      const controller = createCrmController(mockCrmService);
+      const req = mockReq({
+        request: {
+          time_range: { start: '2026-09-30', end: '2026-09-20' }
+        }
+      });
+      const res = mockRes();
+      await assert.rejects(
+        () => controller.auditLog(req, res, (err) => { throw err; }),
+        (err) => err.code === 'INVALID_DATE_RANGE' && err.statusCode === 400
+      );
+    });
+
+    it('rejects unsupported action with HTTP 400 INVALID_FILTER', async () => {
+      const mockCrmService = {
+        queryAuditLog: async () => { throw new Error('Upstream should not be reached'); }
+      };
+      const controller = createCrmController(mockCrmService);
+      const req = mockReq({
+        request: {
+          filters: { action: ['destroyed'] }
+        }
+      });
+      const res = mockRes();
+      await assert.rejects(
+        () => controller.auditLog(req, res, (err) => { throw err; }),
+        (err) => err.code === 'INVALID_FILTER' && err.statusCode === 400
+      );
+    });
+
+    it('rejects out-of-range pagination limit with HTTP 400 INVALID_PAGINATION', async () => {
+      const mockCrmService = {
+        queryAuditLog: async () => { throw new Error('Upstream should not be reached'); }
+      };
+      const controller = createCrmController(mockCrmService);
+      const req = mockReq({
+        request: {
+          pagination: { limit: 500 }
+        }
+      });
+      const res = mockRes();
+      await assert.rejects(
+        () => controller.auditLog(req, res, (err) => { throw err; }),
+        (err) => err.code === 'INVALID_PAGINATION' && err.statusCode === 400
+      );
+    });
+  });
 });
+

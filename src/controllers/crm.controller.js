@@ -69,12 +69,17 @@ function createCrmController(crmService = new CrmService()) {
           throw createAppError('INVALID_AUDIT_LOG_REQUEST', 'Audit-log requests require a structured request object.', 400);
         }
 
+        // --- Validation: operation check ---
+        if (request.operation !== undefined && request.operation !== null && request.operation !== 'audit_log') {
+          throw createAppError('INVALID_OPERATION', `Operation '${request.operation}' is not supported. Use 'audit_log'.`, 400, { operation: request.operation });
+        }
+
         // --- Natural-language resolution ---
         const question = typeof request.question === 'string' ? request.question.trim() : null;
         let inferredPlan = null;
         if (question) {
           const lowerQ = question.toLowerCase();
-          if (isAuditLogQuestion(lowerQ) || !hasScheduledActivityOnly(lowerQ)) {
+          if (isAuditLogQuestion(lowerQ)) {
             inferredPlan = buildAuditLogPlan(question, lowerQ);
           }
         }
@@ -90,6 +95,49 @@ function createCrmController(crmService = new CrmService()) {
         }
         if (explicitTimeRange.end && isNaN(new Date(explicitTimeRange.end).getTime())) {
           throw createAppError('INVALID_DATE_RANGE', `Invalid end date: '${explicitTimeRange.end}'.`, 400);
+        }
+        if (explicitTimeRange.start && explicitTimeRange.end) {
+          const s = new Date(explicitTimeRange.start);
+          const e = new Date(explicitTimeRange.end);
+          if (s > e) {
+            throw createAppError('INVALID_DATE_RANGE', 'The start date cannot be after the end date.', 400, { start: explicitTimeRange.start, end: explicitTimeRange.end });
+          }
+        }
+        if ((explicitTimeRange.start && !explicitTimeRange.end) || (!explicitTimeRange.start && explicitTimeRange.end)) {
+          throw createAppError('INVALID_DATE_RANGE', 'Both start and end must be provided when specifying an explicit time_range.', 400);
+        }
+
+        // Filter validation if provided explicitly
+        if (explicitFilters.action !== undefined) {
+          if (!Array.isArray(explicitFilters.action)) {
+            throw createAppError('INVALID_FILTER', 'Action filter must be an array of action names.', 400);
+          }
+          const validActions = new Set(['added', 'updated', 'deleted']);
+          for (const act of explicitFilters.action) {
+            if (!validActions.has(String(act).toLowerCase())) {
+              throw createAppError('INVALID_FILTER', `Action '${act}' is not supported. Supported actions: added, updated, deleted.`, 400, { action: act });
+            }
+          }
+        }
+        if (explicitFilters.module !== undefined && !Array.isArray(explicitFilters.module)) {
+          throw createAppError('INVALID_FILTER', 'Module filter must be an array of module names.', 400);
+        }
+        if (explicitFilters.done_by !== undefined && !Array.isArray(explicitFilters.done_by)) {
+          throw createAppError('INVALID_FILTER', 'Done by filter must be an array of user names.', 400);
+        }
+
+        // Pagination validation if provided explicitly
+        if (explicitPagination.limit !== undefined) {
+          const parsed = Number(explicitPagination.limit);
+          if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
+            throw createAppError('INVALID_PAGINATION', 'Pagination limit must be an integer between 1 and 200.', 400, { limit: explicitPagination.limit });
+          }
+        }
+        if (explicitPagination.offset !== undefined) {
+          const parsed = Number(explicitPagination.offset);
+          if (!Number.isInteger(parsed) || parsed < 0) {
+            throw createAppError('INVALID_PAGINATION', 'Pagination offset must be a non-negative integer.', 400, { offset: explicitPagination.offset });
+          }
         }
 
         const resolvedDateRange = (explicitTimeRange.start && explicitTimeRange.end)
