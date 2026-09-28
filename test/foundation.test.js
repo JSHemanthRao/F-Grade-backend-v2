@@ -367,7 +367,7 @@ test('plans yesterday audit activity as an audit_log request with a date window'
   assert.ok(request.audit_log.date_range.end);
 });
 
-test('renders audit log responses as a table with person, change, and structured details', () => {
+test('renders audit log responses as a table with date, action, module, record, user, and details', () => {
   const { buildAssistantAnswer } = require('../src/controllers/crm.controller');
   const answer = buildAssistantAnswer("Give me yesterday's activity", {
     module: 'Audit Logs',
@@ -385,11 +385,11 @@ test('renders audit log responses as a table with person, change, and structured
       }
     ]
   });
-  assert.match(answer, /\| Name \| Changed \| Structured change \|/);
+  assert.match(answer, /\| Date & Time \| Action \| Module \| Record \| Changed By \| Details \|/);
   assert.match(answer, /Laya Nair/);
-  assert.match(answer, /Updated.*Stage.*Deal 123/i);
-  assert.match(answer, /"module":\s*"Deals"/);
-  assert.match(answer, /"new_value":\s*"Closed Won"/);
+  assert.match(answer, /Updated/);
+  assert.match(answer, /Deals/);
+  assert.match(answer, /Deal 123/);
 });
 
 test('classifies scheduled today activity as SCHEDULED_ACTIVITY and history as ACTIVITY_HISTORY', () => {

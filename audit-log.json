@@ -2,9 +2,9 @@
   "swagger": "2.0",
   "info": {
     "title": "Zoho CRM Audit Log Export",
-    "version": "1.0.0",
-    "description": "Read-only CRM audit-log export workflow for Microsoft Copilot Studio. The backend resolves the time range, user filters, action filters, and module filters before scheduling and polling the Zoho CRM audit-export job.",
-    "x-copilot-studio-tool-description": "Executes a CRM audit-log query with a deterministic date range, optional action/module/user filters, and stateless pagination. The backend owns export job creation, polling, CSV/ZIP downloads, and result normalization; users never provide job IDs or download URLs."
+    "version": "1.1.0",
+    "description": "Read-only CRM audit-log export workflow for Microsoft Copilot Studio. Pass the user's natural-language question in the question field. The backend resolves the time range, action, module, user, and pagination automatically.",
+    "x-copilot-studio-tool-description": "This tool retrieves Zoho CRM audit history. When a user asks about record updates, creations, deletions, audit history, or changes during a date range, invoke this tool. Infer the operation, date range, action, module, and user from the user's question. Do not ask the user to supply technical parameters. Use audit_log as the default operation. Use a default page size and offset when omitted. Do not use this tool for ordinary CRM calls, meetings, or tasks."
   },
   "host": "f-grade-backend-v2.onrender.com",
   "basePath": "/",
@@ -33,9 +33,9 @@
     "/api/crm/audit-log": {
       "post": {
         "operationId": "getCRMAuditLogs",
-        "summary": "Get CRM audit logs",
+        "summary": "Get CRM audit logs from a natural-language request",
         "x-ms-summary": "Get CRM audit logs",
-        "description": "Returns normalized Zoho CRM audit events for the requested time range and filters. The backend resolves date ranges, validates the 180-day limit, handles export job creation and polling, downloads the completed export, normalizes CSV/ZIP results, and applies app-level pagination.",
+        "description": "Returns Zoho CRM audit events. Pass the user's question in request.question. The backend infers the date range, action, module, user, and pagination. All structured parameters are optional and should only be provided when explicit overrides are needed.",
         "security": [
           {
             "api_key": []
@@ -46,7 +46,7 @@
             "in": "body",
             "name": "body",
             "required": true,
-            "description": "Structured CRM audit-log request. The backend owns Zoho job IDs, token management, and upload/download handling.",
+            "description": "Audit-log request. Pass the user's natural-language question in request.question. All other fields are optional and inferred by the backend.",
             "schema": {
               "$ref": "#/definitions/AuditLogRequest"
             }
@@ -102,7 +102,6 @@
   "definitions": {
     "AuditLogRequest": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "request"
       ],
@@ -114,15 +113,28 @@
     },
     "AuditLogRequestBody": {
       "type": "object",
-      "additionalProperties": false,
-      "description": "Optional fields are resolved by the backend. If the caller omits operation, time_range, or pagination, the backend defaults to an audit-log query for the most recent relevant date window and applies standard paging.",
+      "description": "Pass the user's question in the question field. The backend infers operation, time_range, filters, and pagination from the question. All structured fields are optional overrides.",
       "properties": {
+        "question": {
+          "type": "string",
+          "description": "The user's natural-language audit-log question. The backend infers the date range, action, module, user, and pagination from this text. Examples: 'Show all CRM records updated on 25 September 2026', 'Who changed deals yesterday?', 'Show deleted records from the last seven days'.",
+          "x-copilot-studio-usage-hints": [
+            "Show all CRM records updated yesterday",
+            "Who changed deals yesterday?",
+            "Show deleted CRM records from the last seven days",
+            "Give me all updates made on 25 September 2026",
+            "Show changes made by Kumar last month",
+            "Give me the audit history for this deal",
+            "Show all records created this week"
+          ]
+        },
         "operation": {
           "type": "string",
           "enum": [
             "audit_log"
           ],
-          "description": "Audit log operation requested by the caller. Defaults to audit_log when omitted."
+          "default": "audit_log",
+          "description": "Defaults to audit_log. Do not ask the user for this value."
         },
         "time_range": {
           "$ref": "#/definitions/TimeRange"
@@ -137,24 +149,23 @@
     },
     "TimeRange": {
       "type": "object",
-      "additionalProperties": false,
-      "description": "The backend resolves relative periods like today or yesterday when start/end are omitted or partial. If a caller supplies start/end, those exact timestamps are used.",
+      "description": "Optional. The backend resolves dates from the question when omitted.",
       "properties": {
         "start": {
           "type": "string",
           "format": "date-time",
-          "description": "Inclusive start date and time for the audit-log search in ISO-8601 format. The backend dynamically resolves relative periods such as today, yesterday, this morning, this evening, this week, last month, or a specific date into an exact timestamp, then fetches the matching Zoho audit-log records from that point forward."
+          "description": "Inclusive start. Inferred from the question when omitted."
         },
         "end": {
           "type": "string",
           "format": "date-time",
-          "description": "Inclusive end date and time for the audit-log search in ISO-8601 format. The backend dynamically resolves relative periods such as today, yesterday, this morning, this evening, this week, last month, or a specific date into an exact timestamp, then fetches the matching Zoho audit-log records up to that point."
+          "description": "Inclusive end. Inferred from the question when omitted."
         }
       }
     },
     "AuditLogFilters": {
       "type": "object",
-      "additionalProperties": false,
+      "description": "Optional. Inferred from the question when omitted.",
       "properties": {
         "action": {
           "type": "array",
@@ -166,45 +177,45 @@
               "deleted"
             ]
           },
-          "description": "Action filters, such as added, updated, or deleted."
+          "description": "Action filters. Inferred from the question when omitted."
         },
         "module": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "CRM module filter values, such as Deals or Leads."
+          "description": "CRM module filters. Inferred from the question when omitted."
         },
         "done_by": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "CRM user names or user IDs resolved server-side before the Zoho export job is created."
+          "description": "User name filters. Inferred from the question when omitted."
         }
       }
     },
     "PaginationRequest": {
       "type": "object",
-      "additionalProperties": false,
-      "description": "Pagination defaults to { limit: 20, offset: 0 } when omitted.",
+      "description": "Optional. Defaults to limit 20, offset 0 when omitted.",
       "properties": {
         "limit": {
           "type": "integer",
           "minimum": 1,
           "maximum": 200,
-          "description": "Maximum number of audit records to return in this page. Defaults to 20 when omitted."
+          "default": 20,
+          "description": "Page size. Defaults to 20."
         },
         "offset": {
           "type": "integer",
           "minimum": 0,
-          "description": "Zero-based offset for deterministic pagination. Defaults to 0 when omitted."
+          "default": 0,
+          "description": "Page offset. Defaults to 0."
         }
       }
     },
     "AuditLogResponse": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "success",
         "operation",
@@ -223,6 +234,10 @@
             "audit_log"
           ]
         },
+        "question": {
+          "type": "string",
+          "description": "The original question that was processed."
+        },
         "time_range": {
           "$ref": "#/definitions/TimeRange"
         },
@@ -238,6 +253,17 @@
             "$ref": "#/definitions/AuditLogRecord"
           }
         },
+        "display_columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Column headers for table display: Date & Time, Action, Module, Record, Changed By, Details."
+        },
+        "answer": {
+          "type": "string",
+          "description": "Human-readable summary of the audit log results."
+        },
         "execution": {
           "$ref": "#/definitions/ExecutionMetadata"
         }
@@ -245,7 +271,6 @@
     },
     "PaginationResponse": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "limit",
         "offset",
@@ -317,7 +342,6 @@
     },
     "ExecutionMetadata": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "jobs_created",
         "jobs_completed",
