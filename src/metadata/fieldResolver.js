@@ -275,16 +275,14 @@ async function materializeMetadataRequest(zohoService, input) {
         ),
       }
     : input.having_filter;
-  const responseFields = [
-    ...new Set(
-      resolvedFields.length > 0
-        ? resolvedFields
-        : selectMetadataDefaultFields(fields, apiNames),
-    ),
-  ];
+  const responseFields =
+    resolvedFields.length > 0
+      ? [...resolvedFields]
+      : selectMetadataDefaultFields(fields, apiNames);
 
-  // Include meaningful date/time sort fields in the final response.
-  // They must be selected from live metadata and must be valid fields.
+  // Always include valid date/time sort fields in the response.
+  // This applies whether fields were explicitly requested
+  // or selected automatically by the planner.
   const sortItems = Array.isArray(resolvedSort)
     ? resolvedSort
     : resolvedSort
