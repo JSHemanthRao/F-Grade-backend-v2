@@ -1,5 +1,4 @@
 const { BackendClient } = require('../services/backendClient');
-const { resolveProductDomain } = require('../validators/booksQuery.validator');
 
 const MAX_QUESTION_LENGTH = 2000;
 
@@ -19,12 +18,6 @@ class CrmTool {
     if (question.length > MAX_QUESTION_LENGTH) {
       const error = new Error(`Question must not exceed ${MAX_QUESTION_LENGTH} characters.`);
       error.code = 'QUESTION_TOO_LONG';
-      error.statusCode = 400;
-      throw error;
-    }
-    if (resolveProductDomain(question) === 'books') {
-      const error = new Error('This CRM tool accepts CRM questions only. Use the Zoho Books tool for Books resources.');
-      error.code = 'DOMAIN_AMBIGUOUS';
       error.statusCode = 400;
       throw error;
     }

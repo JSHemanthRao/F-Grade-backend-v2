@@ -58,7 +58,7 @@ const CRM_API_NAMES = Object.freeze({
   'Service Provider': 'Service_Provider',
   'Service Providers': 'Service_Provider',
   'Co-operative Banks': 'Co_operative_Banks',
-  'Zoho Finance': 'Zoho_Books',
+  // 'Zoho Finance': 'Zoho_Books',
   'Voice of the Customer': 'Voice_of_the_Customer__s'
 });
 

@@ -895,9 +895,6 @@ function planQuestion(question) {
   }
 
   const lower = text.toLowerCase();
-  if (!/\bprice\s+books?\b/.test(lower) && /\b(?:zoho\s+books?|books?|bills?|expenses?|payments?|banking|books?\s+invoices?|books?\s+items?)\b/.test(lower)) {
-    throw createAppError('DOMAIN_AMBIGUOUS', 'This backend handles Zoho CRM only. Books resources must use the Books integration.', 400, { requested_domain: 'Books', supported_domain: 'CRM' });
-  }
   if (isAuditLogQuestion(lower)) return buildAuditLogPlan(text, lower);
   if (isTodayActivityQuestion(lower)) {
     const activityType = detectActivityType(lower) || 'ACTIVITY_HISTORY';

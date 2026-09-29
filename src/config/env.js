@@ -17,7 +17,6 @@ const env = Object.freeze({
   corsOrigin: process.env.CORS_ORIGIN || '*',
   backendApiUrl: process.env.BACKEND_API_URL || 'http://localhost:3000',
   backendApiPath: process.env.BACKEND_API_PATH || '/api/crm/assistant',
-  booksApiPath: process.env.BOOKS_API_PATH || '/api/books/query',
   backendApiKey: process.env.BACKEND_API_KEY || '',
   backendRequestTimeoutMs: numberFromEnv('BACKEND_REQUEST_TIMEOUT_MS', 15000),
   backendDiagnostics: process.env.BACKEND_DIAGNOSTICS === 'true',
