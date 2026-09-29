@@ -58,6 +58,14 @@ class ZohoAuditLogService {
         ],
       });
     }
+    const auditCriteria =
+      criteria.length === 1
+        ? criteria[0]
+        : {
+            group_operator: "and",
+            group: criteria,
+          };
+
     const createResponse = await this.request(
       "post",
       `${baseUrl}/settings/audit_log_export`,
@@ -65,7 +73,9 @@ class ZohoAuditLogService {
       config,
       {
         audit_log_export: [
-          { criteria: { group_operator: "and", group: criteria } },
+          {
+            criteria: auditCriteria,
+          },
         ],
       },
     );
