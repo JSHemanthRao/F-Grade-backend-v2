@@ -158,7 +158,22 @@ class ZohoAuditLogService {
       const status = error.response?.status ?? null;
       const responseData = error.response?.data ?? null;
 
-      // Log diagnostic details without exposing credentials.
+      // Zoho may return its error inside the audit_log_export array.
+      const zohoError =
+        responseData?.audit_log_export?.[0] ||
+        responseData?.data?.[0] ||
+        responseData ||
+        {};
+
+      const errorCode = zohoError?.code || null;
+
+      const errorMessage =
+        zohoError?.message ||
+        responseData?.message ||
+        error.message ||
+        "Unable to retrieve Zoho Audit Log data.";
+
+      // Log the complete Zoho response for debugging.
       console.error(
         "[ZOHO_AUDIT_LOG_API_ERROR]",
         JSON.stringify(
@@ -178,28 +193,20 @@ class ZohoAuditLogService {
         this.authService.clearToken?.();
       }
 
-      const errorCode =
+      const appErrorCode =
         status === 401
           ? "ZOHO_AUTHENTICATION_ERROR"
           : status === 403
             ? "ZOHO_AUTHORIZATION_ERROR"
             : status === 404
               ? "ZOHO_ENDPOINT_NOT_FOUND"
-              : "AUDIT_LOG_REQUEST_FAILED";
+              : errorCode || "AUDIT_LOG_REQUEST_FAILED";
 
-      throw createAppError(
-        errorCode,
-        responseData?.message ||
-          responseData?.code ||
-          error.message ||
-          "Unable to retrieve Zoho Audit Log data.",
-        status || 502,
-        {
-          operation: "audit_log",
-          upstream_status: status,
-          upstream_code: responseData?.code || null,
-        },
-      );
+      throw createAppError(appErrorCode, errorMessage, status || 502, {
+        operation: "audit_log",
+        upstream_status: status,
+        upstream_code: errorCode,
+      });
     }
   }
 }
