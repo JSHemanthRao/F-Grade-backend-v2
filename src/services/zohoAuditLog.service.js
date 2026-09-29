@@ -159,13 +159,20 @@ class ZohoAuditLogService {
       const responseData = error.response?.data ?? null;
 
       // Log diagnostic details without exposing credentials.
-      console.error("[ZOHO_AUDIT_LOG_API_ERROR]", {
-        method: method.toUpperCase(),
-        url,
-        status,
-        response: responseData,
-        message: error.message,
-      });
+      console.error(
+        "[ZOHO_AUDIT_LOG_API_ERROR]",
+        JSON.stringify(
+          {
+            method: method.toUpperCase(),
+            url,
+            status,
+            response: responseData,
+            message: error.message,
+          },
+          null,
+          2,
+        ),
+      );
 
       if (status === 401) {
         this.authService.clearToken?.();
