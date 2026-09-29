@@ -38,18 +38,25 @@ class ZohoAuditLogService {
         comparator: "in",
         value: [{ api_name: params.entity }],
       });
-    if (params.action)
+    if (params.action) {
       criteria.push({
         field: { api_name: "action" },
-        comparator: "equals",
+        comparator: "equal",
         value: params.action,
       });
-    if (params.user?.id)
+    }
+    if (params.user?.id) {
       criteria.push({
-        field: { api_name: "user" },
-        comparator: "equals",
-        value: params.user.id,
+        field: { api_name: "done_by" },
+        comparator: "in",
+        value: [
+          {
+            id: params.user.id,
+            name: params.user.name || "",
+          },
+        ],
       });
+    }
     const createResponse = await this.request(
       "post",
       `${baseUrl}/settings/audit_log_export`,
