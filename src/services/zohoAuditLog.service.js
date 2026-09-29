@@ -24,7 +24,10 @@ class ZohoAuditLogService {
       ? apiDomain
       : `${apiDomain}/crm/${apiVersion}`;
 
-    const dateRange = params.date_range || todayDateRange();
+    // const dateRange = params.date_range || todayDateRange();
+    const dateRange = normalizeAuditDateRange(
+      params.date_range || todayDateRange(),
+    );
 
     const criteria = [
       {
@@ -242,5 +245,35 @@ function todayDateRange() {
   return {
     start: `${date}T00:00:00+05:30`,
     end: `${date}T23:59:59+05:30`,
+  };
+}
+
+function normalizeAuditDateRange(range) {
+  const start = String(range.start);
+  const end = String(range.end);
+
+  const startTimestamp = /^\d{4}-\d{2}-\d{2}$/.test(start)
+    ? `${start}T00:00:00+05:30`
+    : start;
+
+  let endTimestamp = end;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    const endDate = new Date(`${end}T00:00:00+05:30`);
+
+    if (range.end_operator === "exclusive") {
+      endDate.setDate(endDate.getDate() - 1);
+    }
+
+    const year = endDate.getFullYear();
+    const month = String(endDate.getMonth() + 1).padStart(2, "0");
+    const day = String(endDate.getDate()).padStart(2, "0");
+
+    endTimestamp = `${year}-${month}-${day}T23:59:59+05:30`;
+  }
+
+  return {
+    start: startTimestamp,
+    end: endTimestamp,
   };
 }
