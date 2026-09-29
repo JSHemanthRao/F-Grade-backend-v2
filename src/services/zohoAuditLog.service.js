@@ -188,6 +188,10 @@ class ZohoAuditLogService {
           2,
         ),
       );
+      console.error(
+        "[ZOHO_AUDIT_LOG_FULL_ERROR]",
+        JSON.stringify(responseData, null, 2),
+      );
 
       if (status === 401) {
         this.authService.clearToken?.();
