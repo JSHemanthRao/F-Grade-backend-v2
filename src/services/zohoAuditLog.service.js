@@ -69,6 +69,22 @@ class ZohoAuditLogService {
             group: criteria,
           };
 
+    console.log("[ZOHO_AUDIT_LOG_CRITERIA]", JSON.stringify(criteria, null, 2));
+    console.log(
+      "[ZOHO_AUDIT_LOG_REQUEST_BODY]",
+      JSON.stringify(
+        {
+          audit_log_export: [
+            {
+              criteria: auditCriteria,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
     const createResponse = await this.request(
       "post",
       `${baseUrl}/settings/audit_log_export`,
@@ -188,10 +204,10 @@ class ZohoAuditLogService {
           2,
         ),
       );
-      console.error(
-        "[ZOHO_AUDIT_LOG_FULL_ERROR]",
-        JSON.stringify(responseData, null, 2),
-      );
+      // console.error(
+      //   "[ZOHO_AUDIT_LOG_FULL_ERROR]",
+      //   JSON.stringify(responseData, null, 2),
+      // );
 
       if (status === 401) {
         this.authService.clearToken?.();
