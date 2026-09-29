@@ -14,6 +14,7 @@ class ZohoAuditLogService {
   async getAuditLogs(params = {}) {
     const config = this.configLoader();
     const token = await this.authService.getAccessToken();
+
     const apiDomain = (
       this.authService.getApiDomain() || config.apiBaseUrl
     ).replace(/\/+$/, "");
@@ -24,9 +25,8 @@ class ZohoAuditLogService {
       ? apiDomain
       : `${apiDomain}/crm/${apiVersion}`;
 
-    // const dateRange = params.date_range || todayDateRange();
     const dateRange = normalizeAuditDateRange(
-      params.date_range || todayDateRange(),
+      params.date_range || todayDateRange()
     );
 
     const criteria = [
@@ -36,53 +36,93 @@ class ZohoAuditLogService {
         value: [dateRange.start, dateRange.end],
       },
     ];
-    if (params.entity)
+
+    // Module filters require both the API name and unique module ID.
+    if (params.entity) {
+      const entityName =
+        typeof params.entity === "string"
+          ? params.entity
+          : params.entity.api_name;
+
+      const entityId =
+        params.entity_id ||
+        (typeof params.entity === "object" ? params.entity.id : null);
+
+      if (!entityName || !entityId) {
+        throw createAppError(
+          "AUDIT_LOG_MODULE_ID_REQUIRED",
+          "A valid module API name and module ID are required for a module filter.",
+          400,
+          { operation: "audit_log" }
+        );
+      }
+
       criteria.push({
         field: { api_name: "module" },
         comparator: "in",
-        value: [{ api_name: params.entity }],
+        value: [
+          {
+            api_name: entityName,
+            id: String(entityId),
+          },
+        ],
       });
+    }
+
+    // Zoho supports only these audit action values.
     if (params.action) {
+      const action = String(params.action).toLowerCase();
+
+      if (!["added", "updated", "deleted"].includes(action)) {
+        throw createAppError(
+          "AUDIT_LOG_INVALID_ACTION",
+          `Unsupported audit action: ${action}`,
+          400,
+          { operation: "audit_log" }
+        );
+      }
+
       criteria.push({
         field: { api_name: "action" },
         comparator: "equal",
-        value: params.action,
+        value: action,
       });
     }
+
+    // User filters require a valid Zoho user ID.
     if (params.user?.id) {
       criteria.push({
         field: { api_name: "done_by" },
         comparator: "in",
         value: [
           {
-            id: params.user.id,
+            id: String(params.user.id),
             name: params.user.name || "",
           },
         ],
       });
     }
-    const auditCriteria =
-      criteria.length === 1
-        ? criteria[0]
-        : {
-            group_operator: "and",
-            group: criteria,
-          };
 
-    console.log("[ZOHO_AUDIT_LOG_CRITERIA]", JSON.stringify(criteria, null, 2));
+    const auditCriteria = buildAuditCriteria(criteria);
+
+    const requestBody = {
+      audit_log_export: [
+        {
+          criteria: auditCriteria,
+        },
+      ],
+    };
+
     console.log(
-      "[ZOHO_AUDIT_LOG_REQUEST_BODY]",
+      "[ZOHO_AUDIT_LOG_REQUEST]",
       JSON.stringify(
         {
-          audit_log_export: [
-            {
-              criteria: auditCriteria,
-            },
-          ],
+          url: `${baseUrl}/settings/audit_log_export`,
+          body: requestBody,
         },
         null,
-        2,
-      ),
+        2
+      )
     );
 
     const createResponse = await this.request(
@@ -90,71 +130,96 @@ class ZohoAuditLogService {
       `${baseUrl}/settings/audit_log_export`,
       token,
       config,
-      {
-        audit_log_export: [
-          {
-            criteria: auditCriteria,
-          },
-        ],
-      },
+      requestBody
     );
+
     const job =
       createResponse.data?.audit_log_export?.[0] ||
       createResponse.data?.details ||
       createResponse.data;
+
     const jobId =
       job?.details?.id ||
       job?.job_id ||
       job?.id ||
       createResponse.data?.details?.id;
-    if (!jobId)
+
+    if (!jobId) {
       throw createAppError(
         "AUDIT_LOG_EXPORT_JOB_UNAVAILABLE",
         "Zoho did not return an audit-log export job ID.",
-        502,
+        502
       );
+    }
 
     let status;
+
     for (let attempt = 0; attempt < 20; attempt += 1) {
       status = await this.request(
         "get",
         `${baseUrl}/settings/audit_log_export/${encodeURIComponent(jobId)}`,
         token,
-        config,
+        config
       );
+
       const state = String(
-        status.data?.audit_log_export?.[0]?.status || "",
+        status.data?.audit_log_export?.[0]?.status || ""
       ).toLowerCase();
-      if (state === "finished") break;
-      if (state === "failed")
+
+      if (state === "finished") {
+        break;
+      }
+
+      if (state === "failed") {
         throw createAppError(
           "AUDIT_LOG_EXPORT_FAILED",
           "Zoho audit-log export failed.",
-          502,
+          502
         );
-      if (attempt < 19)
+      }
+
+      if (attempt < 19) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
     }
+
     const exportJob = status?.data?.audit_log_export?.[0];
-    if (String(exportJob?.status || "").toLowerCase() !== "finished")
+
+    if (String(exportJob?.status || "").toLowerCase() !== "finished") {
       throw createAppError(
         "AUDIT_LOG_EXPORT_TIMEOUT",
         "Zoho audit-log export did not finish within the polling limit.",
-        504,
+        504
       );
+    }
+
     const downloadUrl = exportJob.download_links?.[0];
-    if (!downloadUrl)
+
+    if (!downloadUrl) {
       throw createAppError(
         "AUDIT_LOG_DOWNLOAD_UNAVAILABLE",
         "Zoho did not provide an audit-log download link.",
-        502,
+        502
       );
+    }
+
     const download = await this.httpClient.get(downloadUrl, {
       responseType: "text",
       timeout: config.timeoutMs,
+      headers: {
+        Authorization: `Zoho-oauthtoken ${token}`,
+      },
     });
+
     const records = parseCsv(String(download.data || ""));
-    return { records, info: { count: records.length, more_records: false } };
+
+    return {
+      records,
+      info: {
+        count: records.length,
+        more_records: false,
+      },
+    };
   }
 
   async request(method, url, token, config, data) {
@@ -174,7 +239,6 @@ class ZohoAuditLogService {
       const status = error.response?.status ?? null;
       const responseData = error.response?.data ?? null;
 
-      // Zoho may return its error inside the audit_log_export array.
       const zohoError =
         responseData?.audit_log_export?.[0] ||
         responseData?.data?.[0] ||
@@ -189,7 +253,6 @@ class ZohoAuditLogService {
         error.message ||
         "Unable to retrieve Zoho Audit Log data.";
 
-      // Log the complete Zoho response for debugging.
       console.error(
         "[ZOHO_AUDIT_LOG_API_ERROR]",
         JSON.stringify(
@@ -201,13 +264,9 @@ class ZohoAuditLogService {
             message: error.message,
           },
           null,
-          2,
-        ),
+          2
+        )
       );
-      // console.error(
-      //   "[ZOHO_AUDIT_LOG_FULL_ERROR]",
-      //   JSON.stringify(responseData, null, 2),
-      // );
 
       if (status === 401) {
         this.authService.clearToken?.();
@@ -222,23 +281,61 @@ class ZohoAuditLogService {
               ? "ZOHO_ENDPOINT_NOT_FOUND"
               : errorCode || "AUDIT_LOG_REQUEST_FAILED";
 
-      throw createAppError(appErrorCode, errorMessage, status || 502, {
-        operation: "audit_log",
-        upstream_status: status,
-        upstream_code: errorCode,
-      });
+      throw createAppError(
+        appErrorCode,
+        errorMessage,
+        status || 502,
+        {
+          operation: "audit_log",
+          upstream_status: status,
+          upstream_code: errorCode,
+          upstream_details: zohoError.details || null,
+        }
+      );
     }
   }
 }
 
+// Zoho permits no more than two criteria in each group.
+// Nest additional criteria to keep each group within that limit.
+function buildAuditCriteria(criteria) {
+  if (criteria.length === 1) {
+    return criteria[0];
+  }
+
+  if (criteria.length === 2) {
+    return {
+      group_operator: "and",
+      group: criteria,
+    };
+  }
+
+  return {
+    group_operator: "and",
+    group: [
+      criteria[0],
+      buildAuditCriteria(criteria.slice(1)),
+    ],
+  };
+}
+
 function parseCsv(csv) {
   const lines = csv.split(/\r?\n/).filter(Boolean);
-  if (lines.length < 2) return [];
+
+  if (lines.length < 2) {
+    return [];
+  }
+
   const headers = splitCsvLine(lines[0]);
+
   return lines.slice(1).map((line) => {
     const values = splitCsvLine(line);
+
     return Object.fromEntries(
-      headers.map((header, index) => [header, values[index] ?? null]),
+      headers.map((header, index) => [
+        header,
+        values[index] ?? null,
+      ])
     );
   });
 }
@@ -247,34 +344,36 @@ function splitCsvLine(line) {
   const values = [];
   let value = "";
   let quoted = false;
+
   for (let index = 0; index < line.length; index += 1) {
     const char = line[index];
+
     if (char === '"') {
       if (quoted && line[index + 1] === '"') {
         value += '"';
         index += 1;
-      } else quoted = !quoted;
+      } else {
+        quoted = !quoted;
+      }
     } else if (char === "," && !quoted) {
       values.push(value.trim());
       value = "";
-    } else value += char;
+    } else {
+      value += char;
+    }
   }
+
   values.push(value.trim());
   return values;
 }
 
-module.exports = { ZohoAuditLogService };
-
 function todayDateRange() {
-  const now = new Date();
-
-  // Get today's date in India (IST)
   const date = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(now);
+  }).format(new Date());
 
   return {
     start: `${date}T00:00:00+05:30`,
@@ -293,17 +392,19 @@ function normalizeAuditDateRange(range) {
   let endTimestamp = end;
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(end)) {
-    const endDate = new Date(`${end}T00:00:00+05:30`);
+    const [year, month, day] = end.split("-").map(Number);
+    const endDate = new Date(Date.UTC(year, month - 1, day));
 
     if (range.end_operator === "exclusive") {
-      endDate.setDate(endDate.getDate() - 1);
+      endDate.setUTCDate(endDate.getUTCDate() - 1);
     }
 
-    const year = endDate.getFullYear();
-    const month = String(endDate.getMonth() + 1).padStart(2, "0");
-    const day = String(endDate.getDate()).padStart(2, "0");
+    const endYear = endDate.getUTCFullYear();
+    const endMonth = String(endDate.getUTCMonth() + 1).padStart(2, "0");
+    const endDay = String(endDate.getUTCDate()).padStart(2, "0");
 
-    endTimestamp = `${year}-${month}-${day}T23:59:59+05:30`;
+    endTimestamp =
+      `${endYear}-${endMonth}-${endDay}T23:59:59+05:30`;
   }
 
   return {
@@ -311,3 +412,5 @@ function normalizeAuditDateRange(range) {
     end: endTimestamp,
   };
 }
+
+module.exports = { ZohoAuditLogService };
