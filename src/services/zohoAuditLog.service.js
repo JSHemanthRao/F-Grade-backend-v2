@@ -25,6 +25,7 @@ class ZohoAuditLogService {
       : `${apiDomain}/crm/${apiVersion}`;
 
     const dateRange = params.date_range || todayDateRange();
+
     const criteria = [
       {
         field: { api_name: "audited_time" },
@@ -218,12 +219,18 @@ function splitCsvLine(line) {
 module.exports = { ZohoAuditLogService };
 
 function todayDateRange() {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
+  const now = new Date();
+
+  // Get today's date in India (IST)
+  const date = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+
   return {
-    start: start.toISOString().slice(0, 10),
-    end: end.toISOString().slice(0, 10),
+    start: `${date}T00:00:00+05:30`,
+    end: `${date}T23:59:59+05:30`,
   };
 }
