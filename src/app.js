@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const createCrmRoutes = require('./routes/crm.routes');
-const createBooksRoutes = require('./routes/books.routes');
+// const createBooksRoutes = require('./routes/books.routes');
 const healthRoutes = require('./routes/health.routes');
 const createSkillsRoutes = require('./routes/skills.routes');
 const { errorHandler } = require('./middleware/errorHandler');
