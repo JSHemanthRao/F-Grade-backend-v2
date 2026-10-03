@@ -1,24 +1,43 @@
 const axios = require("axios");
+const http = require("node:http");
+const https = require("node:https");
 const { getZohoConfig } = require("../config/zoho.config");
 const { ZohoAuthService } = require("./zohoAuth.service");
 const { createAppError } = require("../utils/errors");
+const { log } = require("../utils/logger");
+
+const MAX_NETWORK_ATTEMPTS = 3;
+const NETWORK_RETRY_DELAYS_MS = [500, 1000];
+const RETRYABLE_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "EAI_AGAIN",
+]);
+const auditHttpClient = axios.create({
+  httpAgent: new http.Agent({ keepAlive: false }),
+  httpsAgent: new https.Agent({ keepAlive: false }),
+});
 
 class ZohoAuditLogService {
-  constructor(httpClient = axios, configLoader = getZohoConfig, authService) {
+  constructor(httpClient = auditHttpClient, configLoader = getZohoConfig, authService, sleep = delay) {
     this.httpClient = httpClient;
     this.configLoader = configLoader;
     this.authService =
       authService || new ZohoAuthService(httpClient, configLoader);
+    this.sleep = sleep;
+    this.inFlightExports = new Map();
   }
 
   async getAuditLogs(params = {}) {
     const config = this.configLoader();
-    await this.authService.getAccessToken();
-
+    await this.getAccessTokenWithRetry(config, false);
     const apiDomain = (
-      this.authService.getApiDomain() || config.apiBaseUrl
+      this.authService.getApiDomain?.() ||
+      config.apiBaseUrl ||
+      "https://www.zohoapis.com/crm/v8"
     ).replace(/\/+$/, "");
-
     const apiVersion = config.apiVersion || "v8";
 
     const baseUrl = /\/crm\/v\d+$/i.test(apiDomain)
@@ -117,12 +136,57 @@ class ZohoAuditLogService {
       ),
     );
 
-    const createResponse = await this.request(
-      "post",
-      `${baseUrl}/settings/audit_log_export`,
+    const exportKey = stableStringify(auditCriteria);
+    const existingExport = this.inFlightExports.get(exportKey);
+    if (existingExport) return existingExport;
+
+    const exportPromise = this.createAndDownloadAuditLog(
+      baseUrl,
       config,
       requestBody,
+      auditCriteria,
     );
+    this.inFlightExports.set(exportKey, exportPromise);
+    try {
+      return await exportPromise;
+    } finally {
+      if (this.inFlightExports.get(exportKey) === exportPromise) {
+        this.inFlightExports.delete(exportKey);
+      }
+    }
+  }
+
+  async createAndDownloadAuditLog(baseUrl, config, requestBody, requestedCriteria) {
+    let createResponse;
+    try {
+      createResponse = await this.request(
+        "post",
+        `${baseUrl}/settings/audit_log_export`,
+        config,
+        requestBody,
+        { zohoApiRequest: true },
+      );
+    } catch (error) {
+      if (!isAlreadyScheduledError(error)) throw error;
+      const existingJob = await this.findMatchingScheduledJob(
+        baseUrl,
+        config,
+        requestedCriteria,
+      );
+      if (!existingJob) {
+        throw createAppError(
+          "AUDIT_LOG_SCHEDULED_EXPORT_UNMATCHED",
+          "Zoho reports an audit-log export is already scheduled, but no existing job with matching criteria could be identified.",
+          409,
+          {
+            operation: "audit_log",
+            upstream_status: 400,
+            upstream_code: "ALREADY_SCHEDULED",
+          },
+        );
+      }
+      createResponse = { data: { audit_log_export: [existingJob] } };
+    }
 
     const job =
       createResponse.data?.audit_log_export?.[0] ||
@@ -150,6 +214,8 @@ class ZohoAuditLogService {
         "get",
         `${baseUrl}/settings/audit_log_export/${encodeURIComponent(jobId)}`,
         config,
+        undefined,
+        { zohoApiRequest: true },
       );
 
       const state = String(
@@ -169,7 +235,7 @@ class ZohoAuditLogService {
       }
 
       if (attempt < 19) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await this.sleep(1000);
       }
     }
 
@@ -208,80 +274,293 @@ class ZohoAuditLogService {
     };
   }
 
+  async findMatchingScheduledJob(baseUrl, config, requestedCriteria) {
+    let response;
+    try {
+      response = await this.request(
+        "get",
+        `${baseUrl}/settings/audit_log_export`,
+        config,
+        undefined,
+        { zohoApiRequest: true },
+      );
+    } catch (error) {
+      if (
+        error.details?.upstream_status === 400 &&
+        error.details?.upstream_code === "NO_CONTENT"
+      ) {
+        return null;
+      }
+      throw error;
+    }
+
+    const jobs = response.data?.audit_log_export;
+    if (!Array.isArray(jobs)) return null;
+
+    const statusPriority = {
+      finished: 0,
+      progress: 1,
+      scheduled: 2,
+      failed: 3,
+    };
+    return jobs
+      .filter((job) => job?.id && criteriaMatch(job.criteria, requestedCriteria))
+      .sort((left, right) => {
+        const leftPriority = statusPriority[String(left.status || "").toLowerCase()] ?? 4;
+        const rightPriority = statusPriority[String(right.status || "").toLowerCase()] ?? 4;
+        return leftPriority - rightPriority;
+      })[0] || null;
+  }
+
   async request(method, url, config, data, requestOptions = {}) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const token = await this.authService.getAccessToken();
+    const { zohoApiRequest = false, ...axiosOptions } = requestOptions;
+    let tokenRefreshed = false;
+
+    authRetry: for (let authAttempt = 0; authAttempt < 2; authAttempt += 1) {
+      const token = await this.getAccessTokenWithRetry(
+        config,
+        tokenRefreshed,
+      );
+      const requestUrl = zohoApiRequest
+        ? resolveZohoApiUrl(url, config, this.authService.getApiDomain?.())
+        : url;
+
+      for (let attempt = 1; attempt <= MAX_NETWORK_ATTEMPTS; attempt += 1) {
+        const startedAt = Date.now();
         const options = {
-          ...requestOptions,
+          ...axiosOptions,
           headers: {
-            ...requestOptions.headers,
+            ...axiosOptions.headers,
             Authorization: `Zoho-oauthtoken ${token}`,
             ...(method === "get" ? {} : { "Content-Type": "application/json" }),
           },
           timeout: config.timeoutMs,
         };
 
-        return method === "get"
-          ? await this.httpClient.get(url, options)
-          : await this.httpClient.post(url, data, options);
-      } catch (error) {
-        const status = error.response?.status ?? null;
-        const responseData = error.response?.data ?? null;
-        const zohoError =
-          responseData?.audit_log_export?.[0] ||
-          responseData?.data?.[0] ||
-          responseData ||
-          {};
-        const errorCode = zohoError?.code || null;
-        const upstreamMessage =
-          zohoError?.message ||
-          responseData?.message ||
-          error.message ||
-          "Unable to retrieve Zoho Audit Log data.";
-
-        if (status === 401) {
-          this.authService.clearToken?.();
-          if (attempt === 0) continue;
-        }
-
-        const authRejected = status === 401 || status === 403;
-        const appErrorCode =
-          status === 401
-            ? "ZOHO_AUTHENTICATION_ERROR"
-            : status === 403
-              ? "ZOHO_AUTHORIZATION_ERROR"
-              : status === 404
-                ? "ZOHO_ENDPOINT_NOT_FOUND"
-                : error.code || errorCode || "AUDIT_LOG_REQUEST_FAILED";
-        const message = status === 401
-          ? "Zoho rejected CRM authentication after a token refresh attempt."
-          : status === 403
-            ? "Zoho denied access to the requested CRM audit-log operation."
-            : error.code === "ZOHO_AUTHENTICATION_ERROR"
-              ? "Unable to authenticate with Zoho CRM."
-              : upstreamMessage;
-
-        throw createAppError(
-          appErrorCode,
-          message,
-          authRejected ? 502 : status || 502,
-          {
-            operation: "audit_log",
-            upstream_status: status,
-            upstream_code: errorCode,
-          },
-        );
+        try {
+          return method === "get"
+            ? await this.httpClient.get(requestUrl, options)
+            : await this.httpClient.post(requestUrl, data, options);
+        } catch (error) {
+          if (error.response?.status === 401) {
+            this.authService.clearToken?.();
+            if (authAttempt === 0) {
+              tokenRefreshed = true;
+              continue authRetry;
+            }
           }
+
+          if (error.response) {
+            throw createZohoHttpError(error, token, config);
+          }
+
+          const code = getNetworkErrorCode(error);
+          const shouldRetry = RETRYABLE_NETWORK_CODES.has(code)
+            && attempt < MAX_NETWORK_ATTEMPTS;
+          logNetworkFailure(error, {
+            hostname: getHostname(requestUrl),
+            method,
+            attempt,
+            elapsedMs: Date.now() - startedAt,
+            tokenRefreshed,
+            retry: shouldRetry,
+            secrets: [token, config.clientId, config.clientSecret, config.refreshToken],
+          });
+
+          if (shouldRetry) {
+            await this.sleep(NETWORK_RETRY_DELAYS_MS[attempt - 1]);
+            continue;
+          }
+
+          throw createNetworkError("audit_log", error);
+        }
+      }
     }
 
-    throw createAppError(
-      "ZOHO_AUTHENTICATION_ERROR",
-      "Unable to authenticate with Zoho CRM.",
-      502,
-      { operation: "audit_log" },
-    );
+    throw createAppError("ZOHO_AUTHENTICATION_ERROR", "Unable to authenticate with Zoho CRM.", 502, {
+      operation: "audit_log",
+      upstream_status: 401,
+      upstream_code: null,
+    });
   }
+
+  async getAccessTokenWithRetry(config, tokenRefreshed) {
+    for (let attempt = 1; attempt <= MAX_NETWORK_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.authService.getAccessToken();
+      } catch (error) {
+        const cause = error.cause || error;
+        if (cause.response) {
+          throw createAppError(
+            "ZOHO_AUTHENTICATION_ERROR",
+            "Unable to authenticate with Zoho CRM.",
+            502,
+            {
+              operation: "audit_log",
+              upstream_status: cause.response.status || null,
+              upstream_code: cause.response.data?.code || null,
+            },
+          );
+        }
+        if (!error.cause && error.code !== "ZOHO_AUTHENTICATION_ERROR") {
+          throw error;
+        }
+
+        const code = getNetworkErrorCode(cause);
+        const shouldRetry = !cause.response
+          && attempt < MAX_NETWORK_ATTEMPTS
+          && RETRYABLE_NETWORK_CODES.has(code);
+        const startedAt = error.networkStartedAt || Date.now();
+        logNetworkFailure(cause, {
+          hostname: getHostname(config.accountsUrl),
+          method: "POST",
+          attempt,
+          elapsedMs: Date.now() - startedAt,
+          tokenRefreshed,
+          retry: shouldRetry,
+          secrets: [config.clientId, config.clientSecret, config.refreshToken],
+        });
+        if (shouldRetry) {
+          await this.sleep(NETWORK_RETRY_DELAYS_MS[attempt - 1]);
+          continue;
+        }
+        throw createNetworkError("audit_log", cause);
+      }
+    }
+
+    throw createNetworkError("audit_log", new Error("Zoho token request failed."));
+  }
+}
+
+function resolveZohoApiUrl(url, config, apiDomain) {
+  const original = new URL(url);
+  const suffix = original.pathname.replace(/^\/crm\/v\d+/i, "");
+  const domain = (apiDomain || config.apiBaseUrl || "https://www.zohoapis.com").replace(/\/+$/, "");
+  const baseUrl = /\/crm\/v\d+$/i.test(domain)
+    ? domain
+    : `${domain}/crm/${config.apiVersion || "v8"}`;
+  return `${baseUrl}${suffix}${original.search}`;
+}
+
+function isAlreadyScheduledError(error) {
+  return error.statusCode === 400
+    && error.details?.upstream_status === 400
+    && error.details?.upstream_code === "ALREADY_SCHEDULED";
+}
+
+function criteriaMatch(existingCriteria, requestedCriteria) {
+  return Boolean(existingCriteria)
+    && stableStringify(existingCriteria) === stableStringify(requestedCriteria);
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.keys(value)
+      .sort()
+      .map((key) => {
+        const child = value[key];
+        if (key === "group" && Array.isArray(child)) {
+          const normalizedGroup = child.map(stableStringify).sort();
+          return `${JSON.stringify(key)}:[${normalizedGroup.join(",")}]`;
+        }
+        if (
+          key === "value" &&
+          String(value.comparator || "").toLowerCase() === "in" &&
+          Array.isArray(child)
+        ) {
+          const normalizedSet = child.map(stableStringify).sort();
+          return `${JSON.stringify(key)}:[${normalizedSet.join(",")}]`;
+        }
+        return `${JSON.stringify(key)}:${stableStringify(child)}`;
+      });
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function createZohoHttpError(error, token, config) {
+  const status = error.response.status;
+  const responseData = error.response.data || {};
+  const zohoError = responseData.audit_log_export?.[0]
+    || responseData.data?.[0]
+    || responseData;
+  const upstreamCode = zohoError.code || null;
+  const isAuthError = status === 401 || status === 403;
+  const message = status === 401
+    ? "Zoho rejected CRM authentication after a token refresh attempt."
+    : status === 403
+      ? "Zoho denied access to the requested CRM audit-log operation."
+      : sanitizeMessage(zohoError.message || responseData.message || error.message, [
+        token,
+        config.clientId,
+        config.clientSecret,
+        config.refreshToken,
+      ]);
+  const code = status === 401
+    ? "ZOHO_AUTHENTICATION_ERROR"
+    : status === 403
+      ? "ZOHO_AUTHORIZATION_ERROR"
+      : status === 404
+        ? "ZOHO_ENDPOINT_NOT_FOUND"
+        : upstreamCode || "AUDIT_LOG_REQUEST_FAILED";
+
+  return createAppError(code, message, isAuthError ? 502 : status, {
+    operation: "audit_log",
+    upstream_status: status,
+    upstream_code: upstreamCode,
+  });
+}
+
+function createNetworkError(operation, error) {
+  return createAppError(
+    "AUDIT_LOG_UPSTREAM_NETWORK_ERROR",
+    "Unable to establish a connection to the Zoho CRM API.",
+    502,
+    { operation, upstream_status: null, upstream_code: null },
+  );
+}
+
+function logNetworkFailure(error, details) {
+  log("warn", `[ZOHO_AUDIT_NETWORK_ERROR] ${JSON.stringify({
+    operation: "audit_log",
+    hostname: details.hostname,
+    method: String(details.method).toUpperCase(),
+    attempt: details.attempt,
+    code: getNetworkErrorCode(error),
+    message: sanitizeMessage(error.message, details.secrets),
+    elapsedMs: details.elapsedMs,
+    tokenRefreshed: details.tokenRefreshed,
+    retry: details.retry,
+  })}`);
+}
+
+function getNetworkErrorCode(error) {
+  return error?.code || error?.cause?.code || null;
+}
+
+function getHostname(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "unknown";
+  }
+}
+
+function sanitizeMessage(message, secrets = []) {
+  let safeMessage = String(message || "Network request failed.");
+  for (const secret of secrets) {
+    if (secret) safeMessage = safeMessage.split(String(secret)).join("[REDACTED]");
+  }
+  return safeMessage
+    .replace(/Zoho-oauthtoken\s+\S+/gi, "Zoho-oauthtoken [REDACTED]")
+    .replace(/(access_token|refresh_token|client_secret|client_id|api_key)=([^&\s]+)/gi, "$1=[REDACTED]");
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 // Zoho permits no more than two criteria in each group.

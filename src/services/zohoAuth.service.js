@@ -37,6 +37,7 @@ class ZohoAuthService {
   }
 
   async refreshAccessToken(config) {
+    const startedAt = Date.now();
     try {
       const response = await this.httpClient.post(`${config.accountsUrl}/oauth/v2/token`, null, {
         params: {
@@ -53,11 +54,12 @@ class ZohoAuthService {
       this.apiDomain = payload.api_domain || null;
       this.expiresAt = Date.now() + Number(payload.expires_in || 3600) * 1000;
       return this.accessToken;
-    } catch (_error) {
+    } catch (cause) {
       this.clearToken();
-      const error = new Error('Unable to authenticate with Zoho CRM.');
+      const error = new Error('Unable to authenticate with Zoho CRM.', { cause });
       error.code = 'ZOHO_AUTHENTICATION_ERROR';
       error.statusCode = 502;
+      error.networkStartedAt = startedAt;
       throw error;
     }
   }
