@@ -13,7 +13,7 @@ class ZohoAuditLogService {
 
   async getAuditLogs(params = {}) {
     const config = this.configLoader();
-    const token = await this.authService.getAccessToken();
+    await this.authService.getAccessToken();
 
     const apiDomain = (
       this.authService.getApiDomain() || config.apiBaseUrl
@@ -120,7 +120,6 @@ class ZohoAuditLogService {
     const createResponse = await this.request(
       "post",
       `${baseUrl}/settings/audit_log_export`,
-      token,
       config,
       requestBody,
     );
@@ -150,7 +149,6 @@ class ZohoAuditLogService {
       status = await this.request(
         "get",
         `${baseUrl}/settings/audit_log_export/${encodeURIComponent(jobId)}`,
-        token,
         config,
       );
 
@@ -195,12 +193,8 @@ class ZohoAuditLogService {
       );
     }
 
-    const download = await this.httpClient.get(downloadUrl, {
+    const download = await this.request("get", downloadUrl, config, undefined, {
       responseType: "text",
-      timeout: config.timeoutMs,
-      headers: {
-        Authorization: `Zoho-oauthtoken ${token}`,
-      },
     });
 
     const records = parseCsv(String(download.data || ""));
@@ -214,72 +208,79 @@ class ZohoAuditLogService {
     };
   }
 
-  async request(method, url, token, config, data) {
-    try {
-      const options = {
-        headers: {
-          Authorization: `Zoho-oauthtoken ${token}`,
-          "Content-Type": "application/json",
-        },
-        timeout: config.timeoutMs,
-      };
-
-      return method === "get"
-        ? await this.httpClient.get(url, options)
-        : await this.httpClient.post(url, data, options);
-    } catch (error) {
-      const status = error.response?.status ?? null;
-      const responseData = error.response?.data ?? null;
-
-      const zohoError =
-        responseData?.audit_log_export?.[0] ||
-        responseData?.data?.[0] ||
-        responseData ||
-        {};
-
-      const errorCode = zohoError?.code || null;
-
-      const errorMessage =
-        zohoError?.message ||
-        responseData?.message ||
-        error.message ||
-        "Unable to retrieve Zoho Audit Log data.";
-
-      console.error(
-        "[ZOHO_AUDIT_LOG_API_ERROR]",
-        JSON.stringify(
-          {
-            method: method.toUpperCase(),
-            url,
-            status,
-            response: responseData,
-            message: error.message,
+  async request(method, url, config, data, requestOptions = {}) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const token = await this.authService.getAccessToken();
+        const options = {
+          ...requestOptions,
+          headers: {
+            ...requestOptions.headers,
+            Authorization: `Zoho-oauthtoken ${token}`,
+            ...(method === "get" ? {} : { "Content-Type": "application/json" }),
           },
-          null,
-          2,
-        ),
-      );
+          timeout: config.timeoutMs,
+        };
 
-      if (status === 401) {
-        this.authService.clearToken?.();
-      }
+        return method === "get"
+          ? await this.httpClient.get(url, options)
+          : await this.httpClient.post(url, data, options);
+      } catch (error) {
+        const status = error.response?.status ?? null;
+        const responseData = error.response?.data ?? null;
+        const zohoError =
+          responseData?.audit_log_export?.[0] ||
+          responseData?.data?.[0] ||
+          responseData ||
+          {};
+        const errorCode = zohoError?.code || null;
+        const upstreamMessage =
+          zohoError?.message ||
+          responseData?.message ||
+          error.message ||
+          "Unable to retrieve Zoho Audit Log data.";
 
-      const appErrorCode =
-        status === 401
-          ? "ZOHO_AUTHENTICATION_ERROR"
+        if (status === 401) {
+          this.authService.clearToken?.();
+          if (attempt === 0) continue;
+        }
+
+        const authRejected = status === 401 || status === 403;
+        const appErrorCode =
+          status === 401
+            ? "ZOHO_AUTHENTICATION_ERROR"
+            : status === 403
+              ? "ZOHO_AUTHORIZATION_ERROR"
+              : status === 404
+                ? "ZOHO_ENDPOINT_NOT_FOUND"
+                : error.code || errorCode || "AUDIT_LOG_REQUEST_FAILED";
+        const message = status === 401
+          ? "Zoho rejected CRM authentication after a token refresh attempt."
           : status === 403
-            ? "ZOHO_AUTHORIZATION_ERROR"
-            : status === 404
-              ? "ZOHO_ENDPOINT_NOT_FOUND"
-              : errorCode || "AUDIT_LOG_REQUEST_FAILED";
+            ? "Zoho denied access to the requested CRM audit-log operation."
+            : error.code === "ZOHO_AUTHENTICATION_ERROR"
+              ? "Unable to authenticate with Zoho CRM."
+              : upstreamMessage;
 
-      throw createAppError(appErrorCode, errorMessage, status || 502, {
-        operation: "audit_log",
-        upstream_status: status,
-        upstream_code: errorCode,
-        upstream_details: zohoError.details || null,
-      });
+        throw createAppError(
+          appErrorCode,
+          message,
+          authRejected ? 502 : status || 502,
+          {
+            operation: "audit_log",
+            upstream_status: status,
+            upstream_code: errorCode,
+          },
+        );
+          }
     }
+
+    throw createAppError(
+      "ZOHO_AUTHENTICATION_ERROR",
+      "Unable to authenticate with Zoho CRM.",
+      502,
+      { operation: "audit_log" },
+    );
   }
 }
 

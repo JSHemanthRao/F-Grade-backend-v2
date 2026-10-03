@@ -9,7 +9,6 @@ const CRM_MODULES = {
   Notes: ['id', 'Note_Title', 'Title', 'Note_Content', 'Parent_Id', 'Owner', 'Created_Time', 'Modified_Time'],
   Products: ['id', 'Product_Name', 'Product_Code', 'Unit_Price', 'Qty_in_Stock', 'Description', 'Product_Category', 'Owner', 'Created_Time', 'Modified_Time'],
   Vendors: ['id', 'Vendor_Name', 'Email', 'Phone', 'Website', 'City', 'State', 'Country', 'Category', 'Owner', 'Created_Time', 'Modified_Time'],
-  // Quotes: ['id', 'Subject', 'Quote_Number', 'Grand_Total', 'Status', 'Valid_Till', 'Account_Name', 'Owner', 'Created_Time', 'Modified_Time'],
   'Sales Orders': ['id', 'Subject', 'SO_Number', 'Sales_Order_Number', 'Grand_Total', 'Status', 'Due_Date', 'Account_Name', 'Owner', 'Created_Time', 'Modified_Time'],
   'Purchase Orders': ['id', 'Subject', 'PO_Number', 'Purchase_Order_Number', 'Grand_Total', 'Status', 'Due_Date', 'Vendor_Name', 'Owner', 'Created_Time', 'Modified_Time'],
   Campaigns: ['id', 'Campaign_Name', 'Campaign_Type', 'Type', 'Status', 'Start_Date', 'End_Date', 'Budgeted_Cost', 'Actual_Cost', 'Owner', 'Created_Time', 'Modified_Time'],
@@ -58,7 +57,6 @@ const CRM_API_NAMES = Object.freeze({
   'Service Provider': 'Service_Provider',
   'Service Providers': 'Service_Provider',
   'Co-operative Banks': 'Co_operative_Banks',
-  // 'Zoho Finance': 'Zoho_Books',
   'Voice of the Customer': 'Voice_of_the_Customer__s'
 });
 

@@ -625,6 +625,9 @@ function isAuditLogQuestion(lowerText) {
   if (/\b(?:all\s+)?(?:updates|changes|deletions)\s+made\s+(?:on|in|last|this|yesterday|today|between)\b/.test(lowerText)) {
     return true;
   }
+  if (/\b(?:today|yesterday)'?s\s+(?:updates?|changes?|deletions?)\b/.test(lowerText)) {
+    return true;
+  }
 
   // 6. Generic CRM records (cross-module) that were updated/created/added/modified
   if (/(?<!\b(?:lead|leads|deal|deals|contact|contacts|account|accounts|task|tasks|call|calls|meeting|meetings|product|products)\s+)(?:\ball\s+)?(?:\bcrm\s+)?\brecords?\s+(?:that\s+were\s+|were\s+)?(?:updated|added|created|modified|changed)\b/.test(lowerText)) {

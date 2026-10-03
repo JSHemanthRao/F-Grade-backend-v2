@@ -592,6 +592,30 @@ class CrmService {
   async queryAuditLog(input) {
     const audit = { ...(input.audit_log || {}) };
     if (
+      audit.entity &&
+      !audit.entity_id &&
+      typeof this.zohoService.resolveModuleApiName === "function" &&
+      typeof this.zohoService.getModulesMetadata === "function"
+    ) {
+      const moduleApiName = await this.zohoService.resolveModuleApiName(
+        audit.entity,
+      );
+      const metadata = await this.zohoService.getModulesMetadata();
+      const module = metadata.modules?.find(
+        (item) => item.api_name === moduleApiName,
+      );
+      if (!module?.id) {
+        throw createAppError(
+          "AUDIT_LOG_MODULE_ID_UNAVAILABLE",
+          "Zoho CRM module metadata did not provide an ID for audit-log filtering.",
+          502,
+          { module_api_name: moduleApiName },
+        );
+      }
+      audit.entity = moduleApiName;
+      audit.entity_id = String(module.id);
+    }
+    if (
       audit.user?.name &&
       !audit.user.id &&
       typeof this.zohoService.getUsers === "function"
