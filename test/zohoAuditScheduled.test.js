@@ -148,11 +148,13 @@ test('logs status response structure without exposing nested download URLs', asy
   process.env.BACKEND_API_KEY = 'diagnostic-test-api-key-not-real';
   console.log = (...args) => logged.push(args.join(' '));
 
+  let failure;
   try {
-    await assert.rejects(runAudit(service), (error) => {
-      assert.equal(error.code, 'AUDIT_LOG_DOWNLOAD_UNAVAILABLE');
-      return true;
-    });
+    failure = await runAudit(service).then(
+      () => { throw new Error('Expected audit export to reject'); },
+      (error) => error
+    );
+    assert.equal(failure.code, 'AUDIT_LOG_DOWNLOAD_UNAVAILABLE');
   } finally {
     console.log = previousConsoleLog;
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
@@ -160,6 +162,19 @@ test('logs status response structure without exposing nested download URLs', asy
     if (previousBackendApiKey === undefined) delete process.env.BACKEND_API_KEY;
     else process.env.BACKEND_API_KEY = previousBackendApiKey;
   }
+
+  assert.deepEqual(failure.details.selected_job_keys, [
+    'id', 'status', 'downloadInfo', 'error'
+  ]);
+  assert.equal(failure.details.has_download_links, false);
+  assert.equal(failure.details.download_links_type, 'undefined');
+  assert.equal(failure.details.download_links_count, 0);
+  assert.deepEqual(failure.details.discovered_artifact_paths, [
+    'downloadInfo',
+    'downloadInfo.downloadUrl'
+  ]);
+  assert.equal(JSON.stringify(failure.details).includes(signedUrl), false);
+  assert.equal(JSON.stringify(failure.details).includes('diagnostic-test-api-key-not-real'), false);
 
   assert.equal(calls.some((call) => call.url.endsWith('/production-shaped-job')), true);
   const diagnostics = logged
@@ -178,6 +193,8 @@ test('logs status response structure without exposing nested download URLs', asy
   )));
   assert.equal(diagnostics[1].selectedJobId, 'production-shaped-job');
   assert.equal(diagnostics[1].selectedJobStatus, 'Finished');
+  assert.deepEqual(diagnostics[1].selectedJobKeys, failure.details.selected_job_keys);
+  assert.deepEqual(diagnostics[1].discoveredArtifactPaths, failure.details.discovered_artifact_paths);
   assert.equal(logged.join('\n').includes(signedUrl), false);
   assert.equal(logged.join('\n').includes('diagnostic-test-api-key-not-real'), false);
 });

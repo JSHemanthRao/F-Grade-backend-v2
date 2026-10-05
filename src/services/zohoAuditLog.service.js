@@ -378,15 +378,38 @@ class ZohoAuditLogService {
           : timeoutCode;
     if (errorCode === "AUDIT_LOG_DOWNLOAD_UNAVAILABLE") {
       logAuditExportStatusDebug(lastResponse, jobId, config);
+      const selectedJobKeys = exportJob && typeof exportJob === "object"
+        ? Object.keys(exportJob)
+        : [];
+      const downloadLinks = exportJob?.download_links;
+      const discoveredArtifactPaths = findAuditArtifactLocations(exportJob)
+        .map(({ path }) => path);
       log("info", `[ZOHO_AUDIT_EXPORT_STATUS_DEBUG] ${JSON.stringify({
         requestedJobId: String(jobId),
         selectedJobId: safeAuditDebugValue(getExportJobId(exportJob), config),
         selectedJobStatus: safeAuditDebugValue(exportJob?.status, config),
-        selectedJobKeys: exportJob && typeof exportJob === "object"
-          ? Object.keys(exportJob)
-          : [],
+        selectedJobKeys,
+        hasDownloadLinks: Object.prototype.hasOwnProperty.call(exportJob || {}, "download_links"),
+        downloadLinksType: getAuditDebugType(downloadLinks),
+        downloadLinksCount: Array.isArray(downloadLinks) ? downloadLinks.length : 0,
+        discoveredArtifactPaths,
       })}`);
     }
+
+    const unavailableDownloadDetails = errorCode === "AUDIT_LOG_DOWNLOAD_UNAVAILABLE"
+      ? {
+        selected_job_keys: exportJob && typeof exportJob === "object"
+          ? Object.keys(exportJob)
+          : [],
+        has_download_links: Object.prototype.hasOwnProperty.call(exportJob || {}, "download_links"),
+        download_links_type: getAuditDebugType(exportJob?.download_links),
+        download_links_count: Array.isArray(exportJob?.download_links)
+          ? exportJob.download_links.length
+          : 0,
+        discovered_artifact_paths: findAuditArtifactLocations(exportJob)
+          .map(({ path }) => path),
+      }
+      : {};
 
     throw createAppError(
       errorCode,
@@ -413,6 +436,7 @@ class ZohoAuditLogService {
         audit_log_export_count: Array.isArray(lastResponse?.data?.audit_log_export)
           ? lastResponse.data.audit_log_export.length
           : 0,
+        ...unavailableDownloadDetails,
       },
     );
   }
