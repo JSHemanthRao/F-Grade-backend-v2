@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+process.env.BACKEND_API_KEY = 'test-backend-key';
 const createApp = require('../src/app').createApp;
 const { CRM_MODULES } = require('../src/constants/crmModules');
 const { validateCrmQuery } = require('../src/validators/crmQuery.validator');
@@ -15,7 +16,7 @@ function requestJson(app, path, method, body) {
         port: server.address().port,
         path,
         method,
-        headers: body ? { 'content-type': 'application/json' } : {}
+        headers: { ...(body ? { 'content-type': 'application/json' } : {}), 'x-api-key': 'test-backend-key' }
       }, (response) => {
         let content = '';
         response.on('data', (chunk) => { content += chunk; });

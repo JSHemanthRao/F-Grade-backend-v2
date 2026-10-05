@@ -1,11 +1,23 @@
 const crypto = require('node:crypto');
 const { env } = require('../config/env');
+const { log } = require('../utils/logger');
 
 function apiKeyAuth(req, res, next) {
-  if (!env.backendApiKey) return next();
+  const supplied = req.get('x-api-key');
+  const keyConfigured = Boolean(env.backendApiKey);
+  const path = `${req.baseUrl}${req.path}` || req.path;
+  const authenticated = keyConfigured && Boolean(supplied) && safeEqual(supplied, env.backendApiKey);
 
-  const supplied = req.get('x-api-key') || extractBearerToken(req.get('authorization'));
-  if (!supplied || !safeEqual(supplied, env.backendApiKey)) {
+  log('info', `[API_KEY_AUTH] ${JSON.stringify({
+    path,
+    method: req.method,
+    headerPresent: Boolean(supplied),
+    keyConfigured,
+    authenticated
+  })}`);
+
+  if (!authenticated) {
+    log('warn', `[AUTH_FAILURE] ${JSON.stringify({ source: 'backend_api_key', path, method: req.method })}`);
     return res.status(401).json({
       success: false,
       status: 'error',
@@ -13,11 +25,6 @@ function apiKeyAuth(req, res, next) {
     });
   }
   return next();
-}
-
-function extractBearerToken(value) {
-  const match = String(value || '').match(/^Bearer\s+(.+)$/i);
-  return match ? match[1] : null;
 }
 
 function safeEqual(left, right) {

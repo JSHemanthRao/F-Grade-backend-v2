@@ -40,6 +40,10 @@ test('audit-log endpoint accepts a valid API key and rejects missing or invalid 
   assert.equal(invalid.status, 401);
   assert.equal((await invalid.json()).error.code, 'AUTHENTICATION_REQUIRED');
 
+  const bearerOnly = await send({ authorization: 'Bearer test-backend-key' });
+  assert.equal(bearerOnly.status, 401);
+  assert.equal((await bearerOnly.json()).error.code, 'AUTHENTICATION_REQUIRED');
+
   const valid = await send({ 'x-api-key': 'test-backend-key' });
   const result = await valid.json();
   assert.equal(valid.status, 200);

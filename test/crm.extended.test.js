@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+process.env.BACKEND_API_KEY = 'test-backend-key';
 const createApp = require('../src/app').createApp;
 
 function request(app, body, headers = {}) {
@@ -8,7 +9,7 @@ function request(app, body, headers = {}) {
     const server = app.listen(0, '127.0.0.1', () => {
       const port = server.address().port;
       const payload = JSON.stringify(body);
-      const req = http.request({ hostname: '127.0.0.1', port, path: '/api/crm/assistant', method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload), ...headers } }, (res) => {
+      const req = http.request({ hostname: '127.0.0.1', port, path: '/api/crm/assistant', method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload), 'x-api-key': 'test-backend-key', ...headers } }, (res) => {
         let response = '';
         res.setEncoding('utf8');
         res.on('data', (chunk) => { response += chunk; });

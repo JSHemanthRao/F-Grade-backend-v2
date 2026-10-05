@@ -343,6 +343,13 @@ class ZohoAuditLogService {
             : await this.httpClient.post(requestUrl, data, options);
         } catch (error) {
           if (error.response?.status === 401) {
+            log("warn", `[AUTH_FAILURE] ${JSON.stringify({
+              source: "zoho_oauth",
+              path: "/api/crm/audit-log",
+              method,
+              upstreamStatus: 401,
+              retrying: authAttempt === 0,
+            })}`);
             this.authService.clearToken?.();
             if (authAttempt === 0) {
               tokenRefreshed = true;
