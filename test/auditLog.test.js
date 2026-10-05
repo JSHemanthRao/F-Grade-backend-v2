@@ -128,6 +128,40 @@ describe('Audit Log – Natural Language Resolution', () => {
       assert.ok(res.body.time_range.end, 'should have an end date');
     });
 
+    it('resolves Contacts updates yesterday using the Asia/Kolkata date and updated action', async () => {
+      let capturedInput;
+      const crmService = createMockCrmService([]);
+      crmService.queryAuditLog = async (input) => {
+        capturedInput = input;
+        return { records: [], data: [], count: 0, pagination: { limit: input.limit, offset: input.offset } };
+      };
+      const controller = createCrmController(crmService);
+      const req = mockReq({ request: { question: 'Show me all updates made to Contacts yesterday.' } });
+      const res = mockRes();
+      await controller.auditLog(req, res, (err) => { throw err; });
+
+      const today = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(new Date());
+      const yesterdayDate = new Date(`${today}T00:00:00Z`);
+      yesterdayDate.setUTCDate(yesterdayDate.getUTCDate() - 1);
+      const yesterday = yesterdayDate.toISOString().slice(0, 10);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(capturedInput.intent, 'audit_log');
+      assert.deepEqual(capturedInput.audit_log.date_range, {
+        period: 'yesterday',
+        start: yesterday,
+        end: today,
+        timeZone: 'Asia/Kolkata',
+        field: 'audited_time',
+        field_type: 'datetime',
+        end_operator: 'exclusive'
+      });
+      assert.equal(capturedInput.audit_log.action.toLowerCase(), 'updated');
+      assert.equal(capturedInput.audit_log.module, 'Contacts');
+    });
+
     it('should resolve "last seven days"', async () => {
       const crmService = createMockCrmService([]);
       const controller = createCrmController(crmService);

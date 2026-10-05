@@ -15,10 +15,10 @@ function zohoHttpError(status, code, message = code) {
   return error;
 }
 
-function createHarness({ create, jobs = [], statusById = {} }) {
+function createHarness({ create, jobs = [], statusById = {}, authService: providedAuthService }) {
   const calls = [];
   const sleeps = [];
-  const authService = {
+  const authService = providedAuthService || {
     getAccessToken: async () => 'test-access-token',
     getApiDomain: () => 'https://www.zohoapis.in',
     clearToken: () => {}
@@ -31,8 +31,8 @@ function createHarness({ create, jobs = [], statusById = {} }) {
     get: async (url) => {
       calls.push({ method: 'GET', url });
       if (url.endsWith('/settings/audit_log_export')) {
-        if (typeof jobs === 'function') return jobs();
-        return { data: { audit_log_export: jobs } };
+        const scheduledJobs = typeof jobs === 'function' ? await jobs() : jobs;
+        return { data: { audit_log_export: scheduledJobs } };
       }
       const jobId = decodeURIComponent(url.split('/').pop());
       if (statusById[jobId]) return statusById[jobId]({ call: calls.length });
@@ -159,28 +159,41 @@ test('polls a matching scheduled job while it is still processing', async () => 
   assert.deepEqual(sleeps, [1000]);
 });
 
-test('returns a clear conflict when no existing job matches the criteria', async () => {
+test('waits for an unrelated active job then creates the requested export once', async () => {
+  let createCount = 0;
+  let blockerPolls = 0;
+  const statusById = {
+    'requested-job': async () => ({ data: { audit_log_export: [{ status: 'Finished', download_links: ['https://download.zoho.in/audit.csv'] }] } })
+  };
   const { service, calls } = createHarness({
-    create: async () => { throw zohoHttpError(400, 'ALREADY_SCHEDULED'); },
-    jobs: [{
-      id: 'other-job',
-      status: 'Scheduled',
-      criteria: { field: { api_name: 'action' }, comparator: 'equal', value: 'deleted' }
-    }]
+    create: async () => {
+      createCount += 1;
+      if (createCount === 1) throw zohoHttpError(400, 'ALREADY_SCHEDULED');
+      return createdJob('requested-job');
+    },
+    jobs: [{ id: 'other-job', status: 'Scheduled', criteria: { field: { api_name: 'action' }, comparator: 'equal', value: 'deleted' } }],
+    statusById
   });
+  const originalGet = service.httpClient.get;
+  service.httpClient.get = async (url, options) => {
+    if (url.endsWith('/other-job')) {
+      calls.push({ method: 'GET', url });
+      blockerPolls += 1;
+      return { data: { audit_log_export: [{ status: blockerPolls === 1 ? 'Progress' : 'Finished' }] } };
+    }
+    return originalGet(url, options);
+  };
 
-  await assert.rejects(runAudit(service), (error) => {
-    assert.equal(error.statusCode, 409);
-    assert.equal(error.code, 'AUDIT_LOG_SCHEDULED_EXPORT_UNMATCHED');
-    assert.match(error.message, /no existing job with matching criteria could be identified/);
-    assert.equal(error.details.upstream_status, 400);
-    assert.equal(error.details.upstream_code, 'ALREADY_SCHEDULED');
-    return true;
-  });
-  assert.deepEqual(calls.map((call) => call.method), ['POST', 'GET']);
+  const result = await runAudit(service);
+
+  assert.equal(result.records.length, 1);
+  assert.equal(blockerPolls, 2);
+  assert.equal(createCount, 2);
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 2);
+  assert.equal(calls.some((call) => call.url?.endsWith('/requested-job')), true);
 });
 
-test('treats Zoho NO_CONTENT from the status-all endpoint as no matching job', async () => {
+test('bounds repeated ALREADY_SCHEDULED responses when the status list is empty', async () => {
   const { service, calls } = createHarness({
     create: async () => { throw zohoHttpError(400, 'ALREADY_SCHEDULED'); },
     jobs: async () => { throw zohoHttpError(400, 'NO_CONTENT', 'No audit log has been scheduled'); }
@@ -192,8 +205,8 @@ test('treats Zoho NO_CONTENT from the status-all endpoint as no matching job', a
     assert.equal(error.details.upstream_code, 'ALREADY_SCHEDULED');
     return true;
   });
-  assert.equal(calls.filter((call) => call.method === 'POST').length, 1);
-  assert.equal(calls.filter((call) => call.method === 'GET').length, 1);
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 2);
+  assert.equal(calls.filter((call) => call.method === 'GET').length, 2);
 });
 
 test('selects a matching job rather than the first job returned', async () => {
@@ -235,6 +248,193 @@ test('selects a matching job rather than the first job returned', async () => {
   assert.match(calls[2].url, /\/matching-finished$/);
   assert.equal(calls.some((call) => call.url?.endsWith('/wrong-first')), false);
   assert.equal(calls.some((call) => call.url?.endsWith('/near-match')), false);
+});
+
+test('matches criteria despite object key order and comparator spelling', async () => {
+  let requestedCriteria;
+  const { service, calls } = createHarness({
+    create: async ({ data }) => {
+      requestedCriteria = data.audit_log_export[0].criteria;
+      throw zohoHttpError(400, 'ALREADY_SCHEDULED');
+    },
+    jobs: () => [{
+      id: 'equivalent-job',
+      status: 'fInIsHeD',
+      criteria: makeSemanticallyEquivalentCriteria(requestedCriteria)
+    }],
+    statusById: {
+      'equivalent-job': async () => ({ data: { audit_log_export: [{ status: 'FINISHED', download_links: ['https://download.zoho.in/audit.csv'] }] } })
+    }
+  });
+  const originalGet = service.httpClient.get;
+  service.httpClient.get = async (url, options) => {
+    if (url.endsWith('/settings/audit_log_export')) {
+      calls.push({ method: 'GET', url });
+      return { data: { audit_log_export: [{
+        id: 'equivalent-job',
+        status: 'fInIsHeD',
+        criteria: makeSemanticallyEquivalentCriteria(requestedCriteria)
+      }] } };
+    }
+    return originalGet(url, options);
+  };
+
+  const result = await runAudit(service, { action: 'updated' });
+
+  assert.equal(result.records.length, 1);
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 1);
+  assert.ok(calls.some((call) => call.url?.endsWith('/equivalent-job')));
+});
+
+test('matches in-criteria values independent of their order', async () => {
+  let requestedCriteria;
+  const { service, calls } = createHarness({
+    create: async ({ data }) => {
+      requestedCriteria = data.audit_log_export[0].criteria;
+      replaceCriterionValue(requestedCriteria, 'module', [
+        { api_name: 'Contacts', id: 'contacts-id' },
+        { api_name: 'Deals', id: 'deals-id' }
+      ]);
+      throw zohoHttpError(400, 'ALREADY_SCHEDULED');
+    },
+    statusById: {
+      'in-order-job': async () => ({ data: { audit_log_export: [{ status: 'Finished', download_links: ['https://download.zoho.in/audit.csv'] }] } })
+    }
+  });
+  service.httpClient.get = async (url) => {
+    calls.push({ method: 'GET', url });
+    if (url.endsWith('/settings/audit_log_export')) {
+      const criteria = structuredClone(requestedCriteria);
+      replaceCriterionValue(criteria, 'module', criteriaValue(criteria, 'module').reverse());
+      return { data: { audit_log_export: [{ id: 'in-order-job', status: 'Finished', criteria }] } };
+    }
+    if (url.endsWith('/in-order-job')) {
+      return { data: { audit_log_export: [{ status: 'Finished', download_links: ['https://download.zoho.in/audit.csv'] }] } };
+    }
+    return { data: 'audited_time,action,module\n2026-10-02T10:00:00+05:30,updated,Deals' };
+  };
+
+  const result = await runAudit(service, { entity: 'Contacts', entity_id: 'contacts-id' });
+
+  assert.equal(result.records.length, 1);
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 1);
+});
+
+test('does not reuse a finished export with a different module', async () => {
+  await assertUnrelatedFinishedExportIsNotReused((criteria) => {
+    replaceCriterionValue(criteria, 'module', [{ api_name: 'Leads', id: 'leads-id' }]);
+  }, { entity: 'Contacts', entity_id: 'contacts-id' });
+});
+
+test('does not reuse a finished export with a different action', async () => {
+  await assertUnrelatedFinishedExportIsNotReused((criteria) => {
+    replaceCriterionValue(criteria, 'action', 'deleted');
+  }, { action: 'updated' });
+});
+
+test('does not reuse a finished export with a different date range', async () => {
+  await assertUnrelatedFinishedExportIsNotReused((criteria) => {
+    replaceCriterionValue(criteria, 'audited_time', ['2026-10-03T00:00:00+05:30', '2026-10-03T23:59:59+05:30']);
+  });
+});
+
+test('retries a transient network error while retrieving scheduled jobs', async () => {
+  let listAttempts = 0;
+  let requestedCriteria;
+  const { service, calls, sleeps } = createHarness({
+    create: async ({ data }) => {
+      requestedCriteria = data.audit_log_export[0].criteria;
+      throw zohoHttpError(400, 'ALREADY_SCHEDULED');
+    },
+    jobs: () => {
+      listAttempts += 1;
+      if (listAttempts === 1) {
+        const error = new Error('temporary reset');
+        error.code = 'ECONNRESET';
+        throw error;
+      }
+      return [{ id: 'matching-after-network', status: 'Finished', criteria: requestedCriteria }];
+    },
+    statusById: {
+      'matching-after-network': async () => ({ data: { audit_log_export: [{ status: 'Finished', download_links: ['https://download.zoho.in/audit.csv'] }] } })
+    }
+  });
+
+  const result = await runAudit(service);
+
+  assert.equal(result.records.length, 1);
+  assert.equal(listAttempts, 2);
+  assert.deepEqual(sleeps, [500]);
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 1);
+});
+
+test('refreshes Zoho authentication after a 401 while retrieving scheduled jobs', async () => {
+  let listAttempts = 0;
+  let tokenRequests = 0;
+  let clearCount = 0;
+  let requestedCriteria;
+  const authService = {
+    getAccessToken: async () => `test-token-${++tokenRequests}`,
+    getApiDomain: () => 'https://www.zohoapis.in',
+    clearToken: () => { clearCount += 1; }
+  };
+  const { service, calls } = createHarness({
+    authService,
+    create: async ({ data }) => {
+      requestedCriteria = data.audit_log_export[0].criteria;
+      throw zohoHttpError(400, 'ALREADY_SCHEDULED');
+    },
+    jobs: () => {
+      listAttempts += 1;
+      if (listAttempts === 1) throw zohoHttpError(401, 'INVALID_TOKEN');
+      return [{ id: 'matching-after-refresh', status: 'Finished', criteria: requestedCriteria }];
+    },
+    statusById: {
+      'matching-after-refresh': async () => ({ data: { audit_log_export: [{ status: 'Finished', download_links: ['https://download.zoho.in/audit.csv'] }] } })
+    }
+  });
+
+  const result = await runAudit(service);
+
+  assert.equal(result.records.length, 1);
+  assert.equal(listAttempts, 2);
+  assert.equal(clearCount, 1);
+  assert.ok(tokenRequests >= 4);
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 1);
+});
+
+test('returns a blocking-job timeout with safe job details', async () => {
+  let requestedCriteria;
+  let blockerPolls = 0;
+  const { service, calls } = createHarness({
+    create: async ({ data }) => {
+      requestedCriteria = data.audit_log_export[0].criteria;
+      throw zohoHttpError(400, 'ALREADY_SCHEDULED');
+    },
+    jobs: [{ id: 'blocking-job', status: 'Progress', criteria: { field: { api_name: 'action' }, comparator: 'equal', value: 'deleted' } }]
+  });
+  service.httpClient.get = async (url) => {
+    calls.push({ method: 'GET', url });
+    if (url.endsWith('/settings/audit_log_export')) {
+      return { data: { audit_log_export: [{
+        id: 'blocking-job', status: 'Progress',
+        criteria: { field: { api_name: 'action' }, comparator: 'equal', value: 'deleted' }
+      }] } };
+    }
+    blockerPolls += 1;
+    return { data: { audit_log_export: [{ status: 'Progress' }] } };
+  };
+
+  await assert.rejects(runAudit(service), (error) => {
+    assert.equal(error.code, 'AUDIT_LOG_EXPORT_WAIT_TIMEOUT');
+    assert.equal(error.statusCode, 504);
+    assert.equal(error.details.blocking_job_id, 'blocking-job');
+    assert.equal(error.details.status, 'progress');
+    return true;
+  });
+  assert.equal(blockerPolls, 20);
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 1);
+  assert.ok(requestedCriteria);
 });
 
 test('does not poll indefinitely when a matching job remains in progress', async () => {
@@ -325,4 +525,81 @@ function reverseCriteriaGroups(criteria) {
       ? value.map(reverseCriteriaGroups).reverse()
       : reverseCriteriaGroups(value)
   ]));
+}
+
+function reorderObjectKeysDeep(value) {
+  if (Array.isArray(value)) return value.map(reorderObjectKeysDeep);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).reverse().map((key) => [key, reorderObjectKeysDeep(value[key])]));
+}
+
+function replaceComparator(criteria, fieldApiName, comparator) {
+  if (criteria.field?.api_name === fieldApiName) {
+    criteria.comparator = comparator;
+    return criteria;
+  }
+  if (Array.isArray(criteria.group)) {
+    for (const child of criteria.group) {
+      const match = replaceComparator(child, fieldApiName, comparator);
+      if (match) return criteria;
+    }
+  }
+  return criteria;
+}
+
+function mutateCriteria(criteria, fieldApiName, mutation) {
+  if (criteria.field?.api_name === fieldApiName) {
+    mutation(criteria);
+    return criteria;
+  }
+  for (const child of criteria.group || []) mutateCriteria(child, fieldApiName, mutation);
+  return criteria;
+}
+
+function makeSemanticallyEquivalentCriteria(criteria) {
+  const equivalent = reorderObjectKeysDeep(structuredClone(criteria));
+  mutateCriteria(equivalent, 'action', (node) => { node.comparator = 'equals'; });
+  mutateCriteria(equivalent, 'audited_time', (node) => {
+    node.value = node.value.map((boundary) => new Date(boundary).toISOString());
+  });
+  return equivalent;
+}
+
+function criteriaValue(criteria, fieldApiName) {
+  if (criteria.field?.api_name === fieldApiName) return criteria.value;
+  for (const child of criteria.group || []) {
+    const value = criteriaValue(child, fieldApiName);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+async function assertUnrelatedFinishedExportIsNotReused(changeCriteria, requestFilters = {}) {
+  let createCount = 0;
+  let requestedCriteria;
+  let unrelatedCriteria;
+  const { service, calls } = createHarness({
+    create: async ({ data }) => {
+      createCount += 1;
+      if (createCount === 1) {
+        requestedCriteria = data.audit_log_export[0].criteria;
+        unrelatedCriteria = structuredClone(requestedCriteria);
+        changeCriteria(unrelatedCriteria);
+        throw zohoHttpError(400, 'ALREADY_SCHEDULED');
+      }
+      return createdJob('new-requested-job');
+    },
+    jobs: () => [{ id: 'unrelated-finished-job', status: 'Finished', criteria: unrelatedCriteria }],
+    statusById: {
+      'new-requested-job': async () => ({ data: { audit_log_export: [{ status: 'Finished', download_links: ['https://download.zoho.in/audit.csv'] }] } })
+    }
+  });
+
+  const result = await runAudit(service, requestFilters);
+
+  assert.equal(result.records.length, 1);
+  assert.equal(createCount, 2);
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 2);
+  assert.equal(calls.some((call) => call.url?.endsWith('/unrelated-finished-job')), false);
+  assert.equal(calls.some((call) => call.url?.endsWith('/new-requested-job')), true);
 }

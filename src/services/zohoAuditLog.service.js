@@ -8,6 +8,9 @@ const { log } = require("../utils/logger");
 
 const MAX_NETWORK_ATTEMPTS = 3;
 const NETWORK_RETRY_DELAYS_MS = [500, 1000];
+const MAX_EXPORT_POLLS = 20;
+const EXPORT_POLL_INTERVAL_MS = 1000;
+const MAX_EXPORT_CREATE_ATTEMPTS = 3;
 const RETRYABLE_NETWORK_CODES = new Set([
   "ECONNRESET",
   "ETIMEDOUT",
@@ -136,7 +139,7 @@ class ZohoAuditLogService {
       ),
     );
 
-    const exportKey = stableStringify(auditCriteria);
+    const exportKey = stableStringify(normalizeCriteria(auditCriteria));
     const existingExport = this.inFlightExports.get(exportKey);
     if (existingExport) return existingExport;
 
@@ -157,47 +160,49 @@ class ZohoAuditLogService {
   }
 
   async createAndDownloadAuditLog(baseUrl, config, requestBody, requestedCriteria) {
-    let createResponse;
-    try {
-      createResponse = await this.request(
-        "post",
-        `${baseUrl}/settings/audit_log_export`,
-        config,
-        requestBody,
-        { zohoApiRequest: true },
-      );
-    } catch (error) {
-      if (!isAlreadyScheduledError(error)) throw error;
-      const existingJob = await this.findMatchingScheduledJob(
-        baseUrl,
-        config,
-        requestedCriteria,
-      );
-      if (!existingJob) {
-        throw createAppError(
-          "AUDIT_LOG_SCHEDULED_EXPORT_UNMATCHED",
-          "Zoho reports an audit-log export is already scheduled, but no existing job with matching criteria could be identified.",
-          409,
-          {
-            operation: "audit_log",
-            upstream_status: 400,
-            upstream_code: "ALREADY_SCHEDULED",
-          },
-        );
-      }
-      createResponse = { data: { audit_log_export: [existingJob] } };
-    }
+    let job;
+    for (let attempt = 0; attempt < MAX_EXPORT_CREATE_ATTEMPTS && !job; attempt += 1) {
+      try {
+        const createResponse = await this.scheduleAuditLogExport(baseUrl, config, requestBody);
+        job = getCreatedAuditLogJob(createResponse);
+      } catch (error) {
+        if (!isAlreadyScheduledError(error)) throw error;
+        const jobs = await this.getScheduledAuditLogExports(baseUrl, config, requestedCriteria);
+        job = findMatchingScheduledJob(jobs, requestedCriteria);
+        if (job) break;
 
-    const job =
-      createResponse.data?.audit_log_export?.[0] ||
-      createResponse.data?.details ||
-      createResponse.data;
+        const activeJobs = jobs.filter((candidate) => isActiveExportStatus(candidate?.status));
+        for (const activeJob of activeJobs) {
+          await this.pollAuditLogExport(
+            baseUrl,
+            config,
+            activeJob,
+            "AUDIT_LOG_EXPORT_WAIT_TIMEOUT",
+          );
+        }
+
+        if (activeJobs.length === 0 && attempt > 0) {
+          throw createUnmatchedScheduledExportError();
+        }
+
+        if (attempt === MAX_EXPORT_CREATE_ATTEMPTS - 1) {
+          if (activeJobs.length) {
+            throw createAppError(
+              "AUDIT_LOG_EXPORT_RETRY_LIMIT",
+              "Zoho continued to report a scheduled export after the blocking jobs completed and the retry limit was reached.",
+              504,
+              { operation: "audit_log", retry_limit: MAX_EXPORT_CREATE_ATTEMPTS },
+            );
+          }
+          throw createUnmatchedScheduledExportError();
+        }
+      }
+    }
 
     const jobId =
       job?.details?.id ||
       job?.job_id ||
-      job?.id ||
-      createResponse.data?.details?.id;
+      job?.id;
 
     if (!jobId) {
       throw createAppError(
@@ -207,47 +212,12 @@ class ZohoAuditLogService {
       );
     }
 
-    let status;
-
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      status = await this.request(
-        "get",
-        `${baseUrl}/settings/audit_log_export/${encodeURIComponent(jobId)}`,
-        config,
-        undefined,
-        { zohoApiRequest: true },
-      );
-
-      const state = String(
-        status.data?.audit_log_export?.[0]?.status || "",
-      ).toLowerCase();
-
-      if (state === "finished") {
-        break;
-      }
-
-      if (state === "failed") {
-        throw createAppError(
-          "AUDIT_LOG_EXPORT_FAILED",
-          "Zoho audit-log export failed.",
-          502,
-        );
-      }
-
-      if (attempt < 19) {
-        await this.sleep(1000);
-      }
-    }
-
-    const exportJob = status?.data?.audit_log_export?.[0];
-
-    if (String(exportJob?.status || "").toLowerCase() !== "finished") {
-      throw createAppError(
-        "AUDIT_LOG_EXPORT_TIMEOUT",
-        "Zoho audit-log export did not finish within the polling limit.",
-        504,
-      );
-    }
+    const exportJob = await this.pollAuditLogExport(
+      baseUrl,
+      config,
+      { ...job, id: jobId },
+      "AUDIT_LOG_EXPORT_TIMEOUT",
+    );
 
     const downloadUrl = exportJob.download_links?.[0];
 
@@ -274,7 +244,17 @@ class ZohoAuditLogService {
     };
   }
 
-  async findMatchingScheduledJob(baseUrl, config, requestedCriteria) {
+  async scheduleAuditLogExport(baseUrl, config, requestBody) {
+    return this.request(
+      "post",
+      `${baseUrl}/settings/audit_log_export`,
+      config,
+      requestBody,
+      { zohoApiRequest: true },
+    );
+  }
+
+  async getScheduledAuditLogExports(baseUrl, config, requestedCriteria) {
     let response;
     try {
       response = await this.request(
@@ -289,27 +269,69 @@ class ZohoAuditLogService {
         error.details?.upstream_status === 400 &&
         error.details?.upstream_code === "NO_CONTENT"
       ) {
-        return null;
+        logScheduledExportJobs([], requestedCriteria);
+        return [];
       }
       throw error;
     }
 
     const jobs = response.data?.audit_log_export;
-    if (!Array.isArray(jobs)) return null;
+    const scheduledJobs = Array.isArray(jobs) ? jobs : [];
+    logScheduledExportJobs(scheduledJobs, requestedCriteria);
+    return scheduledJobs;
+  }
 
-    const statusPriority = {
-      finished: 0,
-      progress: 1,
-      scheduled: 2,
-      failed: 3,
-    };
-    return jobs
-      .filter((job) => job?.id && criteriaMatch(job.criteria, requestedCriteria))
-      .sort((left, right) => {
-        const leftPriority = statusPriority[String(left.status || "").toLowerCase()] ?? 4;
-        const rightPriority = statusPriority[String(right.status || "").toLowerCase()] ?? 4;
-        return leftPriority - rightPriority;
-      })[0] || null;
+  async pollAuditLogExport(baseUrl, config, job, timeoutCode) {
+    const jobId = job?.id || job?.job_id || job?.details?.id;
+    if (!jobId) {
+      throw createAppError(
+        "AUDIT_LOG_EXPORT_JOB_UNAVAILABLE",
+        "Zoho did not return an audit-log export job ID.",
+        502,
+      );
+    }
+
+    let exportJob;
+    for (let attempt = 0; attempt < MAX_EXPORT_POLLS; attempt += 1) {
+      const response = await this.request(
+        "get",
+        `${baseUrl}/settings/audit_log_export/${encodeURIComponent(jobId)}`,
+        config,
+        undefined,
+        { zohoApiRequest: true },
+      );
+      exportJob = response.data?.audit_log_export?.[0];
+      const state = normalizeExportStatus(exportJob?.status);
+
+      if (state === "finished") return exportJob;
+      if (state === "failed") {
+        if (timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT") return exportJob;
+        throw createAppError(
+          "AUDIT_LOG_EXPORT_FAILED",
+          "Zoho audit-log export failed.",
+          502,
+        );
+      }
+
+      if (attempt < MAX_EXPORT_POLLS - 1) {
+        await this.sleep(EXPORT_POLL_INTERVAL_MS);
+      }
+    }
+
+    throw createAppError(
+      timeoutCode,
+      timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT"
+        ? "A scheduled Zoho audit-log export is still blocking this request."
+        : "Zoho audit-log export did not finish within the polling limit.",
+      504,
+      timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT"
+        ? {
+          operation: "audit_log",
+          blocking_job_id: String(jobId),
+          status: normalizeExportStatus(exportJob?.status) || normalizeExportStatus(job.status),
+        }
+        : undefined,
+    );
   }
 
   async request(method, url, config, data, requestOptions = {}) {
@@ -455,9 +477,178 @@ function isAlreadyScheduledError(error) {
     && error.details?.upstream_code === "ALREADY_SCHEDULED";
 }
 
+function getCreatedAuditLogJob(response) {
+  const data = response.data || {};
+  return data.audit_log_export?.[0] || data.details || data;
+}
+
+function createUnmatchedScheduledExportError() {
+  return createAppError(
+    "AUDIT_LOG_SCHEDULED_EXPORT_UNMATCHED",
+    "Zoho reports an audit-log export is already scheduled, but no existing job with matching criteria could be identified after inspecting available jobs.",
+    409,
+    {
+      operation: "audit_log",
+      upstream_status: 400,
+      upstream_code: "ALREADY_SCHEDULED",
+    },
+  );
+}
+
+function findMatchingScheduledJob(jobs, requestedCriteria) {
+  const statusPriority = { finished: 0, progress: 1, scheduled: 2 };
+  return jobs
+    .filter((job) => getExportJobId(job)
+      && statusPriority[normalizeExportStatus(job.status)] !== undefined
+      && criteriaMatch(job.criteria, requestedCriteria))
+    .sort((left, right) => (
+      statusPriority[normalizeExportStatus(left.status)]
+      - statusPriority[normalizeExportStatus(right.status)]
+    ))[0] || null;
+}
+
+function getExportJobId(job) {
+  return job?.id || job?.job_id || job?.details?.id || null;
+}
+
+function isActiveExportStatus(status) {
+  return ["progress", "scheduled"].includes(normalizeExportStatus(status));
+}
+
+function normalizeExportStatus(status) {
+  return String(status || "").trim().toLowerCase();
+}
+
+function logScheduledExportJobs(jobs, requestedCriteria) {
+  log("info", `[ZOHO_AUDIT_SCHEDULED_JOBS] ${JSON.stringify({
+    requestedCriteria: normalizeCriteria(requestedCriteria),
+    jobCount: jobs.length,
+  })}`);
+  for (const job of jobs) {
+    const safeJob = job && typeof job === "object" ? job : {};
+    log("info", `[ZOHO_AUDIT_SCHEDULED_JOB] ${JSON.stringify({
+      jobId: getExportJobId(safeJob),
+      status: safeJob.status || null,
+      criteria: safeJob.criteria || null,
+      matchesRequest: criteriaMatch(safeJob.criteria, requestedCriteria),
+      jobStartTime: findJobMetadata(safeJob, /start/i),
+      jobEndTime: findJobMetadata(safeJob, /end/i),
+      expiryDate: findJobMetadata(safeJob, /expir/i),
+    })}`);
+  }
+}
+
+function findJobMetadata(value, keyPattern) {
+  if (!value || typeof value !== "object") return null;
+  for (const [key, child] of Object.entries(value)) {
+    if (keyPattern.test(key) && (typeof child !== "object" || child === null)) return child;
+    const nested = findJobMetadata(child, keyPattern);
+    if (nested !== null) return nested;
+  }
+  return null;
+}
+
 function criteriaMatch(existingCriteria, requestedCriteria) {
   return Boolean(existingCriteria)
-    && stableStringify(existingCriteria) === stableStringify(requestedCriteria);
+    && stableStringify(normalizeCriteria(existingCriteria))
+      === stableStringify(normalizeCriteria(requestedCriteria));
+}
+
+function normalizeCriteria(criteria) {
+  if (Array.isArray(criteria)) return normalizeCriteriaGroup("and", criteria);
+  if (!criteria || typeof criteria !== "object") return criteria;
+
+  const comparator = normalizeComparator(criteria.comparator);
+  const fieldApiName = String(criteria.field?.api_name || "").toLowerCase();
+  const groupOperator = String(criteria.group_operator || "and").trim().toLowerCase();
+  const normalized = {};
+
+  for (const key of Object.keys(criteria).sort()) {
+    if (key === "group" && Array.isArray(criteria.group)) {
+      Object.assign(normalized, normalizeCriteriaGroup(groupOperator, criteria.group));
+    } else if (key === "group_operator") {
+      normalized[key] = groupOperator;
+    } else if (key === "comparator") {
+      normalized[key] = comparator;
+    } else if (key === "value") {
+      normalized[key] = normalizeCriteriaValue(criteria.value, fieldApiName, comparator);
+    } else {
+      normalized[key] = normalizeCriteria(criteria[key]);
+    }
+  }
+  return normalized;
+}
+
+function normalizeCriteriaGroup(operator, criteria) {
+  const normalizedOperator = ["or", "||"].includes(String(operator).trim().toLowerCase())
+    ? "or"
+    : "and";
+  const children = [];
+  for (const item of criteria) {
+    const normalized = normalizeCriteria(item);
+    if (normalized?.group_operator === normalizedOperator
+      && Array.isArray(normalized.group)
+      && Object.keys(normalized).length === 2) {
+      children.push(...normalized.group);
+    } else {
+      children.push(normalized);
+    }
+  }
+  children.sort((left, right) => stableStringify(left).localeCompare(stableStringify(right)));
+  return { group_operator: normalizedOperator, group: children };
+}
+
+function normalizeComparator(comparator) {
+  const value = String(comparator || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["equals", "equal_to", "eq", "="].includes(value)) return "equal";
+  if (["not_equals", "not_equal_to", "ne", "!="].includes(value)) return "not_equal";
+  return value;
+}
+
+function normalizeCriteriaValue(value, fieldApiName, comparator) {
+  if (fieldApiName === "action" && typeof value === "string") return value.trim().toLowerCase();
+  if (fieldApiName === "audited_time" && comparator === "between" && Array.isArray(value)) {
+    return value.map(normalizeTimestampBoundary);
+  }
+  if (Array.isArray(value)) {
+    const normalized = value.map((item) => fieldApiName === "action" && typeof item === "string"
+      ? item.trim().toLowerCase()
+      : normalizeCriteria(item));
+    return comparator === "in"
+      ? normalized.sort((left, right) => stableStringify(left).localeCompare(stableStringify(right)))
+      : normalized;
+  }
+  return normalizeCriteria(value);
+}
+
+function normalizeTimestampBoundary(value) {
+  if (typeof value !== "string") return value;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|([+-])(\d{2}):?(\d{2}))$/i.exec(value);
+  if (!match) return value;
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = "", zone, sign, offsetHourText, offsetMinuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const localDate = new Date(0);
+  localDate.setUTCFullYear(year, month - 1, day);
+  localDate.setUTCHours(hour, minute, second, 0);
+  if (localDate.getUTCFullYear() !== year
+    || localDate.getUTCMonth() !== month - 1
+    || localDate.getUTCDate() !== day
+    || hour > 23 || minute > 59 || second > 59) return value;
+
+  const offsetMinutes = zone.toUpperCase() === "Z"
+    ? 0
+    : (sign === "+" ? 1 : -1) * (Number(offsetHourText) * 60 + Number(offsetMinuteText));
+  if (zone.toUpperCase() !== "Z"
+    && (Number(offsetHourText) > 23 || Number(offsetMinuteText) > 59)) return value;
+  const utcDate = new Date(localDate.getTime() - offsetMinutes * 60000);
+  const normalizedFraction = fraction.replace(/0+$/, "");
+  return `${utcDate.toISOString().slice(0, 19)}${normalizedFraction ? `.${normalizedFraction}` : ""}Z`;
 }
 
 function stableStringify(value) {
