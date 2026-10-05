@@ -20,7 +20,8 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "redis": "^5.12.1"
+    "redis": "^5.12.1",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@microsoft/agents-copilotstudio-client": "^1.8.1"

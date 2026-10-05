@@ -1,6 +1,7 @@
 const axios = require("axios");
 const http = require("node:http");
 const https = require("node:https");
+const yauzl = require("yauzl");
 const { getZohoConfig } = require("../config/zoho.config");
 const { ZohoAuthService } = require("./zohoAuth.service");
 const { createAppError } = require("../utils/errors");
@@ -31,6 +32,7 @@ class ZohoAuditLogService {
       authService || new ZohoAuthService(httpClient, configLoader);
     this.sleep = sleep;
     this.inFlightExports = new Map();
+    this.expiredDownloadJobIds = new Set();
   }
 
   async getAuditLogs(params = {}) {
@@ -168,8 +170,11 @@ class ZohoAuditLogService {
       } catch (error) {
         if (!isAlreadyScheduledError(error)) throw error;
         const jobs = await this.getScheduledAuditLogExports(baseUrl, config, requestedCriteria);
-        job = findMatchingScheduledJob(jobs, requestedCriteria);
+        job = findMatchingScheduledJob(jobs, requestedCriteria, this.expiredDownloadJobIds);
         if (job) break;
+
+        const expiredJob = findExpiredMatchingJob(jobs, requestedCriteria, this.expiredDownloadJobIds);
+        if (expiredJob) throw createExpiredDownloadLinkError(expiredJob);
 
         const activeJobs = jobs.filter((candidate) => isActiveExportStatus(candidate?.status));
         for (const activeJob of activeJobs) {
@@ -212,28 +217,39 @@ class ZohoAuditLogService {
       );
     }
 
-    const exportJob = await this.pollAuditLogExport(
+    const { job: exportJob, downloadUrl } = await this.pollAuditLogExport(
       baseUrl,
       config,
       { ...job, id: jobId },
       "AUDIT_LOG_EXPORT_TIMEOUT",
     );
-
-    const downloadUrl = exportJob.download_links?.[0];
-
-    if (!downloadUrl) {
-      throw createAppError(
-        "AUDIT_LOG_DOWNLOAD_UNAVAILABLE",
-        "Zoho did not provide an audit-log download link.",
-        502,
-      );
+    if (isAuditLogJobExpired(exportJob)) {
+      this.markExpiredDownloadJob(jobId);
+      throw createExpiredDownloadLinkError(exportJob);
     }
 
-    const download = await this.request("get", downloadUrl, config, undefined, {
-      responseType: "text",
-    });
+    let download;
+    try {
+      download = await this.request("get", downloadUrl, config, undefined, {
+        responseType: "arraybuffer",
+      });
+    } catch (error) {
+      if (!isExpiredDownloadError(error)) throw error;
+      this.markExpiredDownloadJob(jobId);
+      throw createExpiredDownloadLinkError(exportJob, error);
+    }
 
-    const records = parseCsv(String(download.data || ""));
+    let records;
+    try {
+      records = await parseAuditLogDownload(download.data);
+    } catch (_error) {
+      throw createAppError(
+        "AUDIT_LOG_DOWNLOAD_INVALID",
+        "Zoho returned an audit-log download that could not be parsed as CSV or ZIP.",
+        502,
+        { operation: "audit_log", job_id: String(jobId), status: exportJob.status },
+      );
+    }
 
     return {
       records,
@@ -242,6 +258,13 @@ class ZohoAuditLogService {
         more_records: false,
       },
     };
+  }
+
+  markExpiredDownloadJob(jobId) {
+    if (this.expiredDownloadJobIds.size >= 256) {
+      this.expiredDownloadJobIds.delete(this.expiredDownloadJobIds.values().next().value);
+    }
+    this.expiredDownloadJobIds.add(String(jobId));
   }
 
   async scheduleAuditLogExport(baseUrl, config, requestBody) {
@@ -292,6 +315,9 @@ class ZohoAuditLogService {
     }
 
     let exportJob;
+    let selectedJobSeen = false;
+    let finishedWithoutDownload = false;
+    let lastResponse;
     for (let attempt = 0; attempt < MAX_EXPORT_POLLS; attempt += 1) {
       const response = await this.request(
         "get",
@@ -300,16 +326,41 @@ class ZohoAuditLogService {
         undefined,
         { zohoApiRequest: true },
       );
-      exportJob = response.data?.audit_log_export?.[0];
+      lastResponse = response;
+      const jobs = Array.isArray(response.data?.audit_log_export)
+        ? response.data.audit_log_export
+        : [];
+      exportJob = selectAuditLogJob(jobs, jobId);
+      selectedJobSeen ||= Boolean(exportJob);
       const state = normalizeExportStatus(exportJob?.status);
+      const links = exportJob?.download_links;
+      const downloadUrl = firstValidDownloadLink(links);
 
-      if (state === "finished") return exportJob;
+      log("info", `[ZOHO_AUDIT_EXPORT_STATUS] ${JSON.stringify({
+        jobId: String(jobId),
+        jobStatus: exportJob?.status || null,
+        responseTopLevelKeys: Object.keys(response || {}),
+        payloadTopLevelKeys: Object.keys(response.data || {}),
+        auditLogExportLength: jobs.length,
+        selectedJobKeys: exportJob ? Object.keys(exportJob) : [],
+        downloadLinksPresent: Object.prototype.hasOwnProperty.call(exportJob || {}, "download_links"),
+        downloadLinksType: Array.isArray(links) ? "array" : typeof links,
+        downloadLinksCount: Array.isArray(links) ? links.length : 0,
+      })}`);
+
+      if (state === "finished") {
+        if (timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT") return { job: exportJob };
+        if (downloadUrl) return { job: exportJob, downloadUrl };
+        finishedWithoutDownload = true;
+      }
       if (state === "failed") {
-        if (timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT") return exportJob;
+        if (timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT") return { job: exportJob };
+        const safeError = safeAuditLogJobError(exportJob, config);
         throw createAppError(
           "AUDIT_LOG_EXPORT_FAILED",
-          "Zoho audit-log export failed.",
+          `Zoho audit-log export job ${jobId} failed with status '${exportJob.status}'.`,
           502,
+          { operation: "audit_log", job_id: String(jobId), status: exportJob.status, ...safeError },
         );
       }
 
@@ -319,18 +370,37 @@ class ZohoAuditLogService {
     }
 
     throw createAppError(
-      timeoutCode,
+      timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT"
+        ? timeoutCode
+        : !selectedJobSeen
+          ? "AUDIT_LOG_EXPORT_STATUS_UNAVAILABLE"
+          : finishedWithoutDownload
+            ? "AUDIT_LOG_DOWNLOAD_UNAVAILABLE"
+            : timeoutCode,
       timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT"
         ? "A scheduled Zoho audit-log export is still blocking this request."
-        : "Zoho audit-log export did not finish within the polling limit.",
-      504,
+        : !selectedJobSeen
+          ? "Zoho did not return the requested audit-log export job in its status response."
+          : finishedWithoutDownload
+            ? "Zoho marked the audit-log export finished but did not provide a valid download link within the polling limit."
+            : "Zoho audit-log export did not finish within the polling limit.",
       timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT"
-        ? {
-          operation: "audit_log",
-          blocking_job_id: String(jobId),
-          status: normalizeExportStatus(exportJob?.status) || normalizeExportStatus(job.status),
-        }
-        : undefined,
+        ? 504
+        : !selectedJobSeen || finishedWithoutDownload
+          ? 502
+          : 504,
+      {
+        operation: "audit_log",
+        job_id: String(jobId),
+        ...(timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT"
+          ? { blocking_job_id: String(jobId) }
+          : {}),
+        status: normalizeExportStatus(exportJob?.status) || normalizeExportStatus(job.status) || null,
+        response_top_level_keys: Object.keys(lastResponse || {}),
+        audit_log_export_count: Array.isArray(lastResponse?.data?.audit_log_export)
+          ? lastResponse.data.audit_log_export.length
+          : 0,
+      },
     );
   }
 
@@ -495,16 +565,25 @@ function createUnmatchedScheduledExportError() {
   );
 }
 
-function findMatchingScheduledJob(jobs, requestedCriteria) {
+function findMatchingScheduledJob(jobs, requestedCriteria, expiredJobIds = new Set()) {
   const statusPriority = { finished: 0, progress: 1, scheduled: 2 };
   return jobs
     .filter((job) => getExportJobId(job)
       && statusPriority[normalizeExportStatus(job.status)] !== undefined
+      && !expiredJobIds.has(String(getExportJobId(job)))
+      && !isAuditLogJobExpired(job)
       && criteriaMatch(job.criteria, requestedCriteria))
     .sort((left, right) => (
       statusPriority[normalizeExportStatus(left.status)]
       - statusPriority[normalizeExportStatus(right.status)]
     ))[0] || null;
+}
+
+function findExpiredMatchingJob(jobs, requestedCriteria, expiredJobIds) {
+  return jobs.find((job) => getExportJobId(job)
+    && normalizeExportStatus(job.status) === "finished"
+    && criteriaMatch(job.criteria, requestedCriteria)
+    && (expiredJobIds.has(String(getExportJobId(job))) || isAuditLogJobExpired(job))) || null;
 }
 
 function getExportJobId(job) {
@@ -517,6 +596,65 @@ function isActiveExportStatus(status) {
 
 function normalizeExportStatus(status) {
   return String(status || "").trim().toLowerCase();
+}
+
+function selectAuditLogJob(jobs, requestedJobId) {
+  const exactJob = jobs.find((candidate) => String(getExportJobId(candidate) || "") === String(requestedJobId));
+  if (exactJob) return exactJob;
+  if (jobs.length === 1 && !getExportJobId(jobs[0])) return jobs[0];
+  return null;
+}
+
+function firstValidDownloadLink(links) {
+  if (!Array.isArray(links)) return null;
+  for (const link of links) {
+    if (typeof link !== "string" || !link.trim()) continue;
+    try {
+      const url = new URL(link.trim());
+      if (url.protocol === "https:") return link.trim();
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function isAuditLogJobExpired(job) {
+  if (!job?.expiry_date) return false;
+  const expiryTime = Date.parse(job.expiry_date);
+  return Number.isFinite(expiryTime) && expiryTime <= Date.now();
+}
+
+function isExpiredDownloadError(error) {
+  return error.details?.upstream_status === 410
+    || /expired|expiry/i.test(String(error.details?.upstream_code || ""));
+}
+
+function createExpiredDownloadLinkError(job, cause) {
+  return createAppError(
+    "AUDIT_LOG_DOWNLOAD_LINK_EXPIRED",
+    "The Zoho audit-log download link has expired; a new export may be required.",
+    502,
+    {
+      operation: "audit_log",
+      job_id: String(getExportJobId(job) || "unknown"),
+      status: normalizeExportStatus(job?.status) || null,
+      expiry_date: job?.expiry_date || null,
+      upstream_status: cause?.details?.upstream_status || null,
+      upstream_code: cause?.details?.upstream_code || null,
+    },
+  );
+}
+
+function safeAuditLogJobError(job, config) {
+  const value = job?.error || job?.details?.error || job?.error_details || {};
+  const code = value.code || job?.error_code || null;
+  const message = value.message || job?.error_message || job?.message || null;
+  const secrets = [config.clientId, config.clientSecret, config.refreshToken];
+  return {
+    ...(code ? { upstream_code: sanitizeMessage(code, secrets) } : {}),
+    ...(message ? { upstream_message: sanitizeMessage(message, secrets) } : {}),
+  };
 }
 
 function logScheduledExportJobs(jobs, requestedCriteria) {
@@ -677,6 +815,60 @@ function stableStringify(value) {
     return `{${entries.join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+async function parseAuditLogDownload(payload) {
+  const buffer = Buffer.isBuffer(payload)
+    ? payload
+    : Buffer.from(payload || "");
+  if (buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b) {
+    const csv = await extractCsvFromZip(buffer);
+    return parseCsv(csv.toString("utf8"));
+  }
+  return parseCsv(buffer.toString("utf8"));
+}
+
+function extractCsvFromZip(buffer) {
+  return new Promise((resolve, reject) => {
+    yauzl.fromBuffer(buffer, { lazyEntries: true, validateEntrySizes: true }, (openError, zipFile) => {
+      if (openError) return reject(openError);
+      let settled = false;
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        zipFile.close();
+        reject(error);
+      };
+
+      zipFile.on("error", fail);
+      zipFile.on("end", () => {
+        if (!settled) fail(new Error("The ZIP archive contains no CSV file."));
+      });
+      zipFile.on("entry", (entry) => {
+        if (!entry.fileName.toLowerCase().endsWith(".csv")) {
+          zipFile.readEntry();
+          return;
+        }
+        if (entry.uncompressedSize > 100 * 1024 * 1024) {
+          fail(new Error("The audit-log CSV exceeds the supported size."));
+          return;
+        }
+        zipFile.openReadStream(entry, (streamError, stream) => {
+          if (streamError) return fail(streamError);
+          const chunks = [];
+          stream.on("data", (chunk) => chunks.push(chunk));
+          stream.on("error", fail);
+          stream.on("end", () => {
+            if (settled) return;
+            settled = true;
+            zipFile.close();
+            resolve(Buffer.concat(chunks));
+          });
+        });
+      });
+      zipFile.readEntry();
+    });
+  });
 }
 
 function createZohoHttpError(error, token, config) {

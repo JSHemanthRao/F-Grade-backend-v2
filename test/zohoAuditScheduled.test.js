@@ -15,7 +15,7 @@ function zohoHttpError(status, code, message = code) {
   return error;
 }
 
-function createHarness({ create, jobs = [], statusById = {}, authService: providedAuthService }) {
+function createHarness({ create, jobs = [], statusById = {}, downloadByUrl = {}, authService: providedAuthService }) {
   const calls = [];
   const sleeps = [];
   const authService = providedAuthService || {
@@ -36,7 +36,8 @@ function createHarness({ create, jobs = [], statusById = {}, authService: provid
       }
       const jobId = decodeURIComponent(url.split('/').pop());
       if (statusById[jobId]) return statusById[jobId]({ call: calls.length });
-      if (url === 'https://download.zoho.in/audit.csv') {
+      if (downloadByUrl[url]) return downloadByUrl[url]({ call: calls.length });
+      if (url.startsWith('https://download')) {
         return { data: 'audited_time,action,module\n2026-10-02T10:00:00+05:30,updated,Deals' };
       }
       throw new Error(`Unexpected URL ${url}`);
@@ -88,6 +89,171 @@ test('creates a new export and follows the normal poll/download flow', async () 
   assert.deepEqual(calls.map((call) => call.method), ['POST', 'GET', 'GET']);
   assert.match(calls[1].url, /\/new-job$/);
   assert.equal(calls[2].url, 'https://download.zoho.in/audit.csv');
+});
+
+test('selects the polled job by ID when status response contains multiple jobs', async () => {
+  const requestedUrl = 'https://download-accl.zoho.com/v2/crm/example/auditlog/example/AuditLog.csv';
+  const statusById = {
+    'requested-job': async () => ({ data: { audit_log_export: [
+      { id: 'other-job', status: 'failed', download_links: [] },
+      { id: 'requested-job', status: 'finished', download_links: [requestedUrl] }
+    ] } })
+  };
+  const { service, calls } = createHarness({ create: async () => createdJob('requested-job'), statusById });
+
+  const result = await runAudit(service);
+
+  assert.equal(result.records.length, 1);
+  assert.equal(calls.some((call) => call.url === requestedUrl), true);
+});
+
+test('downloads a CSV from the documented Zoho download_links field', async () => {
+  const downloadUrl = 'https://download-accl.zoho.com/v2/crm/example/auditlog/example/AuditLog.csv?sig=abc%2Fdef';
+  const { service, calls } = createHarness({
+    create: async () => createdJob('documented-csv-job'),
+    statusById: {
+      'documented-csv-job': async () => ({ data: { audit_log_export: [{
+        id: 'documented-csv-job', status: 'finished', download_links: ['not a URL', downloadUrl]
+      }] } })
+    }
+  });
+
+  const result = await runAudit(service);
+
+  assert.equal(result.records[0].module, 'Deals');
+  assert.equal(calls.some((call) => call.url === downloadUrl), true);
+});
+
+test('does not reuse or download a matching finished job whose expiry date has passed', async () => {
+  let requestedCriteria;
+  const { service, calls } = createHarness({
+    create: async ({ data }) => {
+      requestedCriteria = data.audit_log_export[0].criteria;
+      throw zohoHttpError(400, 'ALREADY_SCHEDULED');
+    },
+    jobs: () => [{
+      ...completedJob('expired-scheduled-job', requestedCriteria),
+      expiry_date: '2000-01-01T00:00:00Z'
+    }]
+  });
+
+  await assert.rejects(runAudit(service), (error) => {
+    assert.equal(error.code, 'AUDIT_LOG_DOWNLOAD_LINK_EXPIRED');
+    assert.equal(error.details.job_id, 'expired-scheduled-job');
+    return true;
+  });
+  assert.equal(calls.some((call) => call.url?.endsWith('/expired-scheduled-job')), false);
+  assert.equal(calls.some((call) => call.url === 'https://download.zoho.in/audit.csv'), false);
+});
+
+test('downloads and parses an AuditLog ZIP result', async () => {
+  const downloadUrl = 'https://download-accl.zoho.com/v2/crm/example/auditlog/example/AuditLog.zip';
+  const zipFixture = Buffer.from('UEsDBBQAAAAIAEl1RV06qAlVQgAAAEUAAAAMAAAAQXVkaXRMb2cuY3N2SyxNySxJTYkvycxN1UlMLsnMz9PJzU8pzUnlMjIwMtM1NNA1MAoxNLAyACFtA1MrYwOd0oKURKAmHef8vBKgnmIAUEsBAhQAFAAAAAgASXVFXTqoCVVCAAAARQAAAAwAAAAAAAAAAAAAAAAAAAAAAEF1ZGl0TG9nLmNzdlBLBQYAAAAAAQABADoAAABsAAAAAAA=', 'base64');
+  const { service } = createHarness({
+    create: async () => createdJob('zip-job'),
+    statusById: {
+      'zip-job': async () => ({ data: { audit_log_export: [{ id: 'zip-job', status: 'finished', download_links: [downloadUrl] }] } })
+    },
+    downloadByUrl: { [downloadUrl]: async () => ({ data: zipFixture }) }
+  });
+
+  const result = await runAudit(service);
+
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].module, 'Contacts');
+});
+
+test('rechecks finished status when the download link is initially missing', async () => {
+  let polls = 0;
+  const downloadUrl = 'https://download-accl.zoho.com/v2/crm/example/auditlog/example/AuditLog.csv';
+  const { service, sleeps } = createHarness({
+    create: async () => createdJob('late-link-job'),
+    statusById: {
+      'late-link-job': async () => {
+        polls += 1;
+        return { data: { audit_log_export: [polls === 1
+          ? { id: 'late-link-job', status: 'finished' }
+          : { id: 'late-link-job', status: 'FINISHED', download_links: [downloadUrl] }] } };
+      }
+    }
+  });
+
+  const result = await runAudit(service);
+
+  assert.equal(result.records.length, 1);
+  assert.equal(polls, 2);
+  assert.deepEqual(sleeps, [1000]);
+});
+
+test('returns failed job ID, status, and safe Zoho error details', async () => {
+  const { service } = createHarness({
+    create: async () => createdJob('failed-job'),
+    statusById: {
+      'failed-job': async () => ({ data: { audit_log_export: [{
+        id: 'failed-job', status: 'failed', error: { code: 'EXPORT_FAILED', message: 'Invalid audit criteria' }
+      }] } })
+    }
+  });
+
+  await assert.rejects(runAudit(service), (error) => {
+    assert.equal(error.code, 'AUDIT_LOG_EXPORT_FAILED');
+    assert.match(error.message, /failed-job.*failed/);
+    assert.equal(error.details.job_id, 'failed-job');
+    assert.equal(error.details.status, 'failed');
+    assert.equal(error.details.upstream_code, 'EXPORT_FAILED');
+    assert.equal(error.details.upstream_message, 'Invalid audit criteria');
+    return true;
+  });
+});
+
+test('returns a controlled error when the status response omits audit_log_export', async () => {
+  let polls = 0;
+  const { service } = createHarness({
+    create: async () => createdJob('malformed-status-job'),
+    statusById: {
+      'malformed-status-job': async () => {
+        polls += 1;
+        return { data: { unexpected: [] } };
+      }
+    }
+  });
+
+  await assert.rejects(runAudit(service), (error) => {
+    assert.equal(error.code, 'AUDIT_LOG_EXPORT_STATUS_UNAVAILABLE');
+    assert.equal(error.statusCode, 502);
+    assert.equal(error.details.job_id, 'malformed-status-job');
+    assert.equal(error.details.audit_log_export_count, 0);
+    return true;
+  });
+  assert.equal(polls, 20);
+});
+
+test('classifies an expired download URL and does not retry that URL', async () => {
+  const downloadUrl = 'https://download-accl.zoho.com/v2/crm/example/auditlog/example/expired.csv';
+  let downloadAttempts = 0;
+  const { service } = createHarness({
+    create: async () => createdJob('expired-link-job'),
+    statusById: {
+      'expired-link-job': async () => ({ data: { audit_log_export: [{
+        id: 'expired-link-job', status: 'finished', download_links: [downloadUrl]
+      }] } })
+    },
+    downloadByUrl: {
+      [downloadUrl]: async () => {
+        downloadAttempts += 1;
+        throw zohoHttpError(410, 'DOWNLOAD_LINK_EXPIRED');
+      }
+    }
+  });
+
+  await assert.rejects(runAudit(service), (error) => {
+    assert.equal(error.code, 'AUDIT_LOG_DOWNLOAD_LINK_EXPIRED');
+    assert.match(error.message, /new export may be required/);
+    assert.equal(error.details.job_id, 'expired-link-job');
+    return true;
+  });
+  assert.equal(downloadAttempts, 1);
+  assert.equal(service.expiredDownloadJobIds.has('expired-link-job'), true);
 });
 
 test('reuses an exact-criteria job after ALREADY_SCHEDULED', async () => {
