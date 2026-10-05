@@ -668,7 +668,12 @@ function safeAuditDebugValue(value, config) {
   if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
     return `[${getAuditDebugType(value)}]`;
   }
-  const secrets = [config.clientId, config.clientSecret, config.refreshToken]
+  const secrets = [
+    config.clientId,
+    config.clientSecret,
+    config.refreshToken,
+    process.env.BACKEND_API_KEY,
+  ]
     .filter(Boolean)
     .map(String);
   let safeValue = String(value);

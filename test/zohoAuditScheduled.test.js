@@ -133,14 +133,19 @@ test('logs status response structure without exposing nested download URLs', asy
         id: 'production-shaped-job',
         status: 'Finished',
         downloadInfo: { downloadUrl: signedUrl },
-        error: { code: 'EXPORT_PENDING', message: `See ${signedUrl}` }
+        error: {
+          code: 'EXPORT_PENDING',
+          message: `See ${signedUrl} ${process.env.BACKEND_API_KEY}`
+        }
       }] } })
     }
   });
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousBackendApiKey = process.env.BACKEND_API_KEY;
   const previousConsoleLog = console.log;
   const logged = [];
   process.env.NODE_ENV = 'production';
+  process.env.BACKEND_API_KEY = 'diagnostic-test-api-key-not-real';
   console.log = (...args) => logged.push(args.join(' '));
 
   try {
@@ -152,6 +157,8 @@ test('logs status response structure without exposing nested download URLs', asy
     console.log = previousConsoleLog;
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
+    if (previousBackendApiKey === undefined) delete process.env.BACKEND_API_KEY;
+    else process.env.BACKEND_API_KEY = previousBackendApiKey;
   }
 
   assert.equal(calls.some((call) => call.url.endsWith('/production-shaped-job')), true);
@@ -172,6 +179,7 @@ test('logs status response structure without exposing nested download URLs', asy
   assert.equal(diagnostics[1].selectedJobId, 'production-shaped-job');
   assert.equal(diagnostics[1].selectedJobStatus, 'Finished');
   assert.equal(logged.join('\n').includes(signedUrl), false);
+  assert.equal(logged.join('\n').includes('diagnostic-test-api-key-not-real'), false);
 });
 
 test('does not reuse or download a matching finished job whose expiry date has passed', async () => {
