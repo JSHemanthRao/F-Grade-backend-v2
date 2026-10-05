@@ -124,6 +124,56 @@ test('downloads a CSV from the documented Zoho download_links field', async () =
   assert.equal(calls.some((call) => call.url === downloadUrl), true);
 });
 
+test('logs status response structure without exposing nested download URLs', async () => {
+  const signedUrl = 'https://download.zoho.in/audit.csv?sig=private-signature';
+  const { service, calls } = createHarness({
+    create: async () => createdJob('production-shaped-job'),
+    statusById: {
+      'production-shaped-job': async () => ({ data: { audit_log_export: [{
+        id: 'production-shaped-job',
+        status: 'Finished',
+        downloadInfo: { downloadUrl: signedUrl },
+        error: { code: 'EXPORT_PENDING', message: `See ${signedUrl}` }
+      }] } })
+    }
+  });
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousConsoleLog = console.log;
+  const logged = [];
+  process.env.NODE_ENV = 'production';
+  console.log = (...args) => logged.push(args.join(' '));
+
+  try {
+    await assert.rejects(runAudit(service), (error) => {
+      assert.equal(error.code, 'AUDIT_LOG_DOWNLOAD_UNAVAILABLE');
+      return true;
+    });
+  } finally {
+    console.log = previousConsoleLog;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
+
+  assert.equal(calls.some((call) => call.url.endsWith('/production-shaped-job')), true);
+  const diagnostics = logged
+    .filter((message) => message.startsWith('[ZOHO_AUDIT_EXPORT_STATUS_DEBUG] '))
+    .map((message) => JSON.parse(message.slice('[ZOHO_AUDIT_EXPORT_STATUS_DEBUG] '.length)));
+  assert.equal(diagnostics.length, 2);
+  assert.equal(diagnostics[0].requestedJobId, 'production-shaped-job');
+  assert.equal(diagnostics[0].auditLogExportExists, true);
+  assert.equal(diagnostics[0].auditLogExportType, 'array');
+  assert.equal(diagnostics[0].auditLogExportCount, 1);
+  assert.equal(diagnostics[0].jobs[0].hasDownloadLinks, false);
+  assert.ok(diagnostics[0].artifactLocations.some((location) => (
+    location.path === 'audit_log_export.0.downloadInfo.downloadUrl'
+    && location.type === 'string'
+    && location.count === 1
+  )));
+  assert.equal(diagnostics[1].selectedJobId, 'production-shaped-job');
+  assert.equal(diagnostics[1].selectedJobStatus, 'Finished');
+  assert.equal(logged.join('\n').includes(signedUrl), false);
+});
+
 test('does not reuse or download a matching finished job whose expiry date has passed', async () => {
   let requestedCriteria;
   const { service, calls } = createHarness({

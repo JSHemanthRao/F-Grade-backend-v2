@@ -369,14 +369,27 @@ class ZohoAuditLogService {
       }
     }
 
+    const errorCode = timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT"
+      ? timeoutCode
+      : !selectedJobSeen
+        ? "AUDIT_LOG_EXPORT_STATUS_UNAVAILABLE"
+        : finishedWithoutDownload
+          ? "AUDIT_LOG_DOWNLOAD_UNAVAILABLE"
+          : timeoutCode;
+    if (errorCode === "AUDIT_LOG_DOWNLOAD_UNAVAILABLE") {
+      logAuditExportStatusDebug(lastResponse, jobId, config);
+      log("info", `[ZOHO_AUDIT_EXPORT_STATUS_DEBUG] ${JSON.stringify({
+        requestedJobId: String(jobId),
+        selectedJobId: safeAuditDebugValue(getExportJobId(exportJob), config),
+        selectedJobStatus: safeAuditDebugValue(exportJob?.status, config),
+        selectedJobKeys: exportJob && typeof exportJob === "object"
+          ? Object.keys(exportJob)
+          : [],
+      })}`);
+    }
+
     throw createAppError(
-      timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT"
-        ? timeoutCode
-        : !selectedJobSeen
-          ? "AUDIT_LOG_EXPORT_STATUS_UNAVAILABLE"
-          : finishedWithoutDownload
-            ? "AUDIT_LOG_DOWNLOAD_UNAVAILABLE"
-            : timeoutCode,
+      errorCode,
       timeoutCode === "AUDIT_LOG_EXPORT_WAIT_TIMEOUT"
         ? "A scheduled Zoho audit-log export is still blocking this request."
         : !selectedJobSeen
@@ -596,6 +609,102 @@ function isActiveExportStatus(status) {
 
 function normalizeExportStatus(status) {
   return String(status || "").trim().toLowerCase();
+}
+
+function logAuditExportStatusDebug(response, requestedJobId, config) {
+  const payload = response?.data;
+  const jobsValue = payload?.audit_log_export;
+  const jobs = Array.isArray(jobsValue) ? jobsValue : [];
+  log("info", `[ZOHO_AUDIT_EXPORT_STATUS_DEBUG] ${JSON.stringify({
+    requestedJobId: String(requestedJobId),
+    responseType: getAuditDebugType(payload),
+    topLevelKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
+    auditLogExportExists: Boolean(
+      payload && Object.prototype.hasOwnProperty.call(payload, "audit_log_export"),
+    ),
+    auditLogExportType: getAuditDebugType(jobsValue),
+    auditLogExportCount: getAuditDebugCount(jobsValue),
+    jobs: jobs.map((job) => {
+      const safeJob = job && typeof job === "object" ? job : {};
+      const links = safeJob.download_links;
+      const error = safeJob.error || safeJob.details?.error || safeJob.error_details || {};
+      return {
+        id: safeAuditDebugValue(getExportJobId(safeJob), config),
+        status: safeAuditDebugValue(safeJob.status, config),
+        keys: Object.keys(safeJob),
+        hasDownloadLinks: Object.prototype.hasOwnProperty.call(safeJob, "download_links"),
+        downloadLinksType: getAuditDebugType(links),
+        downloadLinksCount: Array.isArray(links) ? links.length : 0,
+        hasDownloadUrl: Object.prototype.hasOwnProperty.call(safeJob, "download_url"),
+        hasDownloadLink: Object.prototype.hasOwnProperty.call(safeJob, "download_link"),
+        errorCode: safeAuditDebugValue(
+          error.code || safeJob.error_code,
+          config,
+        ),
+        errorMessage: safeAuditDebugValue(
+          error.message || safeJob.error_message || safeJob.message,
+          config,
+        ),
+      };
+    }),
+    artifactLocations: findAuditArtifactLocations(payload),
+  })}`);
+}
+
+function getAuditDebugType(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function getAuditDebugCount(value) {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === "object") return Object.keys(value).length;
+  return value === undefined || value === null ? 0 : 1;
+}
+
+function safeAuditDebugValue(value, config) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+    return `[${getAuditDebugType(value)}]`;
+  }
+  const secrets = [config.clientId, config.clientSecret, config.refreshToken]
+    .filter(Boolean)
+    .map(String);
+  let safeValue = String(value);
+  for (const secret of secrets) {
+    safeValue = safeValue.split(secret).join("[REDACTED]");
+  }
+  return safeValue
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "[REDACTED_URL]")
+    .replace(/Zoho-oauthtoken\s+\S+/gi, "Zoho-oauthtoken [REDACTED]")
+    .replace(/(access[_-]?token|refresh[_-]?token|client[_-]?secret|api[_-]?key)\s*[:=]\s*([^\s,;]+)/gi, "$1=[REDACTED]")
+    .slice(0, 300);
+}
+
+function findAuditArtifactLocations(value) {
+  const locations = [];
+  const visited = new WeakSet();
+  const artifactKey = /(download|artifact|file|link|url)/i;
+
+  function visit(current, path) {
+    if (!current || typeof current !== "object" || visited.has(current)) return;
+    visited.add(current);
+    for (const [key, child] of Object.entries(current)) {
+      const childPath = path ? `${path}.${key}` : key;
+      if (artifactKey.test(key)) {
+        locations.push({
+          path: childPath,
+          type: getAuditDebugType(child),
+          count: getAuditDebugCount(child),
+        });
+      }
+      visit(child, childPath);
+    }
+  }
+
+  visit(value, "");
+  return locations;
 }
 
 function selectAuditLogJob(jobs, requestedJobId) {
