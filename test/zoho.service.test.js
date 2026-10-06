@@ -194,6 +194,39 @@ test('calculates owner performance from compatible grouped populations', async (
   assert.equal(result.overall.win_rate, 50);
 });
 
+test('displays full CRM user names in owner performance totals', async () => {
+  const ownerRows = [
+    { Owner: { name: 'Raj', id: 'user-1' }, 'COUNT(id)': 2 },
+    { Owner: { name: 'M', id: 'user-2' }, 'COUNT(id)': 1 }
+  ];
+  const service = new CrmService({
+    getUsers: async () => [
+      { id: 'user-1', first_name: 'Sanjay', last_name: 'Raj', full_name: 'Raj' },
+      { id: 'user-2', first_name: 'Lala', last_name: 'M', full_name: 'M' }
+    ],
+    aggregate: async (query) => {
+      if (query.includes('SUM(Amount)')) return { rows: [
+        { Owner: { name: 'Raj', id: 'user-1' }, 'SUM(Amount)': 1000 },
+        { Owner: { name: 'M', id: 'user-2' }, 'SUM(Amount)': 500 }
+      ] };
+      if (query.includes('Stage')) return { rows: [
+        { Owner: { name: 'Raj', id: 'user-1' }, 'COUNT(id)': 1 },
+        { Owner: { name: 'M', id: 'user-2' }, 'COUNT(id)': 0 }
+      ] };
+      if (query.includes('group by Owner')) return { rows: ownerRows };
+      return { rows: [{ 'COUNT(id)': 3 }] };
+    },
+    query: async () => ({ records: [], info: { more_records: false } })
+  });
+
+  const result = await service.ownerPerformanceReport({ module: 'Deals', filters: [], ranking: { limit: 20 } });
+
+  assert.deepEqual(result.owners.map(({ owner, total_value }) => ({ owner, total_value })), [
+    { owner: 'Sanjay Raj', total_value: 1000 },
+    { owner: 'Lala M', total_value: 500 }
+  ]);
+});
+
 test('retrieves top deals only after ranking the top owners', async () => {
   const aggregateQueries = [];
   const dealQueries = [];

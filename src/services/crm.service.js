@@ -1258,26 +1258,39 @@ class CrmService {
             ),
         ),
       ]);
+    const ownerRows = ownerCounts.rows || [];
+    const ownerUserNames = new Map();
+    if (
+      ownerRows.some((row) => row.Owner && typeof row.Owner === "object" && row.Owner.id) &&
+      typeof this.zohoService.getUsers === "function"
+    ) {
+      const users = await this.zohoService.getUsers();
+      for (const user of users) {
+        const fullName = crmUserFullName(user);
+        if (user?.id && fullName) ownerUserNames.set(String(user.id), fullName);
+      }
+    }
     const wonByOwner = new Map(
       ownerWon.rows.map((row) => [
-        ownerLabel(row.Owner),
+        ownerIdentity(row.Owner),
         aggregateNumber(row, "COUNT(id)"),
       ]),
     );
     const valueByOwner = new Map(
       ownerValues.rows.map((row) => [
-        ownerLabel(row.Owner),
+        ownerIdentity(row.Owner),
         aggregateNumber(row, "SUM(Amount)"),
       ]),
     );
-    const owners = ownerCounts.rows
+    const owners = ownerRows
       .map((row) => {
-        const owner = ownerLabel(row.Owner);
         const ownerId =
           row.Owner && typeof row.Owner === "object" ? row.Owner.id : row.Owner;
+        const identity = ownerIdentity(row.Owner);
+        const owner = ownerLabel(row.Owner, ownerUserNames);
         const deals = aggregateNumber(row, "COUNT(id)");
-        const won = wonByOwner.get(owner) || 0;
-        const totalValue = valueByOwner.get(owner) || 0;
+        const won = wonByOwner.get(identity) || 0;
+        const totalValue = valueByOwner.get(identity) || 0;
         return {
           owner,
           owner_id: ownerId ? String(ownerId) : null,
@@ -2300,7 +2313,7 @@ class CrmService {
 
 function normalizeGroupValue(value) {
   if (!value || typeof value !== "object") return value;
-  return value.name || value.full_name || value.email || value.id || null;
+  return crmUserFullName(value) || value.email || value.id || null;
 }
 
 function toIsoDate(date) {
@@ -2310,8 +2323,28 @@ function toIsoDate(date) {
   return `${year}-${month}-${day}`;
 }
 
-function ownerLabel(value) {
+function ownerIdentity(value) {
+  if (value && typeof value === "object" && value.id) return String(value.id);
   return normalizeGroupValue(value) || "Unassigned";
+}
+
+function ownerLabel(value, usersById = new Map()) {
+  if (value && typeof value === "object" && value.id) {
+    return usersById.get(String(value.id)) || normalizeGroupValue(value) || "Unassigned";
+  }
+  return normalizeGroupValue(value) || "Unassigned";
+}
+
+function crmUserFullName(user) {
+  if (!user || typeof user !== "object") return null;
+  const firstName = String(user.first_name || "").trim();
+  const lastName = String(user.last_name || "").trim();
+  return (
+    [firstName, lastName].filter(Boolean).join(" ") ||
+    String(user.full_name || "").trim() ||
+    String(user.name || "").trim() ||
+    null
+  );
 }
 
 function aggregateNumber(row = {}, key) {
