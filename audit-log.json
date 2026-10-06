@@ -17,18 +17,6 @@
   "produces": [
     "application/json"
   ],
-  "securityDefinitions": {
-    "api_key": {
-      "type": "apiKey",
-      "in": "header",
-      "name": "x-api-key"
-    }
-  },
-  "security": [
-    {
-      "api_key": []
-    }
-  ],
   "paths": {
     "/api/crm/audit-log": {
       "post": {
@@ -36,11 +24,6 @@
         "summary": "Get CRM audit logs from a natural-language request",
         "x-ms-summary": "Get CRM audit logs",
         "description": "Returns Zoho CRM audit events. Pass the user's question in request.question. The backend infers the date range, action, module, user, and pagination. All structured parameters are optional and should only be provided when explicit overrides are needed.",
-        "security": [
-          {
-            "api_key": []
-          }
-        ],
         "parameters": [
           {
             "in": "body",
@@ -65,12 +48,6 @@
               "$ref": "#/definitions/ErrorResponse"
             }
           },
-          "401": {
-            "description": "Missing or invalid API key.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
           "403": {
             "description": "Access denied or the configured Zoho identity cannot read audit logs.",
             "schema": {
@@ -79,6 +56,18 @@
           },
           "429": {
             "description": "Rate limit exceeded.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the configured size limit.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Rate-limit storage is unavailable.",
             "schema": {
               "$ref": "#/definitions/ErrorResponse"
             }
@@ -102,6 +91,7 @@
   "definitions": {
     "AuditLogRequest": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "request"
       ],
@@ -113,6 +103,7 @@
     },
     "AuditLogRequestBody": {
       "type": "object",
+      "additionalProperties": false,
       "description": "Pass the user's question in the question field. The backend infers operation, time_range, filters, and pagination from the question. All structured fields are optional overrides.",
       "properties": {
         "question": {
@@ -165,6 +156,7 @@
     },
     "AuditLogFilters": {
       "type": "object",
+      "additionalProperties": false,
       "description": "Optional. Inferred from the question when omitted.",
       "properties": {
         "action": {
@@ -197,6 +189,7 @@
     },
     "PaginationRequest": {
       "type": "object",
+      "additionalProperties": false,
       "description": "Optional. Defaults to limit 20, offset 0 when omitted.",
       "properties": {
         "limit": {

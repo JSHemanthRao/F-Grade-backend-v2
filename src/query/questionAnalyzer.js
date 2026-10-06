@@ -6,6 +6,7 @@ const { createAppError } = require('../utils/errors');
 const MODULE_ALIASES = [
   ['deal', 'Deals'], ['deals', 'Deals'],
   ['quote', 'Quotes'], ['quotes', 'Quotes'],
+  ['invoice', 'Invoices'], ['invoices', 'Invoices'],
   ['lead', 'Leads'], ['leads', 'Leads'],
   ['contact', 'Contacts'], ['contacts', 'Contacts'],
   ['account', 'Accounts'], ['accounts', 'Accounts'],

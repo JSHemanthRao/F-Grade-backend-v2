@@ -9,14 +9,14 @@ const { CrmService } = require('../src/services/crm.service');
 const crmOpenApi = require('../crm.openapi.json');
 const auditLogOpenApi = require('../audit-log.json');
 
-function requestJson(app, path, method, body) {
+function requestJson(app, path, method, body, additionalHeaders = {}) {
   return new Promise((resolve, reject) => {
     const server = app.listen(0, () => {
       const request = http.request({
         port: server.address().port,
         path,
         method,
-        headers: { ...(body ? { 'content-type': 'application/json' } : {}), 'x-api-key': 'test-backend-key' }
+        headers: { ...(body ? { 'content-type': 'application/json' } : {}), 'x-api-key': 'test-backend-key', ...additionalHeaders }
       }, (response) => {
         let content = '';
         response.on('data', (chunk) => { content += chunk; });
@@ -179,21 +179,19 @@ test('POST /api/crm/query also treats original_question as the natural-language 
   assert.equal(captured.filters[0].field, 'Created_Time');
 });
 
-test('POST /api/crm/assistant accepts the question input only', async () => {
+test('POST /api/crm/assistant rejects unsupported direct query properties', async () => {
   const calls = [];
   const app = createApp({ crmService: { query: async (input) => {
     calls.push(input);
     return { module: input.module, count: 0, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } };
   } } });
   const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'Show me deals', module: 'Products', query: { fields: ['Amount'] } });
-  assert.equal(response.status, 200);
-  assert.equal(response.body.success, true);
-  assert.equal(response.body.question, 'Show me deals');
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].module, 'Deals');
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'INVALID_REQUEST');
+  assert.equal(calls.length, 0);
 });
 
-test('assistant planning clears stale connector field metadata', async () => {
+test('assistant rejects stale connector field metadata instead of ignoring it', async () => {
   let captured;
   const app = createApp({ crmService: { query: async (input) => {
     captured = input;
@@ -203,10 +201,9 @@ test('assistant planning clears stale connector field metadata', async () => {
     question: 'Deal pipeline analysis',
     query: { field_labels: ['Old_Field_From_Connector'], module_api_name: 'Deals' }
   });
-  assert.equal(response.status, 200);
-  assert.equal(captured.module, 'Deals');
-  assert.equal(captured.field_labels, undefined);
-  assert.equal(captured.module_api_name, undefined);
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'INVALID_REQUEST');
+  assert.equal(captured, undefined);
 });
 
 test('resolves date-only follow-ups using the previous CRM question', async () => {
@@ -215,8 +212,9 @@ test('resolves date-only follow-ups using the previous CRM question', async () =
     calls.push(input);
     return { module: input.module, request_type: input.request_type, count: 0, data: [], pagination: { limit: input.limit, offset: input.offset, more_records: false } };
   } } });
-  await requestJson(app, '/api/crm/assistant', 'POST', { conversation_id: 'follow-up-test', question: 'What is the total Amount for Closed Won Deals?' });
-  const response = await requestJson(app, '/api/crm/assistant', 'POST', { conversation_id: 'follow-up-test', question: 'give me only this year' });
+  const headers = { 'x-ms-conversation-id': 'follow-up-test' };
+  await requestJson(app, '/api/crm/assistant', 'POST', { question: 'What is the total Amount for Closed Won Deals?' }, headers);
+  const response = await requestJson(app, '/api/crm/assistant', 'POST', { question: 'give me only this year' }, headers);
   assert.equal(response.status, 200);
   assert.equal(calls.length, 2);
   assert.equal(calls[1].module, 'Deals');
@@ -862,7 +860,12 @@ test('OpenAPI exposes one assistant operation with a single nested CRM request c
   assert.equal(Object.keys(crmOpenApi.paths).length, 1);
   assert.equal(crmOpenApi.swagger, '2.0');
   assert.equal(crmOpenApi.components, undefined);
-  assert.ok(crmOpenApi.securityDefinitions.api_key);
+  assert.equal(crmOpenApi.securityDefinitions, undefined);
+  assert.equal(crmOpenApi.security, undefined);
+  assert.equal(operation.security, undefined);
+  assert.equal(auditLogOpenApi.securityDefinitions, undefined);
+  assert.equal(auditLogOpenApi.security, undefined);
+  assert.equal(auditLogOpenApi.paths['/api/crm/audit-log'].post.security, undefined);
 });
 
 test('OpenAPI marks CRM pagination as explicit offset and limit', () => {

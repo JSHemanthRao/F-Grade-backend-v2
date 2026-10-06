@@ -50,7 +50,7 @@ test('uses the connector conversation header when the body omits conversation_id
   assert.deepEqual(calls.map((call) => call.offset), [0, 20]);
 });
 
-test('propagates conversation_id and continuation_token across connector pagination calls', async () => {
+test('keeps conversation and continuation identifiers internal across pagination calls', async () => {
   const calls = [];
   const app = createApp({ crmService: makeMockService((input) => {
     calls.push({ offset: input.offset || 0, limit: input.limit || 20 });
@@ -77,7 +77,8 @@ test('propagates conversation_id and continuation_token across connector paginat
   }
   assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40]);
   assert.deepEqual([first.body.pagination.offset, second.body.pagination.offset, third.body.pagination.offset], [0, 20, 40]);
-  assert.equal(second.body.diagnostics.continuation_token_present, true);
+  assert.equal(second.body.diagnostics.continuation_detected, true);
+  assert.equal(second.body.diagnostics.continuation_token_present, undefined);
   assert.equal(second.body.diagnostics.previous_state_found, true);
   assert.equal(second.body.diagnostics.previous_offset, 0);
   assert.equal(second.body.diagnostics.new_offset, 20);
@@ -121,8 +122,9 @@ test('uses conversation_id as pagination fallback when continuation_token is abs
     return { module: 'Deals', request_type: 'records', data: [{ id: `deal-${offset}` }], pagination: { limit: 20, offset, returned: 1, more_records: true } };
   }) });
 
-  const first = await request(app, { conversation_id: 'fallback-conversation', question: 'show me deals' });
-  const second = await request(app, { conversation_id: 'fallback-conversation', question: 'next 20' });
+  const headers = { 'x-ms-conversation-id': 'fallback-conversation' };
+  const first = await request(app, { question: 'show me deals' }, headers);
+  const second = await request(app, { question: 'next 20' }, headers);
 
   assert.equal(first.status, 200);
   assert.equal(second.status, 200);

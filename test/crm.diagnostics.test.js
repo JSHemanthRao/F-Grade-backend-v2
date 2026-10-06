@@ -28,7 +28,20 @@ test('assistant returns request-scoped diagnostics and preserves explicit module
   const seen = [];
   const app = createApp({ crmService: { query: async (input) => {
     seen.push(input);
-    return { module: input.module, module_api_name: input.module === 'Meetings' ? 'Events' : input.module, request_type: 'records', fields: input.fields, filters: input.filters, data: [], count: 0 };
+    return {
+      module: input.module,
+      module_api_name: input.module === 'Meetings' ? 'Events' : input.module,
+      request_type: 'records',
+      fields: input.fields,
+      filters: input.filters,
+      download_url: 'https://download.example.test/export.csv?sig=signed-url-secret',
+      job_id: 'internal-job-id',
+      continuation_token: 'internal-continuation-token',
+      conversation_id: 'internal-conversation-id',
+      access_token: 'internal-access-token',
+      data: [],
+      count: 0
+    };
   } } });
 
   const result = await request(app, { question: "Show me today's meetings" });
@@ -40,6 +53,16 @@ test('assistant returns request-scoped diagnostics and preserves explicit module
   assert.equal(result.body.diagnostics.zoho_error_message, undefined);
   assert.equal(result.body.module_api_name, undefined);
   assert.equal(result.body.fields, undefined);
+  assert.equal(result.body.download_url, undefined);
+  assert.equal(result.body.job_id, undefined);
+  assert.equal(result.body.continuation_token, undefined);
+  assert.equal(result.body.conversation_id, undefined);
+  assert.equal(result.body.access_token, undefined);
+  for (const field of ['question', 'conversation_id', 'continuation_token_hash', 'query_identity', 'query_fingerprint', 'resolved_fields', 'resolved_filters', 'available_metadata_fields', 'final_query', 'module_api_name']) {
+    assert.equal(result.body.diagnostics[field], undefined);
+  }
+  assert.equal(JSON.stringify(result.body).includes('signed-url-secret'), false);
+  assert.equal(JSON.stringify(result.body).includes('internal-access-token'), false);
   assert.match(result.body.diagnostics.request_id, /^crm_\d{8}_\d{6}_[a-f0-9]{6}$/);
   assert.equal(seen[0].module, 'Meetings');
   assert.notEqual(seen[0].module, 'Deals');
@@ -50,7 +73,13 @@ test('assistant preserves diagnostics and upstream details on failure', async ()
     const error = new Error('Zoho denied the request.');
     error.code = 'OAUTH_SCOPE_MISMATCH';
     error.statusCode = 502;
-    error.details = { endpoint: '/crm/v8/Calls', upstream_status: 401, upstream_code: 'OAUTH_SCOPE_MISMATCH', upstream_message: 'Scope is missing.' };
+    error.details = {
+      endpoint: '/crm/v8/Calls',
+      upstream_status: 401,
+      upstream_code: 'OAUTH_SCOPE_MISMATCH',
+      upstream_message: 'refresh_token=provider-secret',
+      raw_response: { access_token: 'provider-access-secret' }
+    };
     throw error;
   } } });
 
@@ -65,6 +94,8 @@ test('assistant preserves diagnostics and upstream details on failure', async ()
   assert.equal(result.body.diagnostics.zoho_error_message, undefined);
   assert.equal(result.body.error.details.endpoint, undefined);
   assert.equal(result.body.error.details.upstream_message, undefined);
+  assert.equal(JSON.stringify(result.body).includes('provider-secret'), false);
+  assert.equal(JSON.stringify(result.body).includes('provider-access-secret'), false);
 });
 
 test('assistant maps Zoho NO_PERMISSION to HTTP 403 without changing Quotes', async () => {

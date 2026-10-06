@@ -269,7 +269,7 @@ function createCrmController(crmService = new CrmService()) {
             : req.body;
         const result = await crmService.query(input);
         // Ensure structured summary objects are serialized to strings for connector compatibility
-        const safe = stringifySummary(Object.assign({}, result));
+        const safe = stringifySummary(sanitizePublicCrmResult(result));
         res.status(200).json({ success: true, status: 'ok', ...safe });
       } catch (error) {
         next(error);
@@ -299,10 +299,9 @@ function createCrmController(crmService = new CrmService()) {
         const conversationId = resolveConversationId(req) || randomUUID();
         const continuationToken = resolveContinuationToken(req);
         const assistantResponse = await assistantService.execute({ question, conversationId, continuationToken, diagnostics });
+        if (res.headersSent || req.requestTimedOut) return;
         const result = assistantResponse?.result || {};
-        const publicResult = Object.fromEntries(Object.entries(result).filter(([key]) => (
-          !/^(?:module_api_name|fields|metadata|metadata_sample|final_query|query|raw|download_url|job_id|continuation_token|conversation_id|access_token|refresh_token|client_secret|api_key|authorization)$/i.test(key)
-        )));
+        const publicResult = sanitizePublicCrmResult(result);
         const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
         const records = Array.isArray(result.data) ? result.data : Array.isArray(result.records) ? result.records : [];
         const responsePagination = assistantResponse?.pagination || paginationEngine.buildPaginationMetadata({
@@ -329,6 +328,7 @@ function createCrmController(crmService = new CrmService()) {
         res.status(200).json(payload);
         return;
         } catch (error) {
+        if (res.headersSent || req.requestTimedOut) return;
         diagnosticsFromError(error, diagnostics);
         error.crmDiagnostics = diagnostics;
         diagnostics.stage = 'request_failed';
@@ -387,6 +387,11 @@ function isStructuredCrmJson(body) {
     return Boolean(body.request.question || body.request.module || body.request.operation || body.request.query || body.request.pagination);
   }
   return Boolean(body.request.question || body.request.module || body.request.operation || body.request.query || body.request.pagination);
+}
+
+function sanitizePublicCrmResult(result) {
+  const privateKeys = /^(?:module_api_name|fields|metadata(?:_sample)?|final_query|query|raw(?:_response)?|download_url|signed_download_url|job_id|continuation_token(?:_hash)?|conversation_id|access_token|refresh_token|client_secret|api_key|authorization|api_domain|module_id|zoho_response)$/i;
+  return Object.fromEntries(Object.entries(result || {}).filter(([key]) => !privateKeys.test(key)));
 }
 
 async function executeStructuredCrmJson(body, crmService, diagnostics, paginationEngine) {
@@ -1582,6 +1587,7 @@ function detectModule(lowerText) {
     ['Calls', /\b(?:call|calls)\b/],
     ['Tasks', /\b(?:task|tasks)\b/],
     ['Products', /\b(?:product|products)\b/],
+    ['Invoices', /\b(?:invoice|invoices)\b/],
     ['Reports', /\breports?\b/],
     ['Analytics', /\banalytics\b/],
     ['SalesInbox', /\bsales\s*inbox\b/],
@@ -1645,6 +1651,7 @@ function extractExplicitModule(lowerText) {
     ['Accounts', /\b(?:account|accounts)\b/i],
     ['Deals', /\b(?:deal|deals)\b/i],
     ['Quotes', /\b(?:quote|quotes)\b/i],
+    ['Invoices', /\b(?:invoice|invoices)\b/i],
     ['Vendors', /\b(?:vendor|vendors)\b/i],
     ['Campaigns', /\b(?:campaign|campaigns)\b/i],
     ['Renewal Accounts', /\brenewal accounts?\b/i],

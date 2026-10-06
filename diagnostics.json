@@ -396,11 +396,6 @@ PS C:\WINDOWS\system32> (Invoke-RestMethod -Uri 'https://f-grade-backend-v2.onre
                                          "plural_label":  "Partners X Accounts"
                                      },
                                      {
-                                         "api_name":  "Zoho_Books",
-                                         "module_name":  "Zoho Books",
-                                         "plural_label":  "Zoho Finance"
-                                     },
-                                     {
                                          "api_name":  "Voice_of_the_Customer__s",
                                          "module_name":  "Voice of the Customer",
                                          "plural_label":  "Voice of the Customer"

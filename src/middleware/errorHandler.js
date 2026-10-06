@@ -3,9 +3,11 @@ const { createCrmDiagnostics, diagnosticsFromError, publicCrmDiagnostics } = req
 const { env } = require('../config/env');
 
 function errorHandler(error, req, res, _next) {
+  if (res.headersSent || res.writableEnded) return;
   const isJsonSyntaxError = error instanceof SyntaxError && error.status === 400 && error.type === 'entity.parse.failed';
-  const statusCode = isJsonSyntaxError ? 400 : (Number.isInteger(error.statusCode) ? error.statusCode : 500);
-  const code = isJsonSyntaxError ? 'INVALID_JSON' : (error.code || 'INTERNAL_SERVER_ERROR');
+  const entityTooLarge = error?.type === 'entity.too.large' || error?.status === 413;
+  const statusCode = isJsonSyntaxError ? 400 : entityTooLarge ? 413 : (Number.isInteger(error.statusCode) ? error.statusCode : 500);
+  const code = isJsonSyntaxError ? 'INVALID_JSON' : entityTooLarge ? 'REQUEST_TOO_LARGE' : (error.code || 'INTERNAL_SERVER_ERROR');
   const diagnostics = req.crmDiagnostics || error.crmDiagnostics || (req.originalUrl === '/api/crm/assistant' ? createCrmDiagnostics() : null);
   if (diagnostics) {
     diagnosticsFromError(error, diagnostics);
@@ -19,7 +21,11 @@ function errorHandler(error, req, res, _next) {
     status: 'error',
     error: {
       code,
-      message: error.response
+      message: isJsonSyntaxError
+        ? 'The request body is not valid JSON.'
+        : entityTooLarge
+          ? 'The request body is too large.'
+          : error.response
         ? 'The upstream service could not complete the request.'
         : redactSensitiveLogData(error.message || 'The CRM request could not be completed.'),
       ...(details ? { details } : {})

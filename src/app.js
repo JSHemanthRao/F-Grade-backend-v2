@@ -6,12 +6,14 @@ const createSkillsRoutes = require('./routes/skills.routes');
 const { errorHandler } = require('./middleware/errorHandler');
 const { requestLogger } = require('./middleware/requestLogger');
 const { apiKeyAuth } = require('./middleware/apiKeyAuth');
+const { createBotRateLimiters } = require('./middleware/botProtection');
 const { env } = require('./config/env');
 const { createCrmDiagnostics } = require('./utils/crmDiagnostics');
 
-function createApp({ crmService } = {}) {
+function createApp({ crmService, rateLimiters, requestTimeoutMs } = {}) {
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', env.trustProxyHops);
   app.use(cors({ origin: env.corsOrigin }));
   app.use(requestLogger);
   app.use((req, _res, next) => {
@@ -19,11 +21,14 @@ function createApp({ crmService } = {}) {
     next();
   });
   app.use(express.json({ limit: env.requestBodyLimit }));
-  app.use('/api', apiKeyAuth);
 
   app.use('/health', healthRoutes);
-  app.use('/api/skills', createSkillsRoutes());
-  app.use('/api/crm', createCrmRoutes(crmService));
+  app.use('/api/skills', apiKeyAuth, createSkillsRoutes());
+  app.use('/api/crm', createCrmRoutes(crmService, {
+    apiKeyAuth,
+    rateLimiters: rateLimiters || createBotRateLimiters(),
+    requestTimeoutMs
+  }));
   app.use((req, res) => {
     res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found.' } });
   });

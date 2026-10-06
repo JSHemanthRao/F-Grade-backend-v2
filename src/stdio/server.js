@@ -19,7 +19,7 @@ const crmTool = new CrmTool();
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [{
     name: 'query_crm',
-    description: 'Send one natural-language, read-only Zoho CRM question to the CRM backend. The backend resolves the module, fields, dates, filters, sorting, and query API from live CRM metadata. Never use this tool for Zoho Books.',
+    description: 'Send one natural-language, read-only Zoho CRM question to the CRM backend. The backend resolves the module, fields, dates, filters, sorting, and query API from live CRM metadata.',
     inputSchema: {
       type: 'object',
       properties: {

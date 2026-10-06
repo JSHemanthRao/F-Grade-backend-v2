@@ -9,6 +9,13 @@ const { buildCoqlQuery, buildLogicalFilterClause } = require('../src/services/co
 
 const periods = ['today', 'yesterday', 'tomorrow', 'this week', 'last week', 'next week', 'this month', 'last month', 'next month', 'this quarter', 'last quarter', 'next quarter', 'this year', 'last year', 'next year'];
 
+function assistantRequest(question, conversationId) {
+  return {
+    body: { question },
+    get: (header) => header.toLowerCase() === 'x-ms-conversation-id' ? conversationId : undefined
+  };
+}
+
 test('analyzes the required canonical CRM query before execution', () => {
   const query = analyzeCrmQuestion('Get all deals where Stage is Closed Won, sorted by Closing_Date descending', { limit: 20, offset: 0 });
   assert.deepEqual(query, {
@@ -180,6 +187,16 @@ test('plans unqualified last-month revenue as a Closed Won Deals aggregate', () 
   assert.equal(plan.filters[0].exclusive_end, true);
   assert.equal(plan.filters[0].date_range.semantic, 'last month');
   assert.deepEqual(plan.filters[1], { field: 'Stage', operator: 'equals', value: 'Closed Won' });
+});
+
+test('keeps native CRM Quotes and Invoices mapped to CRM API modules', () => {
+  const { CRM_API_NAMES, CRM_MODULES } = require('../src/constants/crmModules');
+  assert.equal(CRM_API_NAMES.Quotes, 'Quotes');
+  assert.equal(CRM_API_NAMES.Invoices, 'Invoices');
+  assert.deepEqual(CRM_MODULES.Quotes, ['id']);
+  assert.deepEqual(CRM_MODULES.Invoices, ['id']);
+  assert.equal(planQuestion('Show me CRM quotes').module, 'Quotes');
+  assert.equal(planQuestion('Show me CRM invoices').module, 'Invoices');
 });
 
 test('formats last-month revenue as a concise user-facing answer', () => {
@@ -537,7 +554,7 @@ test('advances Leads for the natural-language next set follow-up', async () => {
   assert.deepEqual(calls.map((call) => [call.module, call.offset, call.limit]), [['Leads', 0, 20], ['Leads', 20, 20]]);
 });
 
-test('runs three Leads pages with stable conversation state and distinct IDs', async () => {
+test('runs three Leads pages with internal platform conversation state and distinct IDs', async () => {
   const calls = [];
   const controller = createCrmController({
     query: async (input) => {
@@ -553,19 +570,18 @@ test('runs three Leads pages with stable conversation state and distinct IDs', a
   });
   const responses = [];
   const response = () => ({ status: () => ({ json: (value) => { responses.push(value); return value; } }), json: (value) => { responses.push(value); return value; } });
-  await controller.assistant({ body: { question: 'Show me the first 20 leads.' } }, response(), (error) => { throw error; });
-  const conversationId = responses[0].conversation_id;
-  await controller.assistant({ body: { conversation_id: conversationId, question: 'give me next 20 records' } }, response(), (error) => { throw error; });
-  await controller.assistant({ body: { conversation_id: conversationId, question: 'give me next 20 records' } }, response(), (error) => { throw error; });
-  assert.ok(conversationId);
+  const conversationId = 'leads-pagination-matrix';
+  await controller.assistant(assistantRequest('Show me the first 20 leads.', conversationId), response(), (error) => { throw error; });
+  await controller.assistant(assistantRequest('give me next 20 records', conversationId), response(), (error) => { throw error; });
+  await controller.assistant(assistantRequest('give me next 20 records', conversationId), response(), (error) => { throw error; });
   assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40]);
   assert.deepEqual(calls.map((call) => call.module), ['Leads', 'Leads', 'Leads']);
   assert.deepEqual(responses.map((responseBody) => responseBody.pagination.offset), [0, 20, 40]);
-  assert.deepEqual(responses.map((responseBody) => responseBody.conversation_id), [conversationId, conversationId, conversationId]);
+  assert.ok(responses.every((responseBody) => responseBody.conversation_id === undefined && responseBody.continuation_token === undefined));
   assert.equal(new Set(responses.flatMap((responseBody) => responseBody.data.map((record) => record.id))).size, 60);
 });
 
-test('uses continuation tokens without requiring conversation_id and rotates them', async () => {
+test('continues with platform conversation context without returning tokens', async () => {
   const calls = [];
   const controller = createCrmController({
     query: async (input) => {
@@ -576,19 +592,16 @@ test('uses continuation tokens without requiring conversation_id and rotates the
   });
   const responses = [];
   const response = () => ({ status: () => ({ json: (value) => { responses.push(value); return value; } }), json: (value) => { responses.push(value); return value; } });
-  await controller.assistant({ body: { question: 'Show me the top 20 deals' } }, response(), (error) => { throw error; });
-  const firstToken = responses[0].continuation_token;
-  await controller.assistant({ body: { question: 'give me next 20 records', continuation_token: firstToken } }, response(), (error) => { throw error; });
-  const secondToken = responses[1].continuation_token;
-  await controller.assistant({ body: { question: 'give me next 20 records', continuation_token: secondToken } }, response(), (error) => { throw error; });
-  assert.ok(firstToken);
-  assert.ok(secondToken);
-  assert.notEqual(firstToken, secondToken);
+  const conversationId = 'deals-pagination-matrix';
+  await controller.assistant(assistantRequest('Show me the top 20 deals', conversationId), response(), (error) => { throw error; });
+  await controller.assistant(assistantRequest('give me next 20 records', conversationId), response(), (error) => { throw error; });
+  await controller.assistant(assistantRequest('give me next 20 records', conversationId), response(), (error) => { throw error; });
+  assert.ok(responses.every((item) => item.continuation_token === undefined && item.conversation_id === undefined));
   assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40]);
   assert.deepEqual(responses.map((item) => item.pagination.offset), [0, 20, 40]);
 });
 
-test('replayed continuation tokens deterministically request the same next page', async () => {
+test('follow-up pagination advances from internal state without emitting a continuation token', async () => {
   const offsets = [];
   const controller = createCrmController({
     query: async (input) => {
@@ -600,12 +613,13 @@ test('replayed continuation tokens deterministically request the same next page'
   const responses = [];
   const response = () => ({ status: () => ({ json: (value) => { responses.push(value); return value; } }), json: (value) => { responses.push(value); return value; } });
 
-  await controller.assistant({ body: { question: 'show me deals' } }, response(), (error) => { throw error; });
-  const firstToken = responses[0].continuation_token;
-  await controller.assistant({ body: { question: 'next 20', continuation_token: firstToken } }, response(), (error) => { throw error; });
-  await controller.assistant({ body: { question: 'next 20', continuation_token: firstToken } }, response(), (error) => { throw error; });
+  const conversationId = 'deals-followup-state';
+  await controller.assistant(assistantRequest('show me deals', conversationId), response(), (error) => { throw error; });
+  await controller.assistant(assistantRequest('next 20', conversationId), response(), (error) => { throw error; });
+  await controller.assistant(assistantRequest('next 20', conversationId), response(), (error) => { throw error; });
 
-  assert.deepEqual(offsets, [0, 1, 1]);
+  assert.deepEqual(offsets, [0, 1, 2]);
+  assert.ok(responses.every((item) => item.continuation_token === undefined && item.conversation_id === undefined));
 });
 
 test('continues Deals for the Copilot wording next 20 deals also', async () => {
@@ -625,8 +639,9 @@ test('continues Deals for the Copilot wording next 20 deals also', async () => {
   const responses = [];
   const response = () => ({ status: () => ({ json: (value) => { responses.push(value); return value; } }), json: (value) => { responses.push(value); return value; } });
 
-  await controller.assistant({ body: { question: 'Show me the first 20 deals' } }, response(), (error) => { throw error; });
-  await controller.assistant({ body: { question: 'give me next 20 deals also', continuation_token: responses[0].continuation_token } }, response(), (error) => { throw error; });
+  const conversationId = 'deals-next-20-also';
+  await controller.assistant(assistantRequest('Show me the first 20 deals', conversationId), response(), (error) => { throw error; });
+  await controller.assistant(assistantRequest('give me next 20 deals also', conversationId), response(), (error) => { throw error; });
 
   assert.deepEqual(calls.map((call) => [call.module, call.offset, call.limit]), [['Deals', 0, 20], ['Deals', 20, 20]]);
 });
@@ -670,7 +685,8 @@ test('uses a UUID sent in question as the prior conversation ID for connector fo
   await controller.assistant({ body: { question: conversationId } }, response(), (error) => { throw error; });
 
   assert.deepEqual(calls.map((call) => [call.module, call.offset]), [['Contacts', 0], ['Contacts', 20]]);
-  assert.equal(responses[1].conversation_id, conversationId);
+  assert.equal(responses[1].conversation_id, undefined);
+  assert.equal(responses[1].continuation_token, undefined);
 });
 
 test('rejects an invalid continuation token before calling CRM', async () => {

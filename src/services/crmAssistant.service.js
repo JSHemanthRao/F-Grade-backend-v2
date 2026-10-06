@@ -97,9 +97,8 @@ class CrmAssistantService {
     const state = await this.paginationManager.saveAsync(conversationId, statePlan, result, diagnostics?.request_id, resolvedQuestion, continuationDetected ? previous : null);
     const queryIdentity = createQueryIdentity(statePlan);
     recordCrmEvent('PAGINATION_STATE', diagnostics, {
-      conversation_id: conversationId,
+      conversation_context_present: Boolean(conversationId),
       continuation_token_hash: state?.continuation_token ? hashToken(state.continuation_token) : null,
-      query_identity: queryIdentity,
       module: plannedRequest.module || result.module || null,
       previous_offset: previous?.pagination?.offset ?? null,
       previous_limit: previous?.pagination?.limit ?? null,

@@ -17,18 +17,6 @@
   "produces": [
     "application/json"
   ],
-  "securityDefinitions": {
-    "api_key": {
-      "type": "apiKey",
-      "in": "header",
-      "name": "x-api-key"
-    }
-  },
-  "security": [
-    {
-      "api_key": []
-    }
-  ],
   "paths": {
     "/api/crm/assistant": {
       "post": {
@@ -36,11 +24,6 @@
         "summary": "Ask Zoho CRM",
         "x-ms-summary": "Ask Zoho CRM",
         "description": "Executes a complete structured CRM JSON request. Pagination is stateless and uses pagination.offset plus pagination.limit.",
-        "security": [
-          {
-            "api_key": []
-          }
-        ],
         "parameters": [
           {
             "in": "body",
@@ -65,12 +48,6 @@
               "$ref": "#/definitions/ErrorResponse"
             }
           },
-          "401": {
-            "description": "Missing or invalid API key.",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
           "403": {
             "description": "Access denied by the CRM provider.",
             "schema": {
@@ -85,6 +62,18 @@
           },
           "429": {
             "description": "Rate limit exceeded.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the configured size limit.",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Rate-limit storage is unavailable.",
             "schema": {
               "$ref": "#/definitions/ErrorResponse"
             }
@@ -201,6 +190,29 @@
         "request": {
           "$ref": "#/definitions/ResponseRequestDescriptor"
         },
+        "analysis": {
+          "type": "string"
+        },
+        "answer": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_amount": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
         "data": {
           "type": "array",
           "items": {
@@ -233,9 +245,6 @@
           "type": "string"
         },
         "module": {
-          "type": "string"
-        },
-        "module_api_name": {
           "type": "string"
         },
         "operation": {
@@ -292,25 +301,6 @@
         },
         "request_type": {
           "type": "string"
-        },
-        "fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "filters": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          }
-        },
-        "sort": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/SortDescriptor"
-          }
         }
       }
     },

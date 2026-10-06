@@ -113,8 +113,6 @@ function publicCrmDiagnostics(diagnostics, debugEnabled = false) {
     'previous_offset',
     'previous_returned',
     'new_offset',
-    'query_identity',
-    'query_fingerprint',
     'crm_service_offset',
     'coql_offset',
     'resolved_module',
