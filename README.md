@@ -81,10 +81,10 @@ Copy `.env.example` and provide the credentials needed for Zoho CRM. Never commi
 - Set `BACKEND_API_KEY` in every shared or deployed environment. Requests under `/api` then require `x-api-key` or `Authorization: Bearer <key>`.
 - Set `CORS_ORIGIN` to the specific caller origin in production instead of `*`.
 - Set `CRM_TIMEZONE` to the business timezone used when converting date-only CRM filters to datetime bounds.
-- Set `REDIS_URL` and optionally `REDIS_PREFIX` when pagination must survive restarts or be shared across Render instances. Without Redis, pagination uses bounded in-memory state and continuation requests must reach the same process.
+- Pagination and anonymous-endpoint rate limits use bounded, process-local memory. Continuation requests must reach the same process, and rate-limit counters are not shared between backend instances.
 
 ## Operational notes
 
-CRM OAuth tokens and CRM metadata are cached in memory. Pagination uses Redis as shared state when configured and falls back to bounded in-memory state otherwise. Each continuation token represents one exact page state; historical tokens are not rewritten to newer pages.
+CRM OAuth tokens, CRM metadata, pagination state, and anonymous endpoint rate-limit counters are held in bounded/process-local memory. Each continuation token represents one exact page state; historical tokens are not rewritten to newer pages.
 
 The backend is intentionally read-only. The planner rejects mutation requests before CRM execution, and the public API should be deployed behind TLS, a reverse-proxy rate limit, and an explicit API key.

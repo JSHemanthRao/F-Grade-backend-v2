@@ -5,6 +5,7 @@ const yauzl = require("yauzl");
 const { getZohoConfig } = require("../config/zoho.config");
 const { ZohoAuthService } = require("./zohoAuth.service");
 const { createAppError } = require("../utils/errors");
+const { markZohoRequestStarted, recordZohoStatus } = require("../utils/http503Diagnostics");
 const { log } = require("../utils/logger");
 
 const MAX_NETWORK_ATTEMPTS = 3;
@@ -463,10 +464,14 @@ class ZohoAuditLogService {
         };
 
         try {
-          return method === "get"
+          markZohoRequestStarted();
+          const response = method === "get"
             ? await this.httpClient.get(requestUrl, options)
             : await this.httpClient.post(requestUrl, data, options);
+          recordZohoStatus(response.status);
+          return response;
         } catch (error) {
+          if (error.response?.status) recordZohoStatus(error.response.status);
           if (error.response?.status === 401) {
             log("warn", `[AUTH_FAILURE] ${JSON.stringify({
               source: "zoho_oauth",

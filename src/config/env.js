@@ -31,8 +31,6 @@ const env = Object.freeze({
   backendApiKey: (process.env.BACKEND_API_KEY || '').trim(),
   backendRequestTimeoutMs: numberFromEnv('BACKEND_REQUEST_TIMEOUT_MS', 15000),
   backendDiagnostics: process.env.BACKEND_DIAGNOSTICS === 'true',
-  redisUrl: process.env.REDIS_URL || '',
-  redisPrefix: process.env.REDIS_PREFIX || 'f-grade:crm:',
   botRateLimitWindowMs: positiveIntegerFromEnv('BOT_RATE_LIMIT_WINDOW_MS', 60000),
   botCrmRateLimit: positiveIntegerFromEnv('BOT_CRM_RATE_LIMIT', 30),
   botAggregateRateLimit: positiveIntegerFromEnv('BOT_AGGREGATE_RATE_LIMIT', 10),

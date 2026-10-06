@@ -6,7 +6,7 @@ Do not use:
 
 - `continuation_token`
 - `conversation_id`
-- Redis pagination state
+- backend state from another process
 - user-provided internal IDs
 
 ## Request Shape

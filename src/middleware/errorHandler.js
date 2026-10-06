@@ -1,6 +1,7 @@
 const { log, redactSensitiveLogData } = require('../utils/logger');
 const { createCrmDiagnostics, diagnosticsFromError, publicCrmDiagnostics } = require('../utils/crmDiagnostics');
 const { env } = require('../config/env');
+const { setHttp503Source } = require('../utils/http503Diagnostics');
 
 function errorHandler(error, req, res, _next) {
   if (res.headersSent || res.writableEnded) return;
@@ -8,6 +9,7 @@ function errorHandler(error, req, res, _next) {
   const entityTooLarge = error?.type === 'entity.too.large' || error?.status === 413;
   const statusCode = isJsonSyntaxError ? 400 : entityTooLarge ? 413 : (Number.isInteger(error.statusCode) ? error.statusCode : 500);
   const code = isJsonSyntaxError ? 'INVALID_JSON' : entityTooLarge ? 'REQUEST_TOO_LARGE' : (error.code || 'INTERNAL_SERVER_ERROR');
+  if (statusCode === 503) setHttp503Source(classify503Source(error));
   const diagnostics = req.crmDiagnostics || error.crmDiagnostics || (req.originalUrl === '/api/crm/assistant' ? createCrmDiagnostics() : null);
   if (diagnostics) {
     diagnosticsFromError(error, diagnostics);
@@ -32,6 +34,15 @@ function errorHandler(error, req, res, _next) {
     },
     ...(diagnostics ? { request_id: diagnostics.request_id, diagnostics: publicCrmDiagnostics(diagnostics, env.crmDebug) } : {})
   });
+}
+
+function classify503Source(error) {
+  if (error.code === 'CRM_CIRCUIT_OPEN') return 'crm_circuit_breaker';
+  if (error.code === 'CRM_QUERY_BUDGET_EXCEEDED') return 'crm_query_budget';
+  if (error.zohoDiagnostics?.status === 503 || error.details?.upstream_status === 503 || error.response?.status === 503) {
+    return 'zoho_upstream';
+  }
+  return 'application_error';
 }
 
 function sanitizePublicErrorDetails(details) {
@@ -80,4 +91,4 @@ function sanitizePublicErrorDetails(details) {
   return Object.keys(sanitized).length ? sanitized : undefined;
 }
 
-module.exports = { errorHandler };
+module.exports = { errorHandler, classify503Source };

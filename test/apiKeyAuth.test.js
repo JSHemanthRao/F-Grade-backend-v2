@@ -96,7 +96,7 @@ test('rate limits anonymous CRM calls with a safe 429 response', async (t) => {
   assert.equal(aggregate.status, 200);
   assert.equal(aggregateLimited.status, 429);
   assert.equal(error.error.code, 'RATE_LIMIT_EXCEEDED');
-  assert.doesNotMatch(JSON.stringify(error), /redis|memory|bucket|127\.0\.0\.1/i);
+  assert.doesNotMatch(JSON.stringify(error), /storage|bucket|127\.0\.0\.1/i);
 });
 
 test('rejects malformed JSON and oversized JSON with controlled 400 and 413 responses', async (t) => {
@@ -142,12 +142,71 @@ test('rejects URL inputs, credentials, and arbitrary query parameters on bot end
   assert.equal(query.status, 400);
 });
 
-test('does not fall back to per-process limits in production without Redis', async () => {
-  const store = createRateLimitStore({ redisUrl: '', production: true });
-  await assert.rejects(
-    store.increment('hashed-client-key', 60000),
-    (error) => error.code === 'RATE_LIMIT_STORAGE_UNAVAILABLE'
-  );
+test('uses a bounded expiring process-local counter without external storage', async () => {
+  const store = createRateLimitStore({ maxEntries: 2 });
+  assert.equal((await store.increment('client-a', 60000)).count, 1);
+  assert.equal((await store.increment('client-a', 60000)).count, 2);
+  await store.increment('client-b', 50);
+  await store.increment('client-c', 50);
+  assert.equal((await store.increment('client-c', 60000)).count, 2);
+  assert.equal((await store.increment('client-a', 60000)).count, 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal((await store.increment('expiring-client', 5)).count, 1);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal((await store.increment('expiring-client', 5)).count, 1);
+});
+
+test('reports the exact application 503 source with safe request metadata', async (t) => {
+  const app = createApp({
+    crmService: {
+      query: async () => {
+        const error = new Error('CRM query budget exhausted');
+        error.code = 'CRM_QUERY_BUDGET_EXCEEDED';
+        error.statusCode = 503;
+        throw error;
+      }
+    }
+  });
+  const server = await startServer(t, app);
+  const loggedErrors = [];
+  const originalError = console.error;
+  console.error = (message) => loggedErrors.push(String(message));
+  try {
+    const response = await send(server, '/api/crm/assistant', { body: { question: 'Show me deals' } });
+    assert.equal(response.status, 503);
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    console.error = originalError;
+  }
+  const sourceLog = loggedErrors.find((message) => message.startsWith('[HTTP_503_SOURCE] '));
+  assert.ok(sourceLog);
+  const diagnostic = JSON.parse(sourceLog.slice('[HTTP_503_SOURCE] '.length));
+  assert.deepEqual(diagnostic, {
+    source: 'crm_query_budget',
+    route: '/api/crm/assistant',
+    method: 'POST',
+    zohoRequestStarted: false,
+    zohoStatus: null,
+    requestId: diagnostic.requestId
+  });
+  assert.equal(typeof diagnostic.requestId, 'string');
+});
+
+test('health route remains independent of bot rate limiting', async (t) => {
+  let limiterCalls = 0;
+  const app = createApp({
+    rateLimiters: {
+      crm: (_req, _res, next) => { limiterCalls += 1; next(); },
+      aggregate: (_req, _res, next) => { limiterCalls += 1; next(); },
+      audit: (_req, _res, next) => { limiterCalls += 1; next(); }
+    },
+    crmService: { query: async () => ({ data: [] }) }
+  });
+  const server = await startServer(t, app);
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/health`);
+  assert.equal(response.status, 200);
+  assert.equal(limiterCalls, 0);
 });
 
 test('rejects client-supplied conversation and continuation identifiers', async (t) => {

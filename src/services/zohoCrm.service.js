@@ -13,6 +13,7 @@ const { resolveModuleReference, assertResolvedModule, buildModuleRegistry, norma
 const { buildCoqlPagination } = require('../coql/coqlPagination');
 const { buildExecutableCoqlPlan } = require('../coql/coqlBuilder');
 const { ZohoAuditLogService } = require('./zohoAuditLog.service');
+const { markZohoRequestStarted, recordZohoStatus } = require('../utils/http503Diagnostics');
 
 class ZohoCrmService {
   constructor(httpClient = axios, configLoader = getZohoConfig, authService) {
@@ -58,15 +59,20 @@ class ZohoCrmService {
     while (attempt < maxAttempts) {
       await this.acquireSlot();
       try {
-        const response = await this.circuitBreaker.execute(() => method === 'get'
-          ? this.httpClient.get(url, requestOptions?.config)
-          : this.httpClient.post(url, requestOptions?.data, requestOptions?.config));
+        const response = await this.circuitBreaker.execute(() => {
+          markZohoRequestStarted();
+          return method === 'get'
+            ? this.httpClient.get(url, requestOptions?.config)
+            : this.httpClient.post(url, requestOptions?.data, requestOptions?.config);
+        });
+        recordZohoStatus(response.status);
         this.executionStats.successfulCalls += 1;
         updateDiagnostics(diagnostics, { zoho_http_status: response.status, zoho_error_code: null, zoho_error_message: null });
         recordCrmEvent('ZOHO_RESPONSE', diagnostics, { method: String(method || '').toUpperCase(), endpoint, status: response.status });
         log('info', `[ZOHO EXECUTION] method=${method} durationMs=${Date.now() - startedAt} retries=${attempt}`);
         return response;
       } catch (error) {
+        if (error.response?.status) recordZohoStatus(error.response.status);
         if (error.response?.status === 401 && !authRetried) {
           authRetried = true;
           this.authService.clearToken();

@@ -9,6 +9,7 @@ const { apiKeyAuth } = require('./middleware/apiKeyAuth');
 const { createBotRateLimiters } = require('./middleware/botProtection');
 const { env } = require('./config/env');
 const { createCrmDiagnostics } = require('./utils/crmDiagnostics');
+const { http503Diagnostics } = require('./utils/http503Diagnostics');
 
 function createApp({ crmService, rateLimiters, requestTimeoutMs } = {}) {
   const app = express();
@@ -20,6 +21,7 @@ function createApp({ crmService, rateLimiters, requestTimeoutMs } = {}) {
     if (req.path === '/api/crm/assistant') req.crmDiagnostics = createCrmDiagnostics();
     next();
   });
+  app.use(http503Diagnostics);
   app.use(express.json({ limit: env.requestBodyLimit }));
 
   app.use('/health', healthRoutes);

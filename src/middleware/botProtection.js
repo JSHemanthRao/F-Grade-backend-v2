@@ -1,16 +1,6 @@
 const { createHash } = require('node:crypto');
-const { createClient } = require('redis');
 const { env } = require('../config/env');
 const { log } = require('../utils/logger');
-
-const REDIS_INCREMENT_SCRIPT = `
-  local count = redis.call('INCR', KEYS[1])
-  if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
-  return { count, redis.call('PTTL', KEYS[1]) }
-`;
-
-let redisClient;
-let redisConnection;
 
 function createBotRateLimiters(options = {}) {
   const windowMs = options.windowMs || env.botRateLimitWindowMs;
@@ -56,28 +46,15 @@ function passThrough(_req, _res, next) {
   next();
 }
 
-function createRateLimitStore({ redisUrl = env.redisUrl, production = env.nodeEnv === 'production', redis = null } = {}) {
+function createRateLimitStore({ maxEntries = 10000 } = {}) {
   const memory = new Map();
+  const entryLimit = Number.isInteger(maxEntries) && maxEntries > 0 ? maxEntries : 10000;
   let hasLoggedFallback = false;
-  const redisConfigured = Boolean(redisUrl || redis);
 
   return {
     async increment(key, windowMs) {
-      if (redisConfigured) {
-        const client = redis || await getRedisClient(redisUrl);
-        const result = await client.eval(REDIS_INCREMENT_SCRIPT, {
-          keys: [key],
-          arguments: [String(windowMs)]
-        });
-        return { count: Number(result[0]), ttlMs: Number(result[1]) };
-      }
-      if (production) {
-        const error = new Error('Shared rate-limit storage is not configured.');
-        error.code = 'RATE_LIMIT_STORAGE_UNAVAILABLE';
-        throw error;
-      }
       if (!hasLoggedFallback) {
-        log('warn', '[BOT_RATE_LIMIT] storage=process_memory environment=non_production');
+        log('info', '[BOT_RATE_LIMIT] storage=process_memory');
         hasLoggedFallback = true;
       }
       const now = Date.now();
@@ -89,7 +66,7 @@ function createRateLimitStore({ redisUrl = env.redisUrl, production = env.nodeEn
         item = { count: 0, expiresAt: now + windowMs };
         memory.set(key, item);
       }
-      if (memory.size > 10000) memory.delete(memory.keys().next().value);
+      while (memory.size > entryLimit) memory.delete(memory.keys().next().value);
       item.count += 1;
       return { count: item.count, ttlMs: Math.max(0, item.expiresAt - now) };
     }
@@ -100,7 +77,7 @@ function createRateLimiter({ bucket, limit, windowMs, store }) {
   return async function rateLimitBotRequest(req, res, next) {
     const identity = req.ip || req.socket?.remoteAddress || 'unknown';
     const identityHash = createHash('sha256').update(identity).digest('hex');
-    const key = `${env.redisPrefix}bot-rate:${bucket}:${identityHash}`;
+    const key = `bot-rate:${bucket}:${identityHash}`;
     try {
       const result = await store.increment(key, windowMs);
       if (result.count > limit) {
@@ -112,12 +89,7 @@ function createRateLimiter({ bucket, limit, windowMs, store }) {
       }
       return next();
     } catch (error) {
-      log('error', `[BOT_RATE_LIMIT] storage_unavailable=${error.code || 'unknown'}`);
-      return res.status(503).json({
-        success: false,
-        status: 'error',
-        error: { code: 'SERVICE_TEMPORARILY_UNAVAILABLE', message: 'The service is temporarily unavailable.' }
-      });
+      return next(error);
     }
   };
 }
@@ -204,21 +176,6 @@ function requestTimeout(timeoutMs = env.requestTimeoutMs) {
     res.once('close', () => clearTimeout(timer));
     next();
   };
-}
-
-async function getRedisClient(redisUrl = env.redisUrl) {
-  if (!redisClient) {
-    redisClient = createClient({ url: redisUrl });
-    redisClient.on('error', () => log('error', '[BOT_RATE_LIMIT] redis_connection_error'));
-  }
-  if (!redisConnection) {
-    redisConnection = redisClient.connect().catch((error) => {
-      redisConnection = null;
-      throw error;
-    });
-  }
-  await redisConnection;
-  return redisClient;
 }
 
 module.exports = {

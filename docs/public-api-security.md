@@ -38,12 +38,9 @@ Defaults are per client IP and per one-minute window:
 - Audit Log exports: 5 requests.
 
 Override with `BOT_RATE_LIMIT_WINDOW_MS`, `BOT_CRM_RATE_LIMIT`,
-`BOT_AGGREGATE_RATE_LIMIT`, and `BOT_AUDIT_RATE_LIMIT`. With `REDIS_URL`
-configured, counters are atomic and shared through the existing Redis
-infrastructure. Production requests fail closed with HTTP 503 if Redis is
-missing or unavailable; configure Render with a reachable Redis URL before
-enabling anonymous routes. Only non-production environments may use the
-bounded process-memory fallback, which is not suitable for multiple instances.
+`BOT_AGGREGATE_RATE_LIMIT`, and `BOT_AUDIT_RATE_LIMIT`. Counters are bounded,
+automatically expiring, and process-local. They require no external service and
+are not shared between backend instances.
 
 `REQUEST_BODY_LIMIT` defaults to 100 KB. `REQUEST_TIMEOUT_MS` defaults to 60
 seconds. Zoho OAuth and API calls retain their configured upstream timeout and
@@ -55,12 +52,13 @@ select an arbitrary Zoho URL.
 
 Anonymous access is an intentional security tradeoff: anyone who can reach the
 Render host can invoke the two read operations, subject to the limits above.
-Rate limiting reduces abuse but is not proof of caller identity and does not
-prevent distributed abuse. Restrict Zoho OAuth scopes, monitor safe usage
-metrics, and configure edge-level protections if stronger caller identity or
-abuse controls become necessary. These endpoints cannot create, update, or
-delete CRM records through the exposed query contract; the Audit Log endpoint
-returns audit data available to the configured Zoho identity.
+Process-local rate limiting reduces abuse but is not proof of caller identity,
+is not shared across instances, and does not prevent distributed abuse. Restrict
+Zoho OAuth scopes, monitor safe usage metrics, and configure edge-level
+protections if stronger caller identity or abuse controls become necessary.
+These endpoints cannot create, update, or delete CRM records through the
+exposed query contract; the Audit Log endpoint returns audit data available to
+the configured Zoho identity.
 
 Do not log or return Zoho tokens, client secrets, environment values, API keys,
 Authorization headers, raw Axios responses, or signed download URLs. Never
