@@ -583,17 +583,18 @@ function formatAuditTable(records) {
 
 function isAuditLogQuestion(lowerText) {
   const hasScheduledActivityWords = /\b(?:task|tasks|call|calls|meeting|meetings|event|events)\b/.test(lowerText);
-  const hasAuditKeywords = /\b(?:audit\s+(?:log|trail|history)|audit|change\s+log|changes?\s+log)\b/.test(lowerText);
+  const hasLogHistoryIntent = /\b(?:activity|activities|updates?|changes?)\b/.test(lowerText);
+  const hasAuditKeywords = /\b(?:audit\s+(?:log|trail|history)|audit|change\s+log|changes?\s+log|logs?)\b/.test(lowerText);
   const hasWhoChanged = /\b(?:who\s+(?:changed|updated|deleted|added|created|modified))\b/.test(lowerText);
   const hasWhatChanged = /\b(?:what\s+changed|what\s+was\s+(?:added|updated|deleted|modified|created))\b/.test(lowerText);
 
-  // Scheduled activity words without explicit audit/change keywords route to ordinary CRM modules (Calls, Meetings, Tasks)
-  if (hasScheduledActivityWords && !hasAuditKeywords && !hasWhoChanged && !hasWhatChanged) {
+  // Explicit Calls, Meetings, and Tasks requests use their own modules; activity/history requests use audit logs.
+  if (hasScheduledActivityWords && !hasLogHistoryIntent && !hasAuditKeywords && !hasWhoChanged && !hasWhatChanged) {
     return false;
   }
 
   // 1. Explicit audit log / trail / history / change questions
-  if (hasAuditKeywords || hasWhoChanged || hasWhatChanged) {
+  if (hasLogHistoryIntent || hasAuditKeywords || hasWhoChanged || hasWhatChanged) {
     return true;
   }
 
@@ -687,13 +688,14 @@ function extractAuditUserName(text) {
   const namePattern = "([a-z][a-z .'-]*?)";
   const endPattern = "(?=\\s+(?:update|updated|add|added|delete|deleted|today|yesterday|this|last|on|in|between|for|during)\\b|[?.!]|$)";
   const patterns = [
-    new RegExp(`\\b(?:give|show|fetch|get|list)\\s+(?:me\\s+)?(?:the\\s+)?${namePattern}['’]s\\s+(?:crm\\s+)?(?:activity|activities|updates?|changes?)\\b`, 'i'),
+    new RegExp(`\\b(?:give|show|fetch|get|list)\\s+(?:me\\s+)?(?:the\\s+)?${namePattern}(?:['’]s)?\\s+(?:crm\\s+)?(?:activity|activities|updates?|changes?)\\b`, 'i'),
     new RegExp(`\\b(?:what did|what activity did|activity done by|done by|performed by|made by|changed by|updated by|created by|deleted by)\\s+${namePattern}${endPattern}`, 'i'),
     new RegExp(`\\b(?:activity|activities|updates?|changes?)\\s+(?:done\\s+)?(?:by|for|of)\\s+${namePattern}${endPattern}`, 'i')
   ];
+  const genericSubjects = new Set(['all', 'any', 'me', 'my', 'our', 'the', 'their', 'your', 'today', 'todays', 'yesterday', 'tomorrow', 'crm', 'logs']);
   for (const pattern of patterns) {
     const match = text.match(pattern);
-    if (match?.[1]) return match[1].trim();
+    if (match?.[1] && !genericSubjects.has(match[1].trim().toLowerCase())) return match[1].trim();
   }
   return null;
 }

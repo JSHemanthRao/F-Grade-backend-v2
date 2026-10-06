@@ -351,10 +351,9 @@ test('keeps custom CRM module phrases on the record path instead of forcing Acco
 
 test('separates generic activity questions from audit-log questions', () => {
   const activityRequest = planQuestion('Give me update of yesterday');
-  assert.equal(activityRequest.request_type, 'analysis');
-  assert.equal(activityRequest.analysis.type, 'today_activity');
-  assert.equal(activityRequest.module, 'CRM');
-  assert.notEqual(activityRequest.request_type, 'audit_log');
+  assert.equal(activityRequest.request_type, 'audit_log');
+  assert.equal(activityRequest.module, null);
+  assert.equal(activityRequest.audit_log.date_range.field, 'audited_time');
 
   const auditRequest = planQuestion('Who changed deals yesterday?');
   assert.equal(auditRequest.request_type, 'audit_log');
@@ -389,6 +388,33 @@ test('routes generic activity to the canonical audit_log intent', () => {
   assert.equal(planQuestion('What did John Smith update yesterday?').audit_log.user.name, 'John Smith');
   assert.equal(planQuestion('What did John Smith update yesterday?').audit_log.action, 'Updated');
   assert.equal(planQuestion('Show Deal activity today.').audit_log.entity, 'Deals');
+});
+
+test('routes generic dated activity and person-specific updates to audit logs', () => {
+  const generic = planQuestion('Give me activity on 6th of October');
+  assert.equal(generic.intent, 'audit_log');
+  assert.equal(generic.module, null);
+  assert.equal(generic.audit_log.date_range.start, `${new Date().getFullYear()}-10-06`);
+  assert.equal(generic.audit_log.date_range.end, `${new Date().getFullYear()}-10-07`);
+
+  const named = planQuestion('Give me Phanindra updates on 6th October');
+  assert.equal(named.intent, 'audit_log');
+  assert.deepEqual(named.audit_log.user, { name: 'Phanindra', id: null });
+  assert.equal(named.audit_log.action, 'Updated');
+  assert.equal(named.audit_log.date_range.start, `${new Date().getFullYear()}-10-06`);
+
+  const plain = planQuestion('Give me activity');
+  assert.equal(plain.intent, 'audit_log');
+  assert.equal(plain.module, null);
+  assert.equal(plain.audit_log.user, null);
+
+  const genericToday = planQuestion("Show today's activity including tasks, calls, and meetings");
+  assert.equal(genericToday.intent, 'audit_log');
+  assert.equal(genericToday.audit_log.user, null);
+
+  const explicitLogs = planQuestion('Get me the updates from logs');
+  assert.equal(explicitLogs.intent, 'audit_log');
+  assert.equal(explicitLogs.request_type, 'audit_log');
 });
 
 test('routes cross-module updated-record questions to the audit log before module resolution', () => {
@@ -433,19 +459,19 @@ test('does not reject activity history as an explicit Tasks module', async () =>
   assert.equal(captured.request_type, 'audit_log');
 });
 
-test('routes today activity including tasks, calls, and meetings as one CRM activity request', async () => {
+test('routes activity history including scheduled-module words to audit logs', async () => {
   let captured;
   const controller = createCrmController({
     query: async (input) => {
       captured = input;
-      return { module: 'CRM', request_type: 'analysis', analysis: 'today_activity', data: [], pagination: { limit: input.limit, offset: input.offset, returned: 0, more_records: false } };
+      return { module: null, request_type: 'audit_log', data: [], pagination: { limit: input.limit, offset: input.offset, returned: 0, more_records: false } };
     }
   });
   const response = () => ({ status: () => ({ json: (value) => value }), json: (value) => value });
   await controller.assistant({ body: { question: "Show me today's activity including tasks, calls, and meetings for today 09/16/2026" } }, response(), (error) => { throw error; });
-  assert.equal(captured.module, 'CRM');
-  assert.equal(captured.activity_type, 'SCHEDULED_ACTIVITY');
-  assert.deepEqual(captured.analysis, { type: 'today_activity', activity_type: 'SCHEDULED_ACTIVITY' });
+  assert.equal(captured.module, null);
+  assert.equal(captured.intent, 'audit_log');
+  assert.equal(captured.request_type, 'audit_log');
 });
 
 test('resolves today deal fields only from live metadata before Zoho execution', async () => {
