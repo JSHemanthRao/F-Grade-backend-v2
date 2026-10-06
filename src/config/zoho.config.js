@@ -35,7 +35,7 @@ function getZohoConfig() {
     bulkApiBaseUrl: process.env.ZOHO_BULK_API_BASE_URL || deriveBulkApiBaseUrl(apiBaseUrl),
     clientId: required('ZOHO_CRM_CLIENT_ID', 'ZOHO_CLIENT_ID', 'CLIENT_ID'),
     clientSecret: required('ZOHO_CRM_CLIENT_SECRET', 'ZOHO_CLIENT_SECRET', 'CLIENT_SECRET'),
-    refreshToken: required('ZOHO_CRMREFRESH_TOKEN_CRM', 'ZOHO_CRM_REFRESH_TOKEN', 'ZOHO_REFRESH_TOKEN', 'REFRESH_TOKEN'),
+    refreshToken: required('ZOHO_REFRESH_TOKEN', 'ZOHO_REFRESH_TOKEN_CRM', 'ZOHO_CRM_REFRESH_TOKEN', 'ZOHO_CRMREFRESH_TOKEN_CRM', 'REFRESH_TOKEN'),
     timeoutMs: env.zohoRequestTimeoutMs
   };
 }

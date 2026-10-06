@@ -93,25 +93,29 @@ class CrmService {
       typeof this.zohoService.resolveModuleReference === "function"
     ) {
       const moduleReference = input.original_question;
-      const resolvedModule =
-        await this.zohoService.resolveModuleReference(moduleReference);
-      input = {
-        ...input,
-        module: resolvedModule.semantic_name,
-        module_api_name: resolvedModule.api_name,
-        primary_entity: {
-          ...(input.primary_entity || {}),
+      try {
+        const resolvedModule =
+          await this.zohoService.resolveModuleReference(moduleReference);
+        input = {
+          ...input,
           module: resolvedModule.semantic_name,
           module_api_name: resolvedModule.api_name,
-        },
-        module_resolution: {
-          reference: moduleReference,
-          semantic_name: resolvedModule.semantic_name,
-          api_name: resolvedModule.api_name,
-          confidence: resolvedModule.confidence,
-          match_type: resolvedModule.match_type,
-        },
-      };
+          primary_entity: {
+            ...(input.primary_entity || {}),
+            module: resolvedModule.semantic_name,
+            module_api_name: resolvedModule.api_name,
+          },
+          module_resolution: {
+            reference: moduleReference,
+            semantic_name: resolvedModule.semantic_name,
+            api_name: resolvedModule.api_name,
+            confidence: resolvedModule.confidence,
+            match_type: resolvedModule.match_type,
+          },
+        };
+      } catch (error) {
+        if (error.code !== "MODULE_NOT_FOUND") throw error;
+      }
     }
     input = reconcileConnectorModuleFieldScope(input);
     const activeDiagnostics = diagnostics || getCurrentCrmDiagnostics();
@@ -278,7 +282,7 @@ class CrmService {
       module: request.module,
       module_api_name: request.module_api_name,
       retrieval_strategy: retrievalStrategy,
-      filters: request.filters,
+      filters: request.filters.map(({ field, operator }) => ({ field, operator })),
     });
     if (typeof this.zohoService.resolveLookupFilters === "function") {
       request.filters = await this.zohoService.resolveLookupFilters(
@@ -331,9 +335,6 @@ class CrmService {
           request.module_api_name ||
           (await this.zohoService.resolveModuleApiName(request.module)),
         request_type: "bulk_read",
-        job_id: result.job_id,
-        status: result.status,
-        download_url: result.download_url,
         returned: data.length,
         more_records: false,
         records: data,
@@ -385,6 +386,8 @@ class CrmService {
           ),
         closed_won_summary: () =>
           this.closedWonSummary(request, executionContext),
+        revenue_summary: () =>
+          this.revenueSummary(request, executionContext),
         count_and_records: () =>
           this.countAndRecords(
             request,
@@ -1744,6 +1747,43 @@ class CrmService {
       count,
       total_amount: totalAmount,
       average_amount: averageAmount,
+      ...(currency ? { currency } : {}),
+      filters: request.filters,
+      data: [],
+      pagination: {
+        limit: request.limit,
+        offset: request.offset,
+        returned: 0,
+        more_records: false,
+      },
+    };
+  }
+
+  async revenueSummary(request, executionContext = createExecutionContext()) {
+    const amountField = request.aggregate?.field || "Amount";
+    validateAggregateQuery({
+      module: request.module,
+      fields: ["id", amountField],
+      filters: request.filters,
+      aggregate: { operation: "sum", field: amountField },
+    });
+    const whereClause = buildWhereClause(buildFilterClauses(request.filters));
+    const query = `select COUNT(id), SUM(${amountField}) from ${CRM_API_NAMES.Deals} where ${whereClause}`;
+    const result = await executeCached(
+      executionContext,
+      `revenue-summary:${query}`,
+      () => this.zohoService.aggregate(query),
+    );
+    const row = result.rows[0] || {};
+    const count = aggregateNumber(row, "COUNT(id)");
+    const totalAmount = aggregateNumber(row, `SUM(${amountField})`);
+    const currency = row.currency || row.Currency || null;
+    return {
+      module: request.module,
+      request_type: "analysis",
+      analysis: "revenue_summary",
+      count,
+      total_amount: totalAmount,
       ...(currency ? { currency } : {}),
       filters: request.filters,
       data: [],

@@ -3,7 +3,7 @@ const { getZohoConfig } = require('../config/zoho.config');
 const { ZohoAuthService } = require('./zohoAuth.service');
 const { buildModuleCriteria } = require('./coql.service');
 const { createAppError } = require('../utils/errors');
-const { log } = require('../utils/logger');
+const { log, redactSensitiveLogData } = require('../utils/logger');
 const { env } = require('../config/env');
 const { CircuitBreaker, isTransientFailure } = require('../utils/circuitBreaker');
 const { CRM_API_NAMES } = require('../constants/crmModules');
@@ -47,6 +47,8 @@ class ZohoCrmService {
     assertReadOnlyRequest(method, url);
     const maxAttempts = options?.retrySameRequest === false ? 1 : Math.max(1, env.zohoMaxRetries + 1);
     let attempt = 0;
+    let authRetried = false;
+    let requestOptions = options;
     const startedAt = Date.now();
     this.executionStats.calls += 1;
     const endpoint = safeEndpoint(url);
@@ -57,14 +59,65 @@ class ZohoCrmService {
       await this.acquireSlot();
       try {
         const response = await this.circuitBreaker.execute(() => method === 'get'
-          ? this.httpClient.get(url, options?.config)
-          : this.httpClient.post(url, options?.data, options?.config));
+          ? this.httpClient.get(url, requestOptions?.config)
+          : this.httpClient.post(url, requestOptions?.data, requestOptions?.config));
         this.executionStats.successfulCalls += 1;
         updateDiagnostics(diagnostics, { zoho_http_status: response.status, zoho_error_code: null, zoho_error_message: null });
         recordCrmEvent('ZOHO_RESPONSE', diagnostics, { method: String(method || '').toUpperCase(), endpoint, status: response.status });
         log('info', `[ZOHO EXECUTION] method=${method} durationMs=${Date.now() - startedAt} retries=${attempt}`);
         return response;
       } catch (error) {
+        if (error.response?.status === 401 && !authRetried) {
+          authRetried = true;
+          this.authService.clearToken();
+          try {
+            const refreshedToken = await this.authService.getAccessToken();
+            requestOptions = {
+              ...requestOptions,
+              config: {
+                ...requestOptions?.config,
+                headers: {
+                  ...requestOptions?.config?.headers,
+                  Authorization: `Zoho-oauthtoken ${refreshedToken}`
+                }
+              }
+            };
+            this.executionStats.retries += 1;
+            log('warn', `[ZOHO AUTH RETRY] endpoint=${endpoint} retry=1`);
+            continue;
+          } catch (_refreshError) {
+            this.executionStats.failedCalls += 1;
+            throw createAppError(
+              'ZOHO_AUTHENTICATION_ERROR',
+              'Unable to refresh Zoho CRM authentication.',
+              502,
+              { endpoint, upstream_status: 401 }
+            );
+          }
+        }
+        if (error.response?.status === 401 && authRetried) {
+          const upstreamCode = error.response?.data?.code || 'AUTHENTICATION_FAILURE';
+          this.executionStats.failedCalls += 1;
+          const authError = createAppError(
+            'ZOHO_OAUTH_UNAUTHORIZED',
+            'Zoho CRM rejected authentication after the access token was refreshed.',
+            502,
+            { endpoint, upstream_status: 401, upstream_code: upstreamCode }
+          );
+          authError.zohoDiagnostics = {
+            method: String(method || '').toUpperCase(),
+            endpoint,
+            status: 401,
+            code: upstreamCode,
+            message: redactSensitiveLogData(error.response?.data?.message || '')
+          };
+          updateDiagnostics(diagnostics, {
+            zoho_http_status: 401,
+            zoho_error_code: upstreamCode,
+            zoho_error_message: authError.zohoDiagnostics.message
+          });
+          throw authError;
+        }
         attempt += 1;
         if (attempt >= maxAttempts || !isTransientFailure(error)) {
           this.executionStats.failedCalls += 1;
@@ -152,14 +205,20 @@ class ZohoCrmService {
     const executablePlan = buildExecutableCoqlPlan({ ...request, module: resolvedModule, fields: finalFields });
     const selectQuery = `${executablePlan.select_query}${buildCoqlPagination(request.limit, request.offset)}`;
     updateDiagnostics(getCurrentCrmDiagnostics(), { coql_offset: request.offset });
-    log('info', `[COQL REQUEST] ${JSON.stringify({ module: resolvedModule, limit: request.limit, offset: request.offset, select_query: selectQuery })}`);
+    log('info', `[COQL REQUEST] ${JSON.stringify({
+      module: resolvedModule,
+      field_count: finalFields.length,
+      filter_count: request.filters?.length || 0,
+      limit: request.limit,
+      offset: request.offset
+    })}`);
     return this.executeQueryRequest(selectQuery, token, config, request, resolvedModule);
   }
 
   async executeQueryRequest(selectQuery, token, config, request, resolvedModule) {
     const apiBaseUrl = normalizeCrmBaseUrl(this.authService.getApiDomain() || config.apiBaseUrl);
     updateDiagnostics(getCurrentCrmDiagnostics(), { final_query: selectQuery });
-    log('info', `[COQL query] operation=record_query module=${resolvedModule} select_query=${selectQuery}`);
+    log('info', `[COQL query] operation=record_query module=${resolvedModule}`);
     try {
       const response = await this.executeRequest('post', `${apiBaseUrl}/coql`, { data: { select_query: selectQuery }, config: {
         headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
@@ -172,14 +231,14 @@ class ZohoCrmService {
       return { records, info, module_api_name: resolvedModule || request?.module || null };
     } catch (error) {
       if (error.response?.status === 401) this.authService.clearToken();
-      const upstreamMessage = String(error.response?.data?.message || error.message || '');
-      log('error', `[ZOHO QUERY FAILURE] operation=record_query status=${error.response?.status || 'unknown'} message=${upstreamMessage.replace(/\n/g, ' ')}`);
+      if (error.code === 'ZOHO_AUTHENTICATION_ERROR') throw error;
+      const upstreamMessage = String(error.response?.data?.message || '');
+      log('error', `[ZOHO QUERY FAILURE] operation=record_query status=${error.response?.status || 'unknown'} code=${error.response?.data?.code || 'unknown'}`);
 
-      throw createAppError(normalizeZohoErrorCode(error, 'ZOHO_READ_ERROR'), upstreamMessage || 'Unable to retrieve CRM data.', mapZohoStatus(error.response?.status, error.response?.data?.code), {
+      throw createAppError(normalizeZohoErrorCode(error, 'ZOHO_READ_ERROR'), upstreamMessage ? redactSensitiveLogData(upstreamMessage) : 'Unable to retrieve CRM data.', mapZohoStatus(error.response?.status, error.response?.data?.code), {
         ...safeZohoDetails(error, 'ZohoCRM.coql.READ'),
         operation: 'record_query',
-        query_stage: 'zoho_execution',
-        query: selectQuery
+        query_stage: 'zoho_execution'
       });
     }
   }
@@ -829,8 +888,8 @@ function parseCsvLine(line) {
 }
 
 function mapZohoStatus(status, upstreamCode) {
-  if (upstreamCode === 'OAUTH_SCOPE_MISMATCH' || upstreamCode === 'AUTHENTICATION_FAILURE') return 401;
   if (upstreamCode === 'NO_PERMISSION') return 403;
+  if (status === 401) return 502;
   return [400, 401, 403, 404, 429].includes(status) ? status : 502;
 }
 
@@ -840,9 +899,13 @@ function safeZohoDetails(error, requiredScope) {
   return {
     endpoint: error?.zohoDiagnostics?.endpoint,
     method: error?.zohoDiagnostics?.method,
-    upstream_status: response?.status,
-    upstream_code: typeof payload?.code === 'string' ? payload.code : undefined,
-    upstream_message: typeof payload?.message === 'string' ? payload.message : undefined
+    upstream_status: response?.status ?? error.details?.upstream_status ?? error.zohoDiagnostics?.status,
+    upstream_code: typeof payload?.code === 'string'
+      ? payload.code
+      : error.details?.upstream_code || error.zohoDiagnostics?.code,
+    upstream_message: typeof payload?.message === 'string'
+      ? redactSensitiveLogData(payload.message)
+      : error.zohoDiagnostics?.message
     ,required_read_scope: requiredScope
   };
 }
@@ -850,13 +913,14 @@ function safeZohoDetails(error, requiredScope) {
 function safeEndpoint(url) {
   try {
     const parsed = new URL(String(url));
-    return `${parsed.pathname}${parsed.search}`;
+    return parsed.pathname;
   } catch (_error) {
     return String(url || 'not_reached').replace(/https?:\/\/[^/]+/i, '');
   }
 }
 
 function normalizeZohoErrorCode(error, fallback) {
+  if (['ZOHO_AUTHENTICATION_ERROR', 'ZOHO_OAUTH_UNAUTHORIZED'].includes(error.code)) return error.code;
   const upstreamCode = String(error.response?.data?.code || '').trim();
   if (upstreamCode) return upstreamCode;
   const status = error.response?.status;

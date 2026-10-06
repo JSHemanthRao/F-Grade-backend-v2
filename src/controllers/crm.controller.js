@@ -5,7 +5,7 @@ const { resolveRelativePeriod, relativePeriodFromText } = require('../utils/rela
 const { createCrmDiagnostics, recordCrmEvent, runWithCrmDiagnostics, diagnosticsFromError, publicCrmDiagnostics, updateDiagnostics } = require('../utils/crmDiagnostics');
 const { env } = require('../config/env');
 const { createCrmQueryPlanner } = require('../planners/crmQueryPlanner');
-const { analyzeCrmQuestion } = require('../query/questionAnalyzer');
+const { analyzeCrmQuestion, assertCrmDomain } = require('../query/questionAnalyzer');
 const { CrmAssistantService } = require('../services/crmAssistant.service');
 const { PaginationManager } = require('../pagination/paginationManager');
 const { PaginationEngine } = require('../pagination/paginationEngine');
@@ -203,8 +203,7 @@ function createCrmController(crmService = new CrmService()) {
             record_id: n.record_id,
             record_name: n.record_name === 'Not available' ? null : n.record_name,
             performed_by: n.performed_by,
-            description: n.description === 'Not available' ? null : n.description,
-            raw: r
+            description: n.description === 'Not available' ? null : n.description
           };
         });
 
@@ -279,7 +278,7 @@ function createCrmController(crmService = new CrmService()) {
     assistant: async (req, res, next) => {
       const diagnostics = req.crmDiagnostics || createCrmDiagnostics();
       req.crmDiagnostics = diagnostics;
-      recordCrmEvent('REQUEST_RECEIVED', diagnostics, { method: req.method, path: req.originalUrl });
+      recordCrmEvent('REQUEST_RECEIVED', diagnostics, { method: req.method, path: req.path });
       return runWithCrmDiagnostics(diagnostics, async () => {
        try {
         if (isStructuredCrmJson(req.body)) {
@@ -301,6 +300,9 @@ function createCrmController(crmService = new CrmService()) {
         const continuationToken = resolveContinuationToken(req);
         const assistantResponse = await assistantService.execute({ question, conversationId, continuationToken, diagnostics });
         const result = assistantResponse?.result || {};
+        const publicResult = Object.fromEntries(Object.entries(result).filter(([key]) => (
+          !/^(?:module_api_name|fields|metadata|metadata_sample|final_query|query|raw|download_url|job_id|continuation_token|conversation_id|access_token|refresh_token|client_secret|api_key|authorization)$/i.test(key)
+        )));
         const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
         const records = Array.isArray(result.data) ? result.data : Array.isArray(result.records) ? result.records : [];
         const responsePagination = assistantResponse?.pagination || paginationEngine.buildPaginationMetadata({
@@ -315,17 +317,15 @@ function createCrmController(crmService = new CrmService()) {
           request_id: diagnostics.request_id,
           question: assistantResponse?.question || submittedQuestion,
           request: { question: submittedQuestion },
-          ...result,
+          ...publicResult,
           data: records,
           records,
           count: result.count ?? records.length,
           pagination: responsePagination,
-          query: { module: result.module || null, request_type: result.request_type || 'records', filters: result.filters || [] },
+          query: { module: result.module || null, request_type: result.request_type || 'records' },
           answer: assistantResponse?.answer || (Array.isArray(records) && records.length ? `Retrieved ${records.length} ${result.module || 'CRM'} records.` : 'No CRM records matched the request.'),
           diagnostics: publicDiagnostics
         };
-        if (conversationId) payload.conversation_id = conversationId;
-        if (assistantResponse?.continuation_token) payload.continuation_token = assistantResponse.continuation_token;
         res.status(200).json(payload);
         return;
         } catch (error) {
@@ -411,7 +411,6 @@ async function executeStructuredCrmJson(body, crmService, diagnostics, paginatio
     schema_version: normalized.schema_version,
     request: {
       module: result.module || normalized.plan.module,
-      module_api_name: result.module_api_name || normalized.plan.module_api_name || null,
       operation: body.request.operation
     },
     data: records,
@@ -420,10 +419,8 @@ async function executeStructuredCrmJson(body, crmService, diagnostics, paginatio
     pagination,
     page: { number: paginationEngine.calculatePageNumber(pagination) },
     query: {
-      fingerprint: normalized.query_fingerprint,
-      fields: result.fields || normalized.plan.fields,
-      filters: result.filters || normalized.plan.filters,
-      sort: result.sort || normalized.plan.sort
+      module: result.module || normalized.plan.module,
+      request_type: result.request_type || normalized.plan.request_type
     }
   };
 }
@@ -554,8 +551,7 @@ function normalizeAuditRecord(row) {
       ? row.performed_by
       : (performedBy ? { name: performedBy } : { name: 'Not available' }),
     performed_by_name: performedBy || 'Not available',
-    description: typeof details === 'object' ? JSON.stringify(details) : (details || 'Not available'),
-    raw: row
+    description: typeof details === 'object' ? JSON.stringify(details) : (details || 'Not available')
   };
 }
 
@@ -898,6 +894,7 @@ function planQuestion(question) {
   }
 
   const lower = text.toLowerCase();
+  assertCrmDomain(text);
   if (isAuditLogQuestion(lower)) return buildAuditLogPlan(text, lower);
   if (isTodayActivityQuestion(lower)) {
     const activityType = detectActivityType(lower) || 'ACTIVITY_HISTORY';
@@ -913,7 +910,13 @@ function planQuestion(question) {
       offset: 0
     };
   }
-  const detectedModule = extractExplicitModule(lower) || detectModule(lower);
+  const explicitModule = extractExplicitModule(lower);
+  const knownExplicitModule = CRM_MODULES[explicitModule] ? explicitModule : null;
+  const revenueIntent = /\b(?:revenue|sales generated)\b/.test(lower)
+    && /\b(?:last|previous) month\b/.test(lower);
+  const detectedModule = knownExplicitModule
+    || detectModule(lower)
+    || (revenueIntent ? 'Deals' : explicitModule);
   const comparedModules = extractComparedModules(lower);
   if (comparedModules.length > 1 && !isComprehensiveSalesPerformanceRequest(lower) && /\b(?:compare|versus|vs|difference|higher|lower|more|less)\b/.test(lower)) {
     const period = relativePeriodFromText(lower) || 'this week';
@@ -1180,6 +1183,23 @@ function planQuestion(question) {
     };
   }
 
+  if (module === 'Deals' && revenueIntent) {
+    if (!filters.some((filter) => filter.field === 'Stage')) {
+      filters.push({ field: 'Stage', operator: 'equals', value: 'Closed Won' });
+    }
+    return {
+      module: 'Deals',
+      complexity: 'MODERATE',
+      request_type: 'analysis',
+      analysis: { type: 'revenue_summary' },
+      aggregate: { operation: 'sum', field: 'Amount' },
+      fields: ['id', 'Amount', 'Closing_Date', 'Stage'],
+      filters,
+      limit: 1,
+      offset: 0
+    };
+  }
+
   if (module === 'Deals' && /(closed won|closed-won)/.test(lower) && /(this month|current month|last month|previous month)/.test(lower)) {
     return {
       module: 'Deals',
@@ -1400,6 +1420,12 @@ function buildAssistantAnswer(question, result) {
     return `Closed Won Deals for ${range[0] || 'the selected period'} through ${range[1] || 'the selected period'}: ${result.count} deals, ${formatAmount(result.total_amount, result.currency)} total amount, and ${formatAmount(result.average_amount, result.currency)} average deal value.`;
   }
 
+  if (result?.analysis === 'revenue_summary') {
+    const range = result.filters?.find((filter) => filter.field === 'Closing_Date')?.value || [];
+    const rangeText = range.length === 2 ? ` (${range[0]} to ${range[1]} exclusive)` : '';
+    return `Revenue generated last month: ${formatAmount(result.total_amount, result.currency)} from ${result.count} Closed Won deals${rangeText}.`;
+  }
+
   if (result?.analysis === 'count_and_records') {
     return `I found ${result.count} matching ${module.toLowerCase()} records and retrieved ${result.data?.length || 0} for display.`;
   }
@@ -1561,6 +1587,7 @@ function detectModule(lowerText) {
     ['SalesInbox', /\bsales\s*inbox\b/],
     ['Leads', /\b(?:lead|leads)\b/],
     ['Deals', /\b(?:deal|deals)\b/],
+    ['Quotes', /\b(?:quote|quotes)\b/],
     ['Accounts', /\b(?:account|accounts)\b/],
     ['Contacts', /\b(?:contact|contacts)\b/],
     ['Vendors', /\b(?:vendor|vendors)\b/],
@@ -1617,6 +1644,7 @@ function extractExplicitModule(lowerText) {
     ['Contacts', /\b(?:contact|contacts)\b/i],
     ['Accounts', /\b(?:account|accounts)\b/i],
     ['Deals', /\b(?:deal|deals)\b/i],
+    ['Quotes', /\b(?:quote|quotes)\b/i],
     ['Vendors', /\b(?:vendor|vendors)\b/i],
     ['Campaigns', /\b(?:campaign|campaigns)\b/i],
     ['Renewal Accounts', /\brenewal accounts?\b/i],
@@ -1997,7 +2025,9 @@ function dateFieldForQuestion(lowerText, module) {
   }
   if (module !== 'Deals') return 'Created_Time';
   const closeDatePhrase = /(closing\s+date|close\s+date|closed\s+date|deal\s+close|deal close)/i;
-  if (/(created|creation|new|added|entered|today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)/.test(lowerText)
+  if (/(created|creation|new|added|entered)/.test(lowerText) && !closeDatePhrase.test(lowerText)) return 'Created_Time';
+  if (/(?:closed\s*won|revenue|sales generated)/.test(lowerText)) return 'Closing_Date';
+  if (/(today|yesterday|tomorrow|this week|last week|next week|this month|last month|next month|this quarter|last quarter|next quarter|this year|last year|next year)/.test(lowerText)
     && !closeDatePhrase.test(lowerText)) return 'Created_Time';
   return 'Closing_Date';
 }

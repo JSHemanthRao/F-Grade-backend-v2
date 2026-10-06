@@ -78,6 +78,32 @@ test('calculates Closed Won monthly metrics from one consistently filtered aggre
   assert.deepEqual({ count: result.count, total_amount: result.total_amount, average_amount: result.average_amount }, { count: 4, total_amount: 1000, average_amount: 250 });
 });
 
+test('calculates last-month revenue using only SUM and Closed Won deal count', async () => {
+  let query;
+  const service = new CrmService({
+    aggregate: async (selectQuery) => {
+      query = selectQuery;
+      return { rows: [{ 'COUNT(id)': 43, 'SUM(Amount)': 2702352.97, Currency: 'INR' }] };
+    }
+  });
+  const result = await service.revenueSummary({
+    module: 'Deals',
+    aggregate: { operation: 'sum', field: 'Amount' },
+    filters: [
+      { field: 'Closing_Date', operator: 'between', value: ['2026-09-01', '2026-10-01'], exclusive_end: true },
+      { field: 'Stage', operator: 'equals', value: 'Closed Won' }
+    ],
+    limit: 1,
+    offset: 0
+  });
+
+  assert.equal(query, "select COUNT(id), SUM(Amount) from Deals where ((Closing_Date >= '2026-09-01' and Closing_Date < '2026-10-01') and (Stage = 'Closed Won'))");
+  assert.deepEqual(
+    { count: result.count, total_amount: result.total_amount, currency: result.currency, data: result.data },
+    { count: 43, total_amount: 2702352.97, currency: 'INR', data: [] }
+  );
+});
+
 test('calculates Lead-to-Closed-Won rate from separate Lead and Deal counts', async () => {
   const calls = [];
   const service = new CrmService({

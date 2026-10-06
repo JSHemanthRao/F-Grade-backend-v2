@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { ZohoAuditLogService } = require('../src/services/zohoAuditLog.service');
 const { ZohoAuthService } = require('../src/services/zohoAuth.service');
 const { CrmService } = require('../src/services/crm.service');
+const { ZohoCrmService } = require('../src/services/zohoCrm.service');
 
 const config = {
   accountsUrl: 'https://accounts.zoho.in',
@@ -97,4 +98,114 @@ test('resolves a named audit module to its Zoho module ID', async () => {
 
   assert.equal(auditParams.entity, 'Deals');
   assert.equal(auditParams.entity_id, 'module-42');
+});
+
+test('refreshes an expired Zoho CRM token and retries the original request once', async () => {
+  let token = 'expired-token';
+  let clearCount = 0;
+  const authorizationHeaders = [];
+  const client = {
+    post: async (_url, _data, options) => {
+      authorizationHeaders.push(options.headers.Authorization);
+      if (authorizationHeaders.length === 1) {
+        const error = new Error('expired access token');
+        error.response = { status: 401, data: { code: 'INVALID_TOKEN' } };
+        throw error;
+      }
+      return { status: 200, data: { data: [{ id: 'deal-1' }], info: { more_records: false } } };
+    }
+  };
+  const auth = {
+    getAccessToken: async () => token,
+    getApiDomain: () => 'https://www.zohoapis.com',
+    clearToken: () => {
+      clearCount += 1;
+      token = 'fresh-token';
+    }
+  };
+  const service = new ZohoCrmService(client, () => config, auth);
+  const result = await service.executeRequest('post', 'https://www.zohoapis.com/crm/v8/coql', {
+    data: { select_query: 'select id from Deals' },
+    config: { headers: { Authorization: 'Zoho-oauthtoken expired-token' } },
+    retrySameRequest: false
+  });
+
+  assert.deepEqual(authorizationHeaders, [
+    'Zoho-oauthtoken expired-token',
+    'Zoho-oauthtoken fresh-token'
+  ]);
+  assert.equal(clearCount, 1);
+  assert.equal(service.executionStats.retries, 1);
+  assert.deepEqual(result.data.data, [{ id: 'deal-1' }]);
+});
+
+test('returns a controlled Zoho auth error when refreshing a rejected CRM token fails', async () => {
+  let accessTokenCalls = 0;
+  const auth = {
+    getAccessToken: async () => {
+      accessTokenCalls += 1;
+      const error = new Error('refresh token secret details');
+      error.code = 'ZOHO_AUTHENTICATION_ERROR';
+      throw error;
+    },
+    getApiDomain: () => 'https://www.zohoapis.com',
+    clearToken: () => {}
+  };
+  const client = {
+    post: async () => {
+      const error = new Error('provider response included a sensitive-stale-token');
+      error.response = { status: 401, data: { code: 'INVALID_TOKEN' } };
+      throw error;
+    }
+  };
+  const service = new ZohoCrmService(client, () => config, auth);
+
+  await assert.rejects(
+    service.executeRequest('post', 'https://www.zohoapis.com/crm/v8/coql', {
+      data: { select_query: 'select id from Deals' },
+      config: { headers: { Authorization: 'Zoho-oauthtoken sensitive-stale-token' } },
+      retrySameRequest: false
+    }),
+    (error) => {
+      assert.equal(error.code, 'ZOHO_AUTHENTICATION_ERROR');
+      assert.equal(error.statusCode, 502);
+      assert.doesNotMatch(error.message, /sensitive-stale-token|refresh token secret details/);
+      assert.equal(JSON.stringify(error.details).includes('sensitive-stale-token'), false);
+      return true;
+    }
+  );
+  assert.equal(accessTokenCalls, 1);
+});
+
+test('returns a controlled Zoho unauthorized error after the one allowed refresh retry', async () => {
+  let token = 'stale-token';
+  const client = {
+    post: async () => {
+      const error = new Error('unauthorized');
+      error.response = { status: 401, data: { code: 'INVALID_TOKEN', message: 'token rejected' } };
+      throw error;
+    }
+  };
+  const auth = {
+    getAccessToken: async () => token,
+    getApiDomain: () => 'https://www.zohoapis.com',
+    clearToken: () => { token = 'fresh-token'; }
+  };
+  const service = new ZohoCrmService(client, () => config, auth);
+
+  await assert.rejects(
+    service.executeRequest('post', 'https://www.zohoapis.com/crm/v8/coql', {
+      data: { select_query: 'select id from Deals' },
+      config: { headers: { Authorization: 'Zoho-oauthtoken stale-token' } },
+      retrySameRequest: false
+    }),
+    (error) => {
+      assert.equal(error.code, 'ZOHO_OAUTH_UNAUTHORIZED');
+      assert.equal(error.statusCode, 502);
+      assert.equal(error.details.upstream_status, 401);
+      assert.equal(error.details.upstream_code, 'INVALID_TOKEN');
+      assert.doesNotMatch(error.message, /stale-token|fresh-token|token rejected/);
+      return true;
+    }
+  );
 });

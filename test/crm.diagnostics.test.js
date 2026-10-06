@@ -35,9 +35,11 @@ test('assistant returns request-scoped diagnostics and preserves explicit module
 
   assert.equal(result.status, 200);
   assert.equal(result.body.diagnostics.resolved_module, 'Meetings');
-  assert.equal(result.body.diagnostics.module_api_name, 'Events');
+  assert.equal(result.body.diagnostics.module_api_name, undefined);
   assert.equal(result.body.diagnostics.zoho_error_code, null);
-  assert.equal(result.body.diagnostics.zoho_error_message, null);
+  assert.equal(result.body.diagnostics.zoho_error_message, undefined);
+  assert.equal(result.body.module_api_name, undefined);
+  assert.equal(result.body.fields, undefined);
   assert.match(result.body.diagnostics.request_id, /^crm_\d{8}_\d{6}_[a-f0-9]{6}$/);
   assert.equal(seen[0].module, 'Meetings');
   assert.notEqual(seen[0].module, 'Deals');
@@ -57,10 +59,12 @@ test('assistant preserves diagnostics and upstream details on failure', async ()
   assert.equal(result.status, 502);
   assert.equal(result.body.error.code, 'OAUTH_SCOPE_MISMATCH');
   assert.equal(result.body.diagnostics.resolved_module, 'Calls');
-  assert.equal(result.body.diagnostics.zoho_endpoint, '/crm/v8/Calls');
+  assert.equal(result.body.diagnostics.zoho_endpoint, undefined);
   assert.equal(result.body.diagnostics.zoho_http_status, 401);
   assert.equal(result.body.diagnostics.zoho_error_code, 'OAUTH_SCOPE_MISMATCH');
-  assert.equal(result.body.diagnostics.zoho_error_message, 'Scope is missing.');
+  assert.equal(result.body.diagnostics.zoho_error_message, undefined);
+  assert.equal(result.body.error.details.endpoint, undefined);
+  assert.equal(result.body.error.details.upstream_message, undefined);
 });
 
 test('assistant maps Zoho NO_PERMISSION to HTTP 403 without changing Quotes', async () => {
@@ -79,6 +83,6 @@ test('assistant maps Zoho NO_PERMISSION to HTTP 403 without changing Quotes', as
   assert.equal(result.body.error.code, 'NO_PERMISSION');
   assert.equal(result.body.error.message, "Unable to access 'Quotes' field metadata.");
   assert.equal(result.body.diagnostics.resolved_module, 'Quotes');
-  assert.equal(result.body.diagnostics.module_api_name, 'Quotes');
+  assert.equal(result.body.diagnostics.module_api_name, undefined);
   assert.equal(result.body.diagnostics.zoho_http_status, 400);
 });

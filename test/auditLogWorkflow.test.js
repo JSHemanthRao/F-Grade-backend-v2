@@ -79,6 +79,8 @@ describe('Audit Log Workflow – 7 Exact Verification Tests', () => {
     assert.ok(res.body.table.includes('Enterprise Contract'));
     assert.equal(res.body.records.length, 1);
     assert.equal(res.body.records[0].record_name, 'Enterprise Contract');
+    assert.equal(Object.hasOwn(res.body.records[0], 'raw'), false);
+    assert.equal(Object.hasOwn(res.body.data[0], 'raw'), false);
   });
 
   // 2. Who changed deals yesterday?
@@ -424,4 +426,3 @@ describe('Audit Log Workflow – 7 Exact Verification Tests', () => {
     });
   });
 });
-

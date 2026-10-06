@@ -168,6 +168,49 @@ test('rejects Books questions instead of routing them through CRM', () => {
   assert.throws(() => planQuestion('Show me Zoho Books invoices'), (error) => error.code === 'DOMAIN_AMBIGUOUS');
 });
 
+test('plans unqualified last-month revenue as a Closed Won Deals aggregate', () => {
+  const plan = planQuestion('give me revenue generated last month');
+  assert.equal(plan.module, 'Deals');
+  assert.equal(plan.request_type, 'analysis');
+  assert.equal(plan.analysis.type, 'revenue_summary');
+  assert.deepEqual(plan.aggregate, { operation: 'sum', field: 'Amount' });
+  assert.deepEqual(plan.fields, ['id', 'Amount', 'Closing_Date', 'Stage']);
+  assert.equal(plan.filters[0].field, 'Closing_Date');
+  assert.equal(plan.filters[0].operator, 'between');
+  assert.equal(plan.filters[0].exclusive_end, true);
+  assert.equal(plan.filters[0].date_range.semantic, 'last month');
+  assert.deepEqual(plan.filters[1], { field: 'Stage', operator: 'equals', value: 'Closed Won' });
+});
+
+test('formats last-month revenue as a concise user-facing answer', () => {
+  const { buildAssistantAnswer } = require('../src/controllers/crm.controller');
+  const answer = buildAssistantAnswer('give me revenue generated last month', {
+    analysis: 'revenue_summary',
+    count: 43,
+    total_amount: 2702352.97,
+    currency: 'INR',
+    filters: [{ field: 'Closing_Date', value: ['2026-09-01', '2026-10-01'] }]
+  });
+  assert.match(answer, /Revenue generated last month:/);
+  assert.match(answer, /43 Closed Won deals/);
+  assert.match(answer, /2026-09-01 to 2026-10-01 exclusive/);
+  assert.doesNotMatch(answer, /Deal_Name|Created_Time|query|token/i);
+});
+
+test('calculates previous calendar month boundaries dynamically across year changes', () => {
+  const { resolveRelativePeriod } = require('../src/utils/relativeDate');
+  const cases = [
+    ['2027-01-12T12:00:00Z', '2026-12-01', '2027-01-01'],
+    ['2026-01-12T12:00:00Z', '2025-12-01', '2026-01-01'],
+    ['2026-10-06T12:00:00Z', '2026-09-01', '2026-10-01'],
+    ['2026-03-12T12:00:00Z', '2026-02-01', '2026-03-01']
+  ];
+  for (const [now, start, end] of cases) {
+    const range = resolveRelativePeriod('last month', new Date(now), 'Asia/Kolkata');
+    assert.deepEqual([range.start, range.end], [start, end]);
+  }
+});
+
 test('validates BETWEEN, IS NULL, and IS NOT NULL filters', () => {
   assert.equal(validateCrmQuery({ module: 'Leads', filters: [{ field: 'Created_Time', operator: 'between', value: ['2026-01-01', '2026-02-01'] }] }).filters[0].operator, 'between');
   assert.equal(validateCrmQuery({ module: 'Leads', filters: [{ field: 'Email', operator: 'is_null' }] }).filters[0].operator, 'is_null');
@@ -990,7 +1033,10 @@ test('resets pagination when the query shape changes', async () => {
 
 test('adds a stable id sort when the primary sort is not unique', async () => {
   const { ZohoCrmService } = require('../src/services/zohoCrm.service');
-  const zoho = new ZohoCrmService();
+  const zoho = new ZohoCrmService(undefined, () => ({
+    apiBaseUrl: 'https://example.com/crm/v8',
+    timeoutMs: 1000
+  }));
   zoho.authService = { getAccessToken: async () => 'token', getApiDomain: () => 'https://example.com' };
   zoho.resolveModuleApiName = async () => 'Deals';
   zoho.getFieldMetadata = async () => ({ fields: ['id', 'Amount'], metadata: [{ api_name: 'id', data_type: 'text' }, { api_name: 'Amount', data_type: 'currency' }] });

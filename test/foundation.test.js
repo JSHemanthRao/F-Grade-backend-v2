@@ -466,7 +466,13 @@ test('passes Deals, Calls, Tasks, Contacts, and Meetings to their exact Zoho API
   const zoho = {
     executionStats: {},
     resolveModuleApiName: async (module) => expected[module] || module,
-    getFieldMetadata: async () => ({ fields: ['id', 'Subject', 'Call_Start_Time', 'Created_Time', 'Start_DateTime', 'Event_Title'], metadata: [] }),
+    getFieldMetadata: async (module) => ({
+      fields: [
+        'id', 'Subject', 'Call_Start_Time', 'Created_Time', 'Start_DateTime', 'Event_Title',
+        ...(module === 'Tasks' ? ['Due_Date'] : [])
+      ],
+      metadata: []
+    }),
     resolveOwnerFilters: async (filters) => filters,
     query: async (request) => { requests.push(request); return { records: [], info: { more_records: false }, module_api_name: request.module }; }
   };
@@ -681,7 +687,7 @@ test('plans monthly Closed Won deal summaries with a Closing_Date filter', () =>
   assert.equal(request.request_type, 'analysis');
   assert.equal(request.analysis.type, 'closed_won_summary');
   assert.deepEqual(request.filters, [
-    { field: 'Created_Time', operator: 'between', value: [request.filters[0].value[0], request.filters[0].value[1]], exclusive_end: true, date_range: request.filters[0].date_range },
+    { field: 'Closing_Date', operator: 'between', value: [request.filters[0].value[0], request.filters[0].value[1]], exclusive_end: true, date_range: request.filters[0].date_range },
     { field: 'Stage', operator: 'equals', value: 'Closed Won' }
   ]);
 });
@@ -880,7 +886,14 @@ test('the mock CRM endpoint is not exposed as a production route', async () => {
 });
 
 test('rejects invalid module and returns a field-specific error', async () => {
-  const response = await requestJson(createApp(), '/api/crm/query', 'POST', { module: 'Unknown', fields: ['id'] });
+  const app = createApp({ crmService: { query: async () => {
+    const error = new Error("Zoho CRM module 'Unknown' is not available for read operations.");
+    error.code = 'MODULE_UNAVAILABLE';
+    error.statusCode = 400;
+    error.details = { requested_module: 'Unknown' };
+    throw error;
+  } } });
+  const response = await requestJson(app, '/api/crm/query', 'POST', { module: 'Unknown', fields: ['id'] });
   assert.equal(response.status, 400);
   assert.equal(response.body.success, false);
   assert.equal(response.body.status, 'error');

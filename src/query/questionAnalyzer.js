@@ -5,6 +5,7 @@ const { createAppError } = require('../utils/errors');
 
 const MODULE_ALIASES = [
   ['deal', 'Deals'], ['deals', 'Deals'],
+  ['quote', 'Quotes'], ['quotes', 'Quotes'],
   ['lead', 'Leads'], ['leads', 'Leads'],
   ['contact', 'Contacts'], ['contacts', 'Contacts'],
   ['account', 'Accounts'], ['accounts', 'Accounts'],
@@ -25,6 +26,7 @@ function analyzeCrmQuestion(question, context = {}) {
     throw createAppError('QUESTION_REQUIRED', 'A natural-language CRM question is required.', 400);
   }
 
+  assertCrmDomain(text);
   const lower = text.toLowerCase();
   const module = detectModule(lower);
   const operation = /\b(?:how many|count|number of|total number)\b/.test(lower) ? 'count' : 'list';
@@ -59,6 +61,15 @@ function analyzeCrmQuestion(question, context = {}) {
 
   validateCanonicalQuestion(canonical);
   return canonical;
+}
+
+function assertCrmDomain(text) {
+  if (/\bzoho\s+books\b|\bbooks?\s+(?:invoices?|bills?|expenses?|bank transactions?)\b/i.test(String(text || ''))) {
+    throw createAppError('DOMAIN_AMBIGUOUS', 'This backend supports Zoho CRM only; Zoho Books requests are not supported.', 400, {
+      requested_domain: 'Zoho Books',
+      supported_domain: 'CRM'
+    });
+  }
 }
 
 function detectModule(lower) {
@@ -308,4 +319,4 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-module.exports = { analyzeCrmQuestion };
+module.exports = { analyzeCrmQuestion, assertCrmDomain };

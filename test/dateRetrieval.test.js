@@ -145,11 +145,12 @@ test('materializes assignment language as a metadata-typed user lookup across mo
     executionStats: {},
     resolveModuleApiName: async (module) => module,
     getFieldMetadata: async (module) => ({
-      fields: ['id', 'Owner', 'Created_Time'],
+      fields: ['id', 'Owner', 'Created_Time', ...(module === 'Tasks' ? ['Due_Date'] : [])],
       metadata: [
         { api_name: 'id', data_type: 'text' },
         { api_name: 'Owner', display_label: 'Owner', data_type: 'ownerlookup' },
-        { api_name: 'Created_Time', display_label: 'Created Time', data_type: 'datetime' }
+        { api_name: 'Created_Time', display_label: 'Created Time', data_type: 'datetime' },
+        ...(module === 'Tasks' ? [{ api_name: 'Due_Date', display_label: 'Due Date', data_type: 'date' }] : [])
       ]
     }),
     resolveLookupFilters: async (filters) => filters.map((filter) => ({ ...filter, value: filter.value === 'John Smith' ? 'user-123' : filter.value })),

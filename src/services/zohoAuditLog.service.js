@@ -129,17 +129,13 @@ class ZohoAuditLogService {
       ],
     };
 
-    console.log(
-      "[ZOHO_AUDIT_LOG_REQUEST]",
-      JSON.stringify(
-        {
-          url: `${baseUrl}/settings/audit_log_export`,
-          body: requestBody,
-        },
-        null,
-        2,
-      ),
-    );
+    log("info", `[ZOHO_AUDIT_LOG_REQUEST] ${JSON.stringify({
+      operation: "audit_log_export",
+      criteria_count: auditCriteria.length,
+      entity_filter_present: Boolean(params.entity),
+      action_filter_present: Boolean(params.action),
+      user_filter_present: Boolean(params.user?.id)
+    })}`);
 
     const exportKey = stableStringify(normalizeCriteria(auditCriteria));
     const existingExport = this.inFlightExports.get(exportKey);

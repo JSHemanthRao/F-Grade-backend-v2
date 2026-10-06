@@ -104,8 +104,29 @@ function diagnosticsFromError(error, diagnostics) {
 
 function publicCrmDiagnostics(diagnostics, debugEnabled = false) {
   if (!diagnostics) return diagnostics;
-  const safe = { ...diagnostics };
-  if (!debugEnabled) delete safe.stage;
+  const publicFields = [
+    'request_id',
+    'continuation_detected',
+    'previous_state_found',
+    'previous_module',
+    'current_module',
+    'previous_offset',
+    'previous_returned',
+    'new_offset',
+    'query_identity',
+    'query_fingerprint',
+    'crm_service_offset',
+    'coql_offset',
+    'resolved_module',
+    'retrieval_strategy',
+    'request_type',
+    'zoho_http_status',
+    'zoho_error_code'
+  ];
+  const safe = Object.fromEntries(publicFields
+    .filter((key) => diagnostics[key] !== undefined)
+    .map((key) => [key, diagnostics[key]]));
+  if (debugEnabled && diagnostics.stage !== undefined) safe.stage = diagnostics.stage;
   return safe;
 }
 

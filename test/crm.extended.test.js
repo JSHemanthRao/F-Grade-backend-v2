@@ -43,8 +43,10 @@ test('uses the connector conversation header when the body omits conversation_id
 
   assert.equal(first.status, 200);
   assert.equal(second.status, 200);
-  assert.equal(first.body.conversation_id, 'copilot-conversation-1');
-  assert.equal(second.body.conversation_id, 'copilot-conversation-1');
+  assert.equal(first.body.conversation_id, undefined);
+  assert.equal(second.body.conversation_id, undefined);
+  assert.equal(first.body.continuation_token, undefined);
+  assert.equal(second.body.continuation_token, undefined);
   assert.deepEqual(calls.map((call) => call.offset), [0, 20]);
 });
 
@@ -61,20 +63,18 @@ test('propagates conversation_id and continuation_token across connector paginat
     };
   }) });
 
-  const first = await request(app, { question: 'give me deals created this month' });
-  const conversationId = first.body.conversation_id;
-  const token1 = first.body.continuation_token;
-  const second = await request(app, { question: 'Yes please fetch the next set of deals.', conversation_id: conversationId, continuation_token: token1 });
-  const token2 = second.body.continuation_token;
-  const third = await request(app, { question: 'next 20', conversation_id: conversationId, continuation_token: token2 });
+  const headers = { 'x-ms-conversation-id': 'internal-pagination-context' };
+  const first = await request(app, { question: 'give me deals created this month' }, headers);
+  const second = await request(app, { question: 'Yes please fetch the next set of deals.' }, headers);
+  const third = await request(app, { question: 'next 20' }, headers);
 
   assert.equal(first.status, 200);
   assert.equal(second.status, 200);
   assert.equal(third.status, 200);
-  assert.ok(conversationId);
-  assert.ok(token1);
-  assert.ok(token2);
-  assert.notEqual(token1, token2);
+  for (const response of [first, second, third]) {
+    assert.equal(response.body.conversation_id, undefined);
+    assert.equal(response.body.continuation_token, undefined);
+  }
   assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40]);
   assert.deepEqual([first.body.pagination.offset, second.body.pagination.offset, third.body.pagination.offset], [0, 20, 40]);
   assert.equal(second.body.diagnostics.continuation_token_present, true);
@@ -83,7 +83,7 @@ test('propagates conversation_id and continuation_token across connector paginat
   assert.equal(second.body.diagnostics.new_offset, 20);
 });
 
-test('supports the Copilot CRM pagination acceptance flow with internal token rotation', async () => {
+test('keeps CRM continuation tokens internal across Copilot pagination requests', async () => {
   const calls = [];
   const sentState = [];
   const app = createApp({ crmService: makeMockService((input) => {
@@ -97,29 +97,20 @@ test('supports the Copilot CRM pagination acceptance flow with internal token ro
     };
   }) });
 
-  let crmContinuationToken = '';
-  let crmConversationId = '';
-
-  const first = await request(app, { question: 'Give me deals created this month' });
-  crmContinuationToken = first.body.continuation_token;
-  crmConversationId = first.body.conversation_id;
+  const headers = { 'x-ms-conversation-id': 'internal-token-rotation' };
+  const first = await request(app, { question: 'Give me deals created this month' }, headers);
+  sentState.push(first.body);
 
   for (let index = 0; index < 4; index += 1) {
-    sentState.push({ continuation_token: crmContinuationToken, conversation_id: crmConversationId });
     const next = await request(app, {
-      question: 'next 20',
-      continuation_token: crmContinuationToken,
-      conversation_id: crmConversationId
-    });
-    crmContinuationToken = next.body.continuation_token;
-    crmConversationId = next.body.conversation_id;
+      question: 'next 20'
+    }, headers);
+    sentState.push(next.body);
   }
 
   assert.deepEqual(calls.map((call) => call.offset), [0, 20, 40, 60, 80]);
   assert.deepEqual(calls.map((call) => call.limit), [20, 20, 20, 20, 20]);
-  assert.equal(new Set(sentState.map((state) => state.conversation_id)).size, 1);
-  assert.equal(new Set(sentState.map((state) => state.continuation_token)).size, 4);
-  assert.ok(sentState.every((state) => state.continuation_token && state.conversation_id));
+  assert.ok(sentState.every((state) => state.continuation_token === undefined && state.conversation_id === undefined));
 });
 
 test('uses conversation_id as pagination fallback when continuation_token is absent', async () => {
@@ -136,8 +127,8 @@ test('uses conversation_id as pagination fallback when continuation_token is abs
   assert.equal(first.status, 200);
   assert.equal(second.status, 200);
   assert.deepEqual(offsets, [0, 1]);
-  assert.equal(second.body.diagnostics.continuation_token_present, false);
-  assert.equal(second.body.diagnostics.conversation_id_present, true);
+  assert.equal(second.body.diagnostics.continuation_token_present, undefined);
+  assert.equal(second.body.diagnostics.conversation_id, undefined);
 });
 
 // Create a generic mock crmService that echoes expected shapes
@@ -170,7 +161,10 @@ test('today queries for core modules and basic aggregations', async (t) => {
     assert.equal(res.status, 200, `expected 200 for ${s.question}`);
     assert.equal(res.body.module, s.module);
     // Meetings must map to Events in module_api_name
-    if (s.module === 'Meetings') assert.equal(res.body.diagnostics.module_api_name, 'Events');
+    if (s.module === 'Meetings') {
+      assert.equal(res.body.diagnostics.module_api_name, undefined);
+      assert.equal(res.body.module_api_name, undefined);
+    }
   }
 });
 

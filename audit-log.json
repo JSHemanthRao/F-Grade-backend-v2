@@ -334,9 +334,6 @@
         },
         "description": {
           "type": "string"
-        },
-        "raw": {
-          "type": "object"
         }
       }
     },

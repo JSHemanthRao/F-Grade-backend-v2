@@ -32,11 +32,20 @@ function tokens(value) {
 }
 
 function findField(fields, request) {
-  const wanted = normalize(request);
+  const cleanedRequest = String(request || '').replace(/^(?:their|its|my|the)\s+/i, '').trim();
+  const wanted = normalize(cleanedRequest);
   if (!wanted) return null;
-  return fields.find((field) => [field?.api_name, labelOf(field), field?.name]
+  const exact = fields.find((field) => [field?.api_name, labelOf(field), field?.name]
     .filter(Boolean)
     .some((value) => normalize(value) === wanted));
+  if (exact) return exact;
+  if (/^(?:creation|created)(?:date|time)?s?$/.test(wanted)) {
+    return fields.find((field) =>
+      ['date', 'datetime'].includes(String(field?.data_type || '').toLowerCase())
+      && /(?:created|creation)/i.test([field.api_name, labelOf(field)].filter(Boolean).join(' ')),
+    ) || null;
+  }
+  return null;
 }
 
 function relationshipFields(metadata) {
