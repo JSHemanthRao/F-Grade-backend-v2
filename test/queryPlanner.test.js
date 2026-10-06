@@ -580,6 +580,41 @@ test('advances Leads for the natural-language next set follow-up', async () => {
   assert.deepEqual(calls.map((call) => [call.module, call.offset, call.limit]), [['Leads', 0, 20], ['Leads', 20, 20]]);
 });
 
+test('continues the requested Deals category after another module was queried in the same conversation', async () => {
+  const calls = [];
+  const controller = createCrmController({
+    query: async (input) => {
+      calls.push({ module: input.module, offset: input.offset || 0 });
+      const offset = input.offset || 0;
+      return {
+        module: input.module,
+        request_type: input.request_type,
+        data: Array.from({ length: 20 }, (_, index) => ({ id: `${input.module}-${offset + index + 1}` })),
+        pagination: { limit: input.limit, offset, returned: 20, more_records: true }
+      };
+    }
+  });
+  const responses = [];
+  const response = () => ({
+    status: () => ({ json: (value) => { responses.push(value); return value; } }),
+    json: (value) => { responses.push(value); return value; }
+  });
+  const conversationId = 'module-scoped-pagination';
+
+  await controller.assistant(assistantRequest('show me deals pipeline', conversationId), response(), (error) => { throw error; });
+  await controller.assistant(assistantRequest('show me leads', conversationId), response(), (error) => { throw error; });
+  await controller.assistant(assistantRequest('give me more records in deals pipeline', conversationId), response(), (error) => { throw error; });
+
+  assert.deepEqual(calls, [
+    { module: 'Deals', offset: 0 },
+    { module: 'Leads', offset: 0 },
+    { module: 'Deals', offset: 20 }
+  ]);
+  assert.equal(responses[2].module, 'Deals');
+  assert.equal(responses[2].pagination.offset, 20);
+  assert.match(responses[2].data[0].id, /^Deals-21$/);
+});
+
 test('runs three Leads pages with internal platform conversation state and distinct IDs', async () => {
   const calls = [];
   const controller = createCrmController({

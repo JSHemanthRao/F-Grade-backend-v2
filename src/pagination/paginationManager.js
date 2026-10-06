@@ -6,22 +6,37 @@ const DEFAULT_TTL_MS = 30 * 60 * 1000;
 class PaginationManager {
   constructor({ maxConversations = 1000, maxStates = 5000, tokenTtlMs = DEFAULT_TTL_MS } = {}) {
     this.states = new Map();
+    this.scopedStates = new Map();
     this.tokenStates = new Map();
     this.maxConversations = maxConversations;
     this.maxStates = maxStates;
     this.tokenTtlMs = tokenTtlMs;
   }
 
-  getConversationState(conversationId) {
+  getConversationState(conversationId, module = null) {
     if (!conversationId) return null;
-    const state = this.states.get(conversationId);
-    if (!state) return null;
-    if (state.expires_at <= Date.now()) {
-      this.states.delete(conversationId);
-      this.tokenStates.delete(state.continuation.token);
-      return null;
+    this.removeExpiredState();
+    if (module) {
+      const state = this.scopedStates.get(conversationId)?.get(String(module).toLowerCase());
+      if (!state) return null;
+      if (state.expires_at <= Date.now()) {
+        this.removeState(state);
+        return null;
+      }
+      return state;
     }
-    return state;
+
+    const state = this.states.get(conversationId);
+    if (state && state.expires_at > Date.now()) return state;
+    if (state) this.removeState(state);
+    const scoped = this.scopedStates.get(conversationId);
+    if (!scoped) return null;
+    const latest = [...scoped.values()].sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0];
+    if (latest) {
+      this.states.set(conversationId, latest);
+      return latest;
+    }
+    return null;
   }
 
   getTokenState(token) {
@@ -35,9 +50,7 @@ class PaginationManager {
     }
     if (state.expires_at <= Date.now()) {
       this.tokenStates.delete(token);
-      if (state.conversation_id && this.states.get(state.conversation_id) === state) {
-        this.states.delete(state.conversation_id);
-      }
+      this.removeState(state);
       const error = new Error('The pagination continuation has expired. Please start a new query.');
       error.code = 'PAGINATION_TOKEN_EXPIRED';
       error.statusCode = 409;
@@ -100,9 +113,18 @@ class PaginationManager {
       question
     };
     this.tokenStates.set(continuationToken, state);
-    if (conversationId) this.states.set(conversationId, state);
+    if (conversationId) {
+      this.states.set(conversationId, state);
+      const scoped = this.scopedStates.get(conversationId) || new Map();
+      scoped.set(state.canonical_plan.module ? String(state.canonical_plan.module).toLowerCase() : 'crm', state);
+      this.scopedStates.set(conversationId, scoped);
+    }
     while (this.tokenStates.size > this.maxStates) this.tokenStates.delete(this.tokenStates.keys().next().value);
-    if (this.states.size > this.maxConversations) this.states.delete(this.states.keys().next().value);
+    if (this.states.size > this.maxConversations) {
+      const oldestConversationId = this.states.keys().next().value;
+      this.states.delete(oldestConversationId);
+      this.scopedStates.delete(oldestConversationId);
+    }
     return state;
   }
 
@@ -114,6 +136,10 @@ class PaginationManager {
     return this.getConversationState(conversationId);
   }
 
+  async getConversationStateForModuleAsync(conversationId, module) {
+    return this.getConversationState(conversationId, module);
+  }
+
   async saveAsync(conversationId, canonicalPlan, result, requestId, question, previousState = null) {
     return this.save(conversationId, canonicalPlan, result, requestId, question, previousState);
   }
@@ -123,10 +149,20 @@ class PaginationManager {
     for (const [token, state] of this.tokenStates) {
       if (state.expires_at > now) continue;
       this.tokenStates.delete(token);
-      if (state.conversation_id && this.states.get(state.conversation_id) === state) {
-        this.states.delete(state.conversation_id);
-      }
+      this.removeState(state);
     }
+  }
+
+  removeState(state) {
+    const conversationId = state?.conversation_id;
+    if (!conversationId) return;
+    if (this.states.get(conversationId) === state) this.states.delete(conversationId);
+    const scoped = this.scopedStates.get(conversationId);
+    if (!scoped) return;
+    for (const [scope, savedState] of scoped) {
+      if (savedState === state) scoped.delete(scope);
+    }
+    if (scoped.size === 0) this.scopedStates.delete(conversationId);
   }
 
 }
