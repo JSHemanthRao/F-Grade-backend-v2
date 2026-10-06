@@ -1,6 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { createCrmController } = require('../src/controllers/crm.controller');
+const { CrmService } = require('../src/services/crm.service');
 
 function mockReq(body = {}, path = '/api/crm/audit-log') {
   return {
@@ -424,5 +425,62 @@ describe('Audit Log Workflow – 7 Exact Verification Tests', () => {
         (err) => err.code === 'INVALID_PAGINATION' && err.statusCode === 400
       );
     });
+  });
+
+  it('filters a named user activity request to the exact user and ordinal date', async () => {
+    let capturedAuditInput;
+    const currentYear = new Date().getFullYear();
+    const records = Array.from({ length: 25 }, (_, index) => ({
+      timestamp: `${currentYear}-10-06T${String(index % 24).padStart(2, '0')}:00:00+05:30`,
+      action: 'Updated',
+      module: 'Deals',
+      record_id: `deal-${index + 1}`,
+      record_name: `Deal ${index + 1}`,
+      performed_by: { id: 'user-phanindra', name: 'Phanindra' },
+      description: 'Deal updated'
+    }));
+    const crmService = new CrmService({
+      executionStats: {},
+      getUsers: async () => [
+        { id: 'user-phanindra', full_name: 'Phanindra' },
+        { id: 'user-phanindra-rao', full_name: 'Phanindra Rao' }
+      ],
+      auditLogService: {
+        getAuditLogs: async (input) => {
+          capturedAuditInput = input;
+          return { records, info: { count: records.length, more_records: false } };
+        }
+      }
+    });
+    const controller = createCrmController(crmService);
+    const req = {
+      body: { question: "Give me Phanindra's activity on 6th of October" },
+      get: (header) => header === 'x-ms-conversation-id' ? 'phanindra-activity-pages' : null,
+      crmDiagnostics: null,
+      method: 'POST',
+      originalUrl: '/api/crm/assistant'
+    };
+    const first = mockRes();
+    await controller.assistant(req, first, (err) => { throw err; });
+
+    assert.equal(first.statusCode, 200);
+    assert.deepEqual(capturedAuditInput.user, { name: 'Phanindra', id: 'user-phanindra' });
+    assert.equal(capturedAuditInput.date_range.start, `${currentYear}-10-06`);
+    assert.equal(capturedAuditInput.date_range.end, `${currentYear}-10-07`);
+    assert.equal(first.body.records.length, 20);
+    assert.equal(first.body.pagination.offset, 0);
+    assert.equal(first.body.pagination.next_offset, 20);
+    assert.equal(first.body.pagination.has_more, true);
+
+    req.body = { question: 'give me next records' };
+    const second = mockRes();
+    await controller.assistant(req, second, (err) => { throw err; });
+
+    assert.equal(second.statusCode, 200);
+    assert.equal(second.body.records.length, 5);
+    assert.equal(second.body.records[0].record_id, 'deal-21');
+    assert.equal(second.body.pagination.offset, 20);
+    assert.equal(second.body.pagination.next_offset, null);
+    assert.equal(second.body.pagination.has_more, false);
   });
 });

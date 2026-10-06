@@ -304,11 +304,11 @@ function createCrmController(crmService = new CrmService()) {
         const publicResult = sanitizePublicCrmResult(result);
         const publicDiagnostics = publicCrmDiagnostics(diagnostics, env.crmDebug);
         const records = Array.isArray(result.data) ? result.data : Array.isArray(result.records) ? result.records : [];
-        const responsePagination = assistantResponse?.pagination || paginationEngine.buildPaginationMetadata({
-          offset: Number.isInteger(result.offset) ? result.offset : 0,
-          limit: Number.isInteger(result.limit) ? result.limit : 20,
-          returned: result.pagination?.returned ?? result.returned ?? records.length,
-          hasMore: result.pagination?.has_more ?? result.pagination?.more_records ?? result.more_records ?? false
+        const responsePagination = paginationEngine.buildPaginationMetadata({
+          offset: assistantResponse?.pagination?.offset ?? (Number.isInteger(result.offset) ? result.offset : 0),
+          limit: assistantResponse?.pagination?.limit ?? (Number.isInteger(result.limit) ? result.limit : 20),
+          returned: assistantResponse?.pagination?.returned ?? result.pagination?.returned ?? result.returned ?? records.length,
+          hasMore: assistantResponse?.pagination?.has_more ?? assistantResponse?.pagination?.more_records ?? result.pagination?.has_more ?? result.pagination?.more_records ?? result.more_records ?? false
         });
         const payload = {
           success: true,
@@ -660,7 +660,7 @@ function isAuditLogQuestion(lowerText) {
 function buildAuditLogPlan(text, lowerText) {
   const dateRange = detectAuditDateRange(lowerText);
   const action = detectAuditAction(lowerText);
-  const userMatch = text.match(/\b(?:what did|what activity did|activity done by|done by|performed by|made by|changed by|updated by|created by|deleted by)\s+([a-z][a-z .'-]*?)(?=\s+(?:update|updated|add|added|delete|deleted|today|yesterday|this|last|on|in|between|for|during)\b|[?.!]|$)/i);
+  const userName = extractAuditUserName(text);
   const explicitAuditModule = detectAuditModule(lowerText);
   const entityMatch = lowerText.match(/\b(deal|deals|lead|leads|contact|contacts|account|accounts)\s+(?:activity|activities|changes?|updates?)\b/i);
   return {
@@ -672,7 +672,7 @@ function buildAuditLogPlan(text, lowerText) {
     filters: [],
     audit_log: {
       date_range: dateRange,
-      user: userMatch ? { name: userMatch[1].trim(), id: null } : null,
+      user: userName ? { name: userName, id: null } : null,
       action,
       entity: explicitAuditModule || (entityMatch ? normalizeAuditEntity(entityMatch[1]) : null)
     },
@@ -681,6 +681,21 @@ function buildAuditLogPlan(text, lowerText) {
     offset: 0,
     original_question: text
   };
+}
+
+function extractAuditUserName(text) {
+  const namePattern = "([a-z][a-z .'-]*?)";
+  const endPattern = "(?=\\s+(?:update|updated|add|added|delete|deleted|today|yesterday|this|last|on|in|between|for|during)\\b|[?.!]|$)";
+  const patterns = [
+    new RegExp(`\\b(?:give|show|fetch|get|list)\\s+(?:me\\s+)?(?:the\\s+)?${namePattern}['’]s\\s+(?:crm\\s+)?(?:activity|activities|updates?|changes?)\\b`, 'i'),
+    new RegExp(`\\b(?:what did|what activity did|activity done by|done by|performed by|made by|changed by|updated by|created by|deleted by)\\s+${namePattern}${endPattern}`, 'i'),
+    new RegExp(`\\b(?:activity|activities|updates?|changes?)\\s+(?:done\\s+)?(?:by|for|of)\\s+${namePattern}${endPattern}`, 'i')
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return match[1].trim();
+  }
+  return null;
 }
 
 function detectAuditAction(lowerText) {
@@ -754,19 +769,19 @@ function detectAuditDateRange(lowerText) {
     return auditDateRange(date, new Date(date.getTime() + 86400000));
   }
   // "on/from DD Month [YYYY]" format (e.g., "on 25 September 2026")
-  const singleReverse = lowerText.match(/\b(?:on|from)\s+(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)(?:,?\s+(20\d{2}))?/i);
+  const singleReverse = lowerText.match(/\b(?:on|from)\s+(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(january|february|march|april|may|june|july|august|september|october|november|december)(?:,?\s+(20\d{2}))?/i);
   if (singleReverse) {
     const date = new Date(`${singleReverse[2]} ${singleReverse[1]}, ${singleReverse[3] || new Date().getFullYear()}`);
     return auditDateRange(date, new Date(date.getTime() + 86400000));
   }
   // Bare "DD Month [YYYY]" without on/from (e.g., "updated 25 September 2026")
-  const bareReverse = lowerText.match(/\b(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)(?:,?\s+(20\d{2}))?(?:\b|$)/i);
+  const bareReverse = lowerText.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(january|february|march|april|may|june|july|august|september|october|november|december)(?:,?\s+(20\d{2}))?(?:\b|$)/i);
   if (bareReverse) {
     const date = new Date(`${bareReverse[2]} ${bareReverse[1]}, ${bareReverse[3] || new Date().getFullYear()}`);
     if (!isNaN(date.getTime())) return auditDateRange(date, new Date(date.getTime() + 86400000));
   }
   // Bare "Month DD[, YYYY]" without on/from
-  const bareMonthFirst = lowerText.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:,?\s+(20\d{2}))?(?:\b|$)/i);
+  const bareMonthFirst = lowerText.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(20\d{2}))?(?:\b|$)/i);
   if (bareMonthFirst) {
     const date = new Date(`${bareMonthFirst[1]} ${bareMonthFirst[2]}, ${bareMonthFirst[3] || new Date().getFullYear()}`);
     if (!isNaN(date.getTime())) return auditDateRange(date, new Date(date.getTime() + 86400000));

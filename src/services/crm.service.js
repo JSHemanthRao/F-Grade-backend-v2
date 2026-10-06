@@ -664,21 +664,30 @@ class CrmService {
       ...audit,
       date_range: audit.date_range || input.date_range,
     });
-    const records = Array.isArray(result?.records) ? result.records : [];
+    const allRecords = Array.isArray(result?.records) ? result.records : [];
+    const pagination = paginationEngine.normalizePagination({
+      limit: input.limit ?? input.pagination?.limit ?? 20,
+      offset: input.offset ?? input.pagination?.offset ?? 0,
+    });
+    const records = allRecords.slice(
+      pagination.offset,
+      pagination.offset + pagination.limit,
+    );
+    const moreRecords = pagination.offset + records.length < allRecords.length;
     return {
       intent: "audit_log",
       request_type: "audit_log",
       module: null,
       audit_log: audit,
-      count: records.length,
+      count: allRecords.length,
       returned: records.length,
       records,
       data: records,
       pagination: {
-        limit: input.limit,
-        offset: input.offset,
+        limit: pagination.limit,
+        offset: pagination.offset,
         returned: records.length,
-        more_records: Boolean(result?.info?.more_records),
+        more_records: moreRecords,
       },
     };
   }
